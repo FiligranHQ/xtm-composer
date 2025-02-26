@@ -22,7 +22,7 @@ impl OrchestratorContainer  {
 
 #[async_trait]
 pub trait Orchestrator {
-    async fn containers(&self) -> Vec<OrchestratorContainer>;
+    async fn containers(&self) -> Option<Vec<OrchestratorContainer>>;
     // async fn start(&self) -> bool;
     // async fn stop(&self) -> bool;
     // async fn kill(&self) -> bool;

@@ -17,8 +17,8 @@ impl KubeOrchestrator {
 
 #[async_trait]
 impl Orchestrator for KubeOrchestrator {
-    async fn containers(&self) -> Vec<OrchestratorContainer> {
+    async fn containers(&self) -> Option<Vec<OrchestratorContainer>> {
         info!("{}", self.base_uri);
-        Vec::new()
+        Some(Vec::new())
     }
 }

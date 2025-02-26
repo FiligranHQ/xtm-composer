@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use bollard::container::ListContainersOptions;
 use bollard::Docker;
-
+use log::error;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 
 pub struct DockerOrchestrator {
@@ -114,16 +114,24 @@ async fn docker_handling() {
 
 #[async_trait]
 impl Orchestrator for DockerOrchestrator {
-    async fn containers(&self) -> Vec<OrchestratorContainer> {
-        let containers = self.docker.list_containers(Some(ListContainersOptions::<String> {
+    async fn containers(&self) -> Option<Vec<OrchestratorContainer>> {
+        let container_result = self.docker.list_containers(Some(ListContainersOptions::<String> {
             all: true,
             // filters: list_container_filters,
             ..Default::default()
-        })).await.unwrap();
-        containers.into_iter().map(|docker_container| OrchestratorContainer {
-            id: docker_container.id.unwrap(),
-            image: docker_container.image.unwrap(),
-            labels: docker_container.labels.unwrap()
-        }).collect()
+        })).await;
+        match container_result {
+            Ok(containers) => {
+                Some(containers.into_iter().map(|docker_container| OrchestratorContainer {
+                    id: docker_container.id.unwrap(),
+                    image: docker_container.image.unwrap(),
+                    labels: docker_container.labels.unwrap()
+                }).collect())
+            }
+            Err(err) => {
+                error!("Docker error fetching containers: {:?}", err);
+                None
+            }
+        }
     }
 }

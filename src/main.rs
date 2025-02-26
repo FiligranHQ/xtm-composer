@@ -9,7 +9,7 @@ use crate::config::settings::Settings;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::kube::KubeOrchestrator;
 use crate::orchestrator::portainer::PortainerOrchestrator;
-use crate::orchestrator::Orchestrator;
+use crate::orchestrator::{Orchestrator};
 use env_logger::{Builder, Target};
 
 use log::info;
@@ -19,20 +19,32 @@ use tokio::time::interval;
 const SCHEDULER_TIMER: u64 = 5; // 5 seconds scheduling
 
 async fn orchestrate(settings_data: &Settings, orchestrator: &Box<dyn Orchestrator>) {
-    let containers = orchestrator.containers().await;
-    for container in containers {
-        info!("CONTAINER GET {:?} - {:?}", container.id, container.image);
-        info!("CONTAINER LABELS {:?}", container.is_managed());
-    }
-
-    let connectors_response = connector::list(&settings_data).await.data;
-    match connectors_response {
-        Some(connector::GetConnectors { connectors_for_manager: Some(connectors)}) => {
-            for connector in connectors {
-                info!("CONNECTOR GET {:?} - {:?} - {:?}", connector.connector_type, connector.active, connector.connector_state)
+    // Get current containers in the orchestrator
+    let containers_response = orchestrator.containers().await;
+    match containers_response {
+        Some(containers) => {
+            for container in containers {
+                info!("CONTAINER GET {:?} - {:?} - {:?}", container.id, container.image, container.is_managed());
             }
         }
-        _ => {
+        None => {
+            info!("No containers found");
+        }
+    }
+    // Get the current definition from OpenCTI
+    let connectors_response = connector::list(&settings_data).await;
+    match connectors_response.data {
+        Some(data) => {
+            let connectors = data.connectors_for_manager.unwrap();
+            if connectors.is_empty() {
+                info!("No connectors found");
+            } else {
+                for connector in connectors {
+                    info!("CONNECTOR GET {:?} - {:?} - {:?}", connector.connector_type, connector.active, connector.connector_state)
+                }
+            }
+        }
+        None => {
             info!("No connectors found");
         }
     }
@@ -61,7 +73,6 @@ async fn main() {
         _ = signals::handle_stop_signals() => {}
         _ = async {
             loop {
-                info!("Timer tick");
                 interval.tick().await;
                 orchestrate(&settings_data, &orchestrator).await;
             }
