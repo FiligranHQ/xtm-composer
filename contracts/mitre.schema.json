@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://www.filigran.io/mitre.schema.json",
+  "title": "Mitre connector",
+  "description": "A Mitre connector",
+  "docker": "opencti/connector-ipinfo",
+  "type": "object",
+  "properties": {
+    "OPENCTI_URL": {
+      "description": "Url of OpenCTI",
+      "type": "string"
+    },
+    "OPENCTI_TOKEN": {
+      "description": "User token for the connector",
+      "type": "string"
+    },
+    "MITRE_REMOVE_STATEMENT_MARKING": {
+      "description": "Connector will remove the statement marking",
+      "type": "boolean"
+    }
+  },
+  "required": ["OPENCTI_URL","OPENCTI_TOKEN"]
+}
