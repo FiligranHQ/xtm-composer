@@ -21,7 +21,7 @@ pub struct OpenCTI {
     pub with_proxy: bool
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Portainer {
     pub api: String,
@@ -29,7 +29,8 @@ pub struct Portainer {
     pub env_id: String,
     pub env_type: String,
     pub api_version: String,
-    pub stack: String,
+    pub stack: Option<String>,
+    pub network_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

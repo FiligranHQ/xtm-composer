@@ -10,7 +10,8 @@ pub async fn query_fetch<R, V>(settings_data: &Settings, query: Operation<R, V>)
     where V: Serialize, R: DeserializeOwned + 'static {
     use cynic::http::ReqwestExt;
     let bearer = format!("{} {}", BEARER, settings_data.opencti.token);
-    reqwest::Client::builder().build().unwrap().post(&settings_data.opencti.url)
+    let api_uri = format!("{}/graphql", &settings_data.opencti.url);
+    reqwest::Client::builder().build().unwrap().post(api_uri)
         .header(AUTHORIZATION_HEADER, bearer.as_str())
         .run_graphql(query).await.unwrap()
 }

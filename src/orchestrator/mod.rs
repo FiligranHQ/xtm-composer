@@ -1,17 +1,13 @@
 use std::collections::HashMap;
 use async_trait::async_trait;
 use serde::{Deserialize};
-use crate::api::connector::{Connector};
+use crate::api::connector::{Connector, ConnectorCurrentStatus};
+use crate::config::settings::Settings;
 
 pub mod kubernetes;
 pub mod docker;
 pub mod portainer;
-
-// enum OrchestratorContainerStatus {
-//     Created  // created
-//     Stopped, // stopped / exited
-//     Running, // running / healthy
-// }
+pub mod composer;
 
 #[derive(Deserialize, Clone)]
 #[serde(rename_all(deserialize = "PascalCase"))]
@@ -33,15 +29,15 @@ impl OrchestratorContainer  {
 
 #[async_trait]
 pub trait Orchestrator {
-
     async fn container(&self, container_id: String) -> Option<OrchestratorContainer>;
 
     async fn containers(&self) -> Option<Vec<OrchestratorContainer>>;
 
-    async fn container_start(&self, connector_id: String) -> ();
+    async fn container_start(&self, container_id: String) -> ();
 
-    async fn container_deploy(&self, connector: &Connector) -> Option<OrchestratorContainer>;
-    // async fn start(&self) -> bool;
-    // async fn stop(&self) -> bool;
-    // async fn kill(&self) -> bool;
+    async fn container_stop(&self, container_id: String) -> ();
+
+    async fn container_deploy(&self, settings_data: &Settings, connector: &Connector) -> Option<OrchestratorContainer>;
+
+    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus;
 }

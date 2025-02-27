@@ -1,8 +1,12 @@
+// TODO Remove macro after implementation
+#![allow(unused_variables)]
+
 use async_trait::async_trait;
 use bollard::container::ListContainersOptions;
 use bollard::Docker;
 use log::error;
-use crate::api::connector::{Connector};
+use crate::api::connector::{Connector, ConnectorCurrentStatus};
+use crate::config::settings::Settings;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use crate::orchestrator::docker::DockerOrchestrator;
 
@@ -139,11 +143,19 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
-    async fn container_start(&self, connector_id: String) -> () {
+    async fn container_start(&self, container_id: String) -> () {
         todo!("docker start")
     }
+
+    async fn container_stop(&self, container_id: String) -> () {
+        todo!("docker stop")
+    }
     
-    async fn container_deploy(&self, connector: &Connector) -> Option<OrchestratorContainer> {
+    async fn container_deploy(&self, settings_data: &Settings, connector: &Connector) -> Option<OrchestratorContainer> {
         todo!("docker deploy")
+    }
+
+    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus {
+        todo!("docker state_converter")
     }
 }

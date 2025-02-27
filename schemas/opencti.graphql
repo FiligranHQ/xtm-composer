@@ -1931,6 +1931,11 @@ input StixCyberObservablesExportAskInput {
   selectedIds: [String]
 }
 
+input ContractConfigInput {
+  key: String!
+  value: String!
+}
+
 input RegisterConnectorInput {
   id: ID!
   name: String!
@@ -1939,6 +1944,19 @@ input RegisterConnectorInput {
   auto: Boolean
   only_contextual: Boolean
   playbook_compatible: Boolean
+  manager_id: String
+  manager_contract_image: String
+  manager_contract_configuration: [ContractConfigInput!]
+}
+
+input RequestConnectorStatusInput {
+  id: ID!
+  status: ConnectorRequestStatus!
+}
+
+input CurrentConnectorStatusInput {
+  id: ID!
+  status: ConnectorCurrentStatus!
 }
 
 type RabbitMQConnection {
@@ -1998,6 +2016,17 @@ type ConnectorContractConfiguration {
   value: String!
 }
 
+enum ConnectorRequestStatus {
+  starting
+  stopping
+}
+
+enum ConnectorCurrentStatus {
+  created
+  started
+  stopped
+}
+
 type Connector implements BasicObject & InternalObject {
   id: ID!
   standard_id: String!
@@ -2026,7 +2055,9 @@ type Connector implements BasicObject & InternalObject {
   built_in: Boolean
   configurations: [ConnectorConfiguration!]
   manager_id: String
-  manager_status: String
+  manager_contract_image: String
+  manager_current_status: String
+  manager_requested_status: String
   manager_contract_configuration: [ConnectorContractConfiguration!]
 }
 
@@ -8751,6 +8782,8 @@ type Mutation {
   registerConnector(input: RegisterConnectorInput): Connector
   resetStateConnector(id: ID!): Connector
   deleteConnector(id: ID!): ID!
+  updateConnectorRequestedStatus(input: RequestConnectorStatusInput!): Connector
+  updateConnectorCurrentStatus(input: CurrentConnectorStatusInput!): Connector
   updateConnectorTrigger(id: ID!, input: [EditInput]!): Connector
   feedAdd(input: FeedAddInput!): Feed
   feedDelete(id: ID!): ID!

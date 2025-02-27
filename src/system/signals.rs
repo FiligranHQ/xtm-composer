@@ -29,7 +29,9 @@ pub async fn handle_stop_signals() -> Option<()> {
 #[cfg(not(unix))]
 pub async fn handle_stop_signals() -> Option<()> {
     let ctrl_c = async {
-        signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
     };
 
     tokio::select! {
