@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use log::info;
+use crate::api::connector::{Connector};
 use crate::config::settings::{Kube};
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 
@@ -17,8 +17,20 @@ impl KubeOrchestrator {
 
 #[async_trait]
 impl Orchestrator for KubeOrchestrator {
+
+    async fn container(&self, container_id: String) -> Option<OrchestratorContainer> {
+        todo!("kubernetes container")
+    }
+
     async fn containers(&self) -> Option<Vec<OrchestratorContainer>> {
-        info!("{}", self.base_uri);
-        Some(Vec::new())
+        todo!("kubernetes containers")
+    }
+
+    async fn container_start(&self, connector_id: String) -> () {
+        todo!("docker start")
+    }
+
+    async fn container_deploy(&self, connector: &Connector) -> Option<OrchestratorContainer> {
+        todo!("kubernetes deploy")
     }
 }

@@ -17,13 +17,20 @@ pub struct GetConnectors {
     pub connectors_for_manager: Option<Vec<Connector>>,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Connector {
-    pub active: Option<bool>,
-    #[cynic(rename = "connector_state")]
-    pub connector_state: Option<String>,
-    #[cynic(rename = "connector_type")]
-    pub connector_type: Option<String>,
+    pub id: Id,
+    pub name: String,
+    #[cynic(rename = "manager_status")]
+    pub manager_status: Option<String>,
+    #[cynic(rename = "manager_contract_configuration")]
+    pub manager_contract_configuration: Option<Vec<ConnectorContractConfiguration>>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ConnectorContractConfiguration {
+    pub key: String,
+    pub value: String,
 }
 
 pub async fn list(settings_data: &Settings) -> cynic::GraphQlResponse<GetConnectors> {

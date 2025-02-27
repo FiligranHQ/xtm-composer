@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use bollard::container::ListContainersOptions;
 use bollard::Docker;
 use log::error;
+use crate::api::connector::{Connector};
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 
 pub struct DockerOrchestrator {
@@ -114,6 +115,11 @@ async fn docker_handling() {
 
 #[async_trait]
 impl Orchestrator for DockerOrchestrator {
+    
+    async fn container(&self, container_id: String) -> Option<OrchestratorContainer> {
+        todo!("docker container")
+    }
+    
     async fn containers(&self) -> Option<Vec<OrchestratorContainer>> {
         let container_result = self.docker.list_containers(Some(ListContainersOptions::<String> {
             all: true,
@@ -124,6 +130,7 @@ impl Orchestrator for DockerOrchestrator {
             Ok(containers) => {
                 Some(containers.into_iter().map(|docker_container| OrchestratorContainer {
                     id: docker_container.id.unwrap(),
+                    state: docker_container.state.unwrap(),
                     image: docker_container.image.unwrap(),
                     labels: docker_container.labels.unwrap()
                 }).collect())
@@ -133,5 +140,13 @@ impl Orchestrator for DockerOrchestrator {
                 None
             }
         }
+    }
+
+    async fn container_start(&self, connector_id: String) -> () {
+        todo!("docker start")
+    }
+    
+    async fn container_deploy(&self, connector: &Connector) -> Option<OrchestratorContainer> {
+        todo!("docker deploy")
     }
 }

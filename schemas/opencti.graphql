@@ -1993,6 +1993,11 @@ type ConnectorQueueDetails {
   messages_size: Float!
 }
 
+type ConnectorContractConfiguration {
+  key: String!
+  value: String!
+}
+
 type Connector implements BasicObject & InternalObject {
   id: ID!
   standard_id: String!
@@ -2020,6 +2025,9 @@ type Connector implements BasicObject & InternalObject {
   works(status: String): [Work]
   built_in: Boolean
   configurations: [ConnectorConfiguration!]
+  manager_id: String
+  manager_status: String
+  manager_contract_configuration: [ConnectorContractConfiguration!]
 }
 
 type RuleExecutionError {
@@ -8202,7 +8210,7 @@ type Query {
   draftWorkspaceRelationships(draftId: String!, types: [String], first: Int, after: ID, orderBy: StixRelationshipsOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): StixRelationshipConnection
   draftWorkspaceSightingRelationships(draftId: String!, types: [String], first: Int, after: ID, orderBy: StixSightingRelationshipsOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): StixSightingRelationshipConnection
   fintelTemplate(id: ID!): FintelTemplate
-  disseminationList(id: String!): DisseminationList
+  disseminationList(id: ID!): DisseminationList
   disseminationLists(first: Int, after: ID, orderBy: DisseminationListOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): DisseminationListConnection
 }
 
@@ -12645,7 +12653,9 @@ input DisseminationListAddInput {
 
 input DisseminationListSendInput {
   entity_id: ID!
+  use_octi_template: Boolean!
   email_object: String!
   email_body: String!
   email_attachment_ids: [ID!]!
+  html_to_body_file_id: ID
 }
