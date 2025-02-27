@@ -34,7 +34,7 @@ pub struct Portainer {
 
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
-pub struct Kube {
+pub struct Kubernetes {
     pub api: String,
 }
 
@@ -46,7 +46,7 @@ pub struct Settings {
     pub manager: Manager,
     pub opencti: OpenCTI,
     pub portainer: Portainer,
-    pub kube: Kube,
+    pub kubernetes: Kubernetes,
 }
 
 impl Settings {

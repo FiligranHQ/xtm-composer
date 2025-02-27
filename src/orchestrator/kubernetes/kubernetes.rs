@@ -1,15 +1,11 @@
 use async_trait::async_trait;
 use crate::api::connector::{Connector};
-use crate::config::settings::{Kube};
+use crate::config::settings::{Kubernetes};
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
-
-#[derive(Default)]
-pub struct KubeOrchestrator {
-    base_uri: String,
-}
+use crate::orchestrator::kubernetes::KubeOrchestrator;
 
 impl KubeOrchestrator {
-    pub fn new(config: &Kube) -> Self {
+    pub fn new(config: &Kubernetes) -> Self {
         let base_uri = config.api.clone();
         Self { base_uri }
     }

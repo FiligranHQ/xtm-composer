@@ -4,10 +4,7 @@ use bollard::Docker;
 use log::error;
 use crate::api::connector::{Connector};
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
-
-pub struct DockerOrchestrator {
-    docker: Docker
-}
+use crate::orchestrator::docker::DockerOrchestrator;
 
 impl DockerOrchestrator {
     pub fn new() -> Self {

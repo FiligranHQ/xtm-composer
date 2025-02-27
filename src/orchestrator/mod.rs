@@ -3,9 +3,9 @@ use async_trait::async_trait;
 use serde::{Deserialize};
 use crate::api::connector::{Connector};
 
-pub mod portainer;
-pub mod kube;
+pub mod kubernetes;
 pub mod docker;
+pub mod portainer;
 
 // enum OrchestratorContainerStatus {
 //     Created  // created

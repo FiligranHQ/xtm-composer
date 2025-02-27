@@ -19,5 +19,5 @@ env_id = "3"
 env_type = "docker" # only docker supported
 stack = "opencti-dev"
 
-[kube]
+[kubernetes]
 api = "https://localhost:9443"

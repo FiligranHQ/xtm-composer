@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::api::connector;
 use crate::config::settings::Settings;
 use crate::orchestrator::docker::DockerOrchestrator;
-use crate::orchestrator::kube::KubeOrchestrator;
+use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::portainer::PortainerOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use env_logger::{Builder, Target};
@@ -73,7 +73,7 @@ async fn main() {
     // Get current deployment in target orchestrator
     let orchestrator: Box<dyn Orchestrator> = match daemon_type.as_str() {
         "portainer" => Box::new(PortainerOrchestrator::new(&settings_data.portainer)),
-        "kubernetes" => Box::new(KubeOrchestrator::new(&settings_data.kube)),
+        "kubernetes" => Box::new(KubeOrchestrator::new(&settings_data.kubernetes)),
         "docker" => Box::new(DockerOrchestrator::new()),
         def => panic!("Invalid daemon configuration: {}", def)
     };
