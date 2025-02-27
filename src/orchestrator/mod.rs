@@ -39,5 +39,7 @@ pub trait Orchestrator {
 
     async fn container_deploy(&self, settings_data: &Settings, connector: &Connector) -> Option<OrchestratorContainer>;
 
+    async fn container_logs(&self, container_id: String) -> Vec<String>;
+
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus;
 }

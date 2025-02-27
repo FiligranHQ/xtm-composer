@@ -155,6 +155,10 @@ impl Orchestrator for DockerOrchestrator {
         todo!("docker deploy")
     }
 
+    async fn container_logs(&self, container_id: String) -> Vec<String> {
+        todo!("docker logs")
+    }
+
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus {
         todo!("docker state_converter")
     }

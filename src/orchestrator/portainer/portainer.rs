@@ -103,6 +103,13 @@ impl Orchestrator for PortainerOrchestrator {
         self.container(deploy_data.id.clone()).await
     }
 
+    async fn container_logs(&self, container_id: String) -> Vec<String> {
+        let logs_container_uri = format!("{}/{}/logs?stderr=1&stdout=1&tail=100", self.container_uri, container_id);
+        let logs_response = self.client.get(logs_container_uri).send().await.unwrap();
+        let text_logs = logs_response.text().await.unwrap();
+        text_logs.lines().map(|line| line.to_string()).collect()
+    }
+
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus {
        match container.state.as_str() {
            "running" => ConnectorCurrentStatus::Started,

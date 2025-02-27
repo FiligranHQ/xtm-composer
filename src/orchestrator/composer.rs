@@ -53,6 +53,9 @@ async fn orchestrate_existing(settings_data: &Settings, orchestrator: &Box<dyn O
             info!("[V] CONNECTOR {} - Nothing to execute", container.id);
         }
     }
+    // Get latest logs and update opencti
+    let connector_logs = orchestrator.container_logs(container.id.clone()).await;
+    connector::update_connector_logs(settings_data, connector_id, connector_logs).await;
 }
 
 pub async fn orchestrate(settings_data: &Settings, orchestrator: &Box<dyn Orchestrator>) {

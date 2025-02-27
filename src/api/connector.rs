@@ -88,6 +88,26 @@ impl FromStr for ConnectorCurrentStatus {
     }
 }
 
+
+#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq)]
+pub enum ConnectorRequestStatus {
+    #[cynic(rename = "starting")]
+    Starting,
+    #[cynic(rename = "stopping")]
+    Stopping,
+}
+
+impl FromStr for ConnectorRequestStatus {
+    type Err = ();
+    fn from_str(input: &str) -> Result<ConnectorRequestStatus, Self::Err> {
+        match input {
+            "starting" => Ok(ConnectorRequestStatus::Starting),
+            "stopping" => Ok(ConnectorRequestStatus::Stopping),
+            _ => Ok(ConnectorRequestStatus::Stopping),
+        }
+    }
+}
+
 #[derive(cynic::InputObject, Debug)]
 pub struct CurrentConnectorStatusInput<'a> {
     pub id: &'a cynic::Id,
@@ -112,21 +132,40 @@ pub async fn update_current_status(
 }
 // endregion
 
-#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq)]
-pub enum ConnectorRequestStatus {
-    #[cynic(rename = "starting")]
-    Starting,
-    #[cynic(rename = "stopping")]
-    Stopping,
+// region report logs
+#[derive(cynic::QueryVariables, Debug)]
+pub struct ReportConnectorLogsVariables<'a> {
+    pub input: LogsConnectorStatusInput<'a>,
 }
 
-impl FromStr for ConnectorRequestStatus {
-    type Err = ();
-    fn from_str(input: &str) -> Result<ConnectorRequestStatus, Self::Err> {
-        match input {
-            "starting" => Ok(ConnectorRequestStatus::Starting),
-            "stopping" => Ok(ConnectorRequestStatus::Stopping),
-            _ => Ok(ConnectorRequestStatus::Stopping),
-        }
-    }
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "Mutation", variables = "ReportConnectorLogsVariables")]
+pub struct ReportConnectorLogs {
+    #[arguments(input: $input)]
+    pub update_connector_logs: Option<Connector>,
 }
+
+#[derive(cynic::InputObject, Debug)]
+pub struct LogsConnectorStatusInput<'a> {
+    pub id: &'a cynic::Id,
+    pub logs: Vec<&'a str>,
+}
+
+pub async fn update_connector_logs(
+    settings_data: &Settings,
+    connector_id: String,
+    logs: Vec<String>,
+) -> Option<Connector> {
+    use cynic::MutationBuilder;
+    let str_logs = logs.iter().map(|c| c.as_str()).collect();
+    let vars = ReportConnectorLogsVariables {
+        input: LogsConnectorStatusInput {
+            id: &cynic::Id::new(connector_id),
+            logs: str_logs,
+        },
+    };
+    let mutation = ReportConnectorLogs::build(vars);
+    let mutation_response = query_fetch(settings_data, mutation).await;
+    mutation_response.data.unwrap().update_connector_logs
+}
+// endregion

@@ -39,6 +39,10 @@ impl Orchestrator for KubeOrchestrator {
         todo!("kubernetes deploy")
     }
 
+    async fn container_logs(&self, container_id: String) -> Vec<String> {
+        todo!("kubernetes logs")
+    }
+
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus {
         todo!("kubernetes state_converter")
     }
