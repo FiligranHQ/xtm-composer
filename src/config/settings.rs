@@ -1,6 +1,6 @@
 use config::{Config, ConfigError, Environment, File};
-use std::env;
 use serde::Deserialize;
+use std::env;
 
 const ENV_PRODUCTION: &str = "production";
 
@@ -18,7 +18,7 @@ pub struct OpenCTI {
     pub url: String,
     pub token: String,
     pub unsecured_certificate: bool,
-    pub with_proxy: bool
+    pub with_proxy: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -39,7 +39,6 @@ pub struct Kubernetes {
     pub api: String,
 }
 
-
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
 pub struct Settings {
@@ -58,8 +57,10 @@ impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
         let run_mode = Self::mode();
         let config = Config::builder().add_source(Environment::with_prefix("opencti"));
-        config.add_source(File::with_name("config/default"))
+        config
+            .add_source(File::with_name("config/default"))
             .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
-            .build()?.try_deserialize()
+            .build()?
+            .try_deserialize()
     }
 }

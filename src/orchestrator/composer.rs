@@ -10,9 +10,16 @@ async fn orchestrate_missing(settings_data: &Settings, orchestrator: &Box<dyn Or
     // Connector is not provisioned, deploy the images
     let connector_id = connector.clone().id.into_inner();
     info!("[X] CONNECTOR IS NOT DEPLOY: {}", connector_id);
-    orchestrator.container_deploy(settings_data, connector).await.unwrap();
-    // Update the connector status
-    update_current_status(settings_data, connector_id, ConnectorCurrentStatus::Created).await;
+    let deploy_action = orchestrator.container_deploy(settings_data, connector).await;
+    match deploy_action {
+        Some(_) => {
+            // Update the connector status
+            update_current_status(settings_data, connector_id, ConnectorCurrentStatus::Created).await;
+        }
+        None => {
+            info!("Deployment canceled")
+        }
+    }
 }
 
 async fn orchestrate_existing(settings_data: &Settings, orchestrator: &Box<dyn Orchestrator>, connector: &Connector, container: &OrchestratorContainer) {
@@ -41,22 +48,22 @@ async fn orchestrate_existing(settings_data: &Settings, orchestrator: &Box<dyn O
     match (requested_connector_status, current_container_status) {
         (ConnectorRequestStatus::Stopping, ConnectorCurrentStatus::Started) => {
             info!("[V] CONNECTOR STARTED {} - Stopping the container", container.id);
-            orchestrator.container_stop(container.id.clone()).await;
+            orchestrator.container_stop(container, connector).await;
         }
         (ConnectorRequestStatus::Starting, ConnectorCurrentStatus::Stopped) => {
             info!("[V] CONNECTOR STOPPED {} - Starting the container", container.id);
-            orchestrator.container_start(container.id.clone()).await;
+            orchestrator.container_start(container, connector).await;
         }
         (ConnectorRequestStatus::Starting, ConnectorCurrentStatus::Created) => {
             info!("[V] CONNECTOR CREATED {} - Starting the container", container.id);
-            orchestrator.container_start(container.id.clone()).await;
+            orchestrator.container_start(container, connector).await;
         }
         _ => {
             info!("[V] CONNECTOR {} - Nothing to execute", container.id);
         }
     }
     // Get latest logs and update opencti
-    let connector_logs = orchestrator.container_logs(container.id.clone()).await;
+    let connector_logs = orchestrator.container_logs(container, connector).await;
     connector::update_connector_logs(settings_data, connector_id, connector_logs).await;
 }
 

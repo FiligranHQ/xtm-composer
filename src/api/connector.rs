@@ -1,5 +1,6 @@
 use crate::api::engine::query_fetch;
 use crate::config::settings::Settings;
+use serde::Serialize;
 use std::str::FromStr;
 
 #[cynic::schema("opencti")]
@@ -19,6 +20,26 @@ pub struct Connector {
     pub manager_contract_configuration: Option<Vec<ConnectorContractConfiguration>>,
 }
 
+impl Connector {
+    pub fn container_name(&self) -> String {
+        self.name
+            .clone()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect::<String>()
+            .to_lowercase()
+    }
+
+    pub fn container_envs(&self) -> Vec<String> {
+        self.manager_contract_configuration
+            .clone()
+            .unwrap()
+            .into_iter()
+            .map(|config| format!("{}={}", config.key, config.value))
+            .collect::<Vec<String>>()
+    }
+}
+
 // region listing
 #[derive(cynic::QueryVariables, Debug)]
 pub struct GetConnectorsVariables<'a> {
@@ -32,7 +53,7 @@ pub struct GetConnectors {
     pub connectors_for_manager: Option<Vec<Connector>>,
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone)]
+#[derive(cynic::QueryFragment, Debug, Clone, Serialize)]
 pub struct ConnectorContractConfiguration {
     pub key: String,
     pub value: String,
@@ -88,7 +109,6 @@ impl FromStr for ConnectorCurrentStatus {
     }
 }
 
-
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq)]
 pub enum ConnectorRequestStatus {
     #[cynic(rename = "starting")]
@@ -128,7 +148,10 @@ pub async fn update_current_status(
     };
     let mutation = UpdateConnectorCurrentStatus::build(vars);
     let mutation_response = query_fetch(settings_data, mutation).await;
-    mutation_response.data.unwrap().update_connector_current_status
+    mutation_response
+        .data
+        .unwrap()
+        .update_connector_current_status
 }
 // endregion
 

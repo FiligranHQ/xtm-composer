@@ -1,13 +1,13 @@
-use std::collections::HashMap;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub mod portainer;
 
 #[derive(Serialize)]
 #[serde(rename_all(serialize = "PascalCase"))]
 struct PortainerDeployHostConfig {
-    network_mode: Option<String>
+    network_mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -16,7 +16,7 @@ struct PortainerDeployPayload {
     image: String,
     env: Vec<String>,
     labels: HashMap<String, String>,
-    host_config: PortainerDeployHostConfig
+    host_config: PortainerDeployHostConfig,
 }
 
 #[derive(Default)]

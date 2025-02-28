@@ -1,14 +1,14 @@
 // TODO Remove macro after implementation
 #![allow(unused_variables)]
 
+use crate::api::connector::{Connector, ConnectorCurrentStatus};
+use crate::config::settings::Settings;
+use crate::orchestrator::docker::DockerOrchestrator;
+use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use bollard::container::ListContainersOptions;
 use bollard::Docker;
 use log::error;
-use crate::api::connector::{Connector, ConnectorCurrentStatus};
-use crate::config::settings::Settings;
-use crate::orchestrator::{Orchestrator, OrchestratorContainer};
-use crate::orchestrator::docker::DockerOrchestrator;
 
 impl DockerOrchestrator {
     pub fn new() -> Self {
@@ -116,26 +116,35 @@ async fn docker_handling() {
 
 #[async_trait]
 impl Orchestrator for DockerOrchestrator {
-    
-    async fn container(&self, container_id: String) -> Option<OrchestratorContainer> {
+    async fn container(
+        &self,
+        container_id: String,
+        connector: &Connector,
+    ) -> Option<OrchestratorContainer> {
         todo!("docker container")
     }
-    
+
     async fn containers(&self) -> Option<Vec<OrchestratorContainer>> {
-        let container_result = self.docker.list_containers(Some(ListContainersOptions::<String> {
-            all: true,
-            // filters: list_container_filters,
-            ..Default::default()
-        })).await;
+        let container_result = self
+            .docker
+            .list_containers(Some(ListContainersOptions::<String> {
+                all: true,
+                // filters: list_container_filters,
+                ..Default::default()
+            }))
+            .await;
         match container_result {
-            Ok(containers) => {
-                Some(containers.into_iter().map(|docker_container| OrchestratorContainer {
-                    id: docker_container.id.unwrap(),
-                    state: docker_container.state.unwrap(),
-                    image: docker_container.image.unwrap(),
-                    labels: docker_container.labels.unwrap()
-                }).collect())
-            }
+            Ok(containers) => Some(
+                containers
+                    .into_iter()
+                    .map(|docker_container| OrchestratorContainer {
+                        id: docker_container.id.unwrap(),
+                        state: docker_container.state.unwrap(),
+                        image: docker_container.image.unwrap(),
+                        labels: docker_container.labels.unwrap(),
+                    })
+                    .collect(),
+            ),
             Err(err) => {
                 error!("Docker error fetching containers: {:?}", err);
                 None
@@ -143,19 +152,31 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
-    async fn container_start(&self, container_id: String) -> () {
+    async fn container_start(
+        &self,
+        container: &OrchestratorContainer,
+        connector: &Connector,
+    ) -> () {
         todo!("docker start")
     }
 
-    async fn container_stop(&self, container_id: String) -> () {
+    async fn container_stop(&self, container: &OrchestratorContainer, connector: &Connector) -> () {
         todo!("docker stop")
     }
-    
-    async fn container_deploy(&self, settings_data: &Settings, connector: &Connector) -> Option<OrchestratorContainer> {
+
+    async fn container_deploy(
+        &self,
+        settings: &Settings,
+        connector: &Connector,
+    ) -> Option<OrchestratorContainer> {
         todo!("docker deploy")
     }
 
-    async fn container_logs(&self, container_id: String) -> Vec<String> {
+    async fn container_logs(
+        &self,
+        container: &OrchestratorContainer,
+        connector: &Connector,
+    ) -> Vec<String> {
         todo!("docker logs")
     }
 

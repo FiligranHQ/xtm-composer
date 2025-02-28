@@ -32,7 +32,7 @@ async fn main() {
     // Get current deployment in target orchestrator
     let orchestrator: Box<dyn Orchestrator> = match daemon_type.as_str() {
         "portainer" => Box::new(PortainerOrchestrator::new(&settings_data.portainer)),
-        "kubernetes" => Box::new(KubeOrchestrator::new(&settings_data.kubernetes)),
+        "kubernetes" => Box::new(KubeOrchestrator::new(&settings_data.kubernetes).await),
         "docker" => Box::new(DockerOrchestrator::new()),
         def => panic!("Invalid daemon configuration: {}", def),
     };
