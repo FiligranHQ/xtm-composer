@@ -19,8 +19,10 @@ async fn orchestrate_existing(settings_data: &Settings, orchestrator: &Box<dyn O
     // Connector is provisioned
     let cloned_connector = connector.clone();
     let connector_id = cloned_connector.id.into_inner();
-    let current_connector_status = ConnectorCurrentStatus::from_str(&cloned_connector.manager_current_status.unwrap().as_str()).unwrap();
-    let requested_connector_status = ConnectorRequestStatus::from_str(&cloned_connector.manager_requested_status.unwrap().as_str()).unwrap();
+    let current_status_fetch = &cloned_connector.manager_current_status.unwrap_or("created".into()); // Default current to created
+    let current_connector_status = ConnectorCurrentStatus::from_str(current_status_fetch).unwrap();
+    let requested_status_fetch = &cloned_connector.manager_requested_status.unwrap();
+    let requested_connector_status = ConnectorRequestStatus::from_str(requested_status_fetch).unwrap();
     let current_container_status = orchestrator.state_converter(container);
     info!("[V] CONNECTOR IS DEPLOY: {} - {} - {}", connector_id, container.image, container.state);
     // Update the connector status if needed
