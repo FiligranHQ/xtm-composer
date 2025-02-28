@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://www.filigran.io/mitre.schema.json",
+  "title": "IpInfo connector",
+  "description": "IpInfo enrichment connector",
+  "labels": ["enrichment", "ip"],
+  "container_image": "opencti/connector-ipinfo",
+  "type": "object",
+  "default": {
+    "CONNECTOR_SCOPE": "IPv4-Addr",
+    "IPINFO_MAX_TLP": "TLP:AMBER",
+    "IPINFO_USE_ASN_NAME": false
+  },
+  "properties": {
+    "CONNECTOR_SCOPE": {
+      "description": "Connector scope",
+      "type": "string"
+    },
+    "IPINFO_TOKEN": {
+      "description": "Token key for the service",
+      "type": "string"
+    },
+    "IPINFO_MAX_TLP": {
+      "description": "Max TLP that will be handle by the connector",
+      "type": "string"
+    },
+    "IPINFO_USE_ASN_NAME": {
+      "description": "Max TLP that will be handle by the connector",
+      "type": "boolean"
+    }
+  },
+  "required": ["IPINFO_TOKEN"]
+}

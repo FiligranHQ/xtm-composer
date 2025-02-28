@@ -3,20 +3,29 @@
   "$id": "https://www.filigran.io/mitre.schema.json",
   "title": "Mitre connector",
   "description": "A Mitre connector",
-  "docker": "opencti/connector-ipinfo",
+  "labels": ["ingest", "mitre"],
+  "container_image": "opencti/connector-mitre",
   "type": "object",
+  "default": {
+    "CONNECTOR_SCOPE": [
+      "tool", "report", "malware", "identity", "campaign", "intrusion-set", "attack-pattern", "course-of-action",
+      "x-mitre-data-source", "x-mitre-data-component", "x-mitre-matrix", "x-mitre-tactic", "x-mitre-collection"
+    ],
+    "MITRE_REMOVE_STATEMENT_MARKING": true,
+    "MITRE_INTERVAL": 7
+  },
   "properties": {
-    "OPENCTI_URL": {
-      "description": "Url of OpenCTI",
-      "type": "string"
-    },
-    "OPENCTI_TOKEN": {
-      "description": "User token for the connector",
-      "type": "string"
+    "CONNECTOR_SCOPE": {
+      "description": "Connector scope",
+      "type": "array"
     },
     "MITRE_REMOVE_STATEMENT_MARKING": {
       "description": "Connector will remove the statement marking",
       "type": "boolean"
+    },
+    "MITRE_INTERVAL": {
+      "description": "Connector will remove the statement marking",
+      "type": "number"
     }
   },
   "required": ["OPENCTI_URL","OPENCTI_TOKEN"]
