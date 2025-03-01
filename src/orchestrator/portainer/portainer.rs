@@ -60,7 +60,7 @@ impl Orchestrator for PortainerOrchestrator {
         })
     }
 
-    async fn containers(&self) -> Option<Vec<OrchestratorContainer>> {
+    async fn containers(&self, _connector: &Connector) -> Option<Vec<OrchestratorContainer>> {
         let list_uri = format!("{}/json?all=true", self.container_uri);
         let response = self.client.get(list_uri).send().await;
         let response_result = match response {
@@ -148,14 +148,14 @@ impl Orchestrator for PortainerOrchestrator {
         &self,
         container: &OrchestratorContainer,
         _connector: &Connector,
-    ) -> Vec<String> {
+    ) -> Option<Vec<String>> {
         let logs_container_uri = format!(
             "{}/{}/logs?stderr=1&stdout=1&tail=100",
             self.container_uri, container.id
         );
         let logs_response = self.client.get(logs_container_uri).send().await.unwrap();
         let text_logs = logs_response.text().await.unwrap();
-        text_logs.lines().map(|line| line.to_string()).collect()
+        Some(text_logs.lines().map(|line| line.to_string()).collect())
     }
 
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus {

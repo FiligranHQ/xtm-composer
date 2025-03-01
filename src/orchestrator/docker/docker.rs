@@ -124,7 +124,7 @@ impl Orchestrator for DockerOrchestrator {
         todo!("docker container")
     }
 
-    async fn containers(&self) -> Option<Vec<OrchestratorContainer>> {
+    async fn containers(&self, _connector: &Connector) -> Option<Vec<OrchestratorContainer>> {
         let container_result = self
             .docker
             .list_containers(Some(ListContainersOptions::<String> {
@@ -176,7 +176,7 @@ impl Orchestrator for DockerOrchestrator {
         &self,
         container: &OrchestratorContainer,
         connector: &Connector,
-    ) -> Vec<String> {
+    ) -> Option<Vec<String>> {
         todo!("docker logs")
     }
 

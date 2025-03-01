@@ -35,7 +35,7 @@ pub trait Orchestrator {
         connector: &Connector,
     ) -> Option<OrchestratorContainer>;
 
-    async fn containers(&self) -> Option<Vec<OrchestratorContainer>>;
+    async fn containers(&self, connector: &Connector) -> Option<Vec<OrchestratorContainer>>;
 
     async fn container_start(&self, container: &OrchestratorContainer, connector: &Connector)
     -> ();
@@ -52,7 +52,7 @@ pub trait Orchestrator {
         &self,
         container: &OrchestratorContainer,
         connector: &Connector,
-    ) -> Vec<String>;
+    ) -> Option<Vec<String>>;
 
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus;
 }

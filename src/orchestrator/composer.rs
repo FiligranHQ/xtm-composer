@@ -1,20 +1,20 @@
-use std::collections::HashMap;
-use log::info;
-use std::str::FromStr;
 use crate::api::connector;
 use crate::api::connector::{update_current_status, Connector, ConnectorCurrentStatus, ConnectorRequestStatus};
 use crate::config::settings::Settings;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
+use log::info;
+use std::collections::HashMap;
+use std::str::FromStr;
 
-async fn orchestrate_missing(settings_data: &Settings, orchestrator: &Box<dyn Orchestrator>, connector: &Connector) {
+async fn orchestrate_missing(settings: &Settings, orchestrator: &Box<dyn Orchestrator>, connector: &Connector) {
     // Connector is not provisioned, deploy the images
     let connector_id = connector.clone().id.into_inner();
     info!("[X] CONNECTOR IS NOT DEPLOY: {}", connector_id);
-    let deploy_action = orchestrator.container_deploy(settings_data, connector).await;
+    let deploy_action = orchestrator.container_deploy(settings, connector).await;
     match deploy_action {
         Some(_) => {
             // Update the connector status
-            update_current_status(settings_data, connector_id, ConnectorCurrentStatus::Created).await;
+            update_current_status(settings, connector_id, ConnectorCurrentStatus::Created).await;
         }
         None => {
             info!("Deployment canceled")
@@ -22,7 +22,7 @@ async fn orchestrate_missing(settings_data: &Settings, orchestrator: &Box<dyn Or
     }
 }
 
-async fn orchestrate_existing(settings_data: &Settings, orchestrator: &Box<dyn Orchestrator>, connector: &Connector, container: &OrchestratorContainer) {
+async fn orchestrate_existing(settings: &Settings, orchestrator: &Box<dyn Orchestrator>, connector: &Connector, container: &OrchestratorContainer) {
     // Connector is provisioned
     let cloned_connector = connector.clone();
     let connector_id = cloned_connector.id.into_inner();
@@ -34,7 +34,7 @@ async fn orchestrate_existing(settings_data: &Settings, orchestrator: &Box<dyn O
     info!("[V] CONNECTOR IS DEPLOY: {} - {} - {}", connector_id, container.image, container.state);
     // Update the connector status if needed
     if current_container_status != current_connector_status {
-        update_current_status(settings_data, connector.id.clone().into_inner(), current_container_status).await;
+        update_current_status(settings, connector.id.clone().into_inner(), current_container_status).await;
         info!("[V] CONNECTOR STATUS UPDATED: {} - {:?}", connector.id.inner(), current_container_status);
     }
     // In case of platform upgrade, we need to align all deployed connectors
@@ -64,23 +64,30 @@ async fn orchestrate_existing(settings_data: &Settings, orchestrator: &Box<dyn O
     }
     // Get latest logs and update opencti
     let connector_logs = orchestrator.container_logs(container, connector).await;
-    connector::update_connector_logs(settings_data, connector_id, connector_logs).await;
+    match connector_logs {
+        Some(logs) => {
+            connector::update_connector_logs(settings, connector_id, logs).await;
+        }
+        None => {
+            // No logs
+        }
+    }
 }
 
-pub async fn orchestrate(settings_data: &Settings, orchestrator: &Box<dyn Orchestrator>) {
-    // Get current containers in the orchestrator
-    let containers = orchestrator.containers().await.unwrap_or_default();
-    let containers_by_id: HashMap<String, OrchestratorContainer> = containers.into_iter()
-        .map(|n| (n.extract_opencti_id().clone(), n.clone())).collect();
+pub async fn orchestrate(setting: &Settings, orchestrator: &Box<dyn Orchestrator>) {
     // Get the current definition from OpenCTI
-    let connectors_response = connector::list(&settings_data).await.data;
+    let connectors_response = connector::list(&setting).await.data;
     if connectors_response.is_some() {
         let connectors = connectors_response.unwrap().connectors_for_manager.unwrap_or_default();
         // Iter on each definition and check alignment between the status and the container
         for connector in connectors {
+            // Get current containers in the orchestrator
+            let containers = orchestrator.containers(&connector).await.unwrap_or_default();
+            let containers_by_id: HashMap<String, OrchestratorContainer> = containers.into_iter()
+                .map(|n| (n.extract_opencti_id().clone(), n.clone())).collect();
             match containers_by_id.get(connector.id.inner()) {
-                Some(container) => orchestrate_existing(settings_data, orchestrator, &connector, container).await,
-                None => orchestrate_missing(settings_data, orchestrator, &connector).await
+                Some(container) => orchestrate_existing(setting, orchestrator, &connector, container).await,
+                None => orchestrate_missing(setting, orchestrator, &connector).await
             }
         }
     }

@@ -25,14 +25,13 @@ async fn main() {
         .target(Target::Stdout)
         .init();
     // Build settings
-    let settings = Settings::new();
-    let settings_data = settings.unwrap();
+    let setting = Settings::new().unwrap();
     // Get OpenCTI managed connectors
-    let daemon_type = &settings_data.manager.daemon;
+    let daemon_type = &setting.manager.daemon;
     // Get current deployment in target orchestrator
     let orchestrator: Box<dyn Orchestrator> = match daemon_type.as_str() {
-        "portainer" => Box::new(PortainerOrchestrator::new(&settings_data.portainer)),
-        "kubernetes" => Box::new(KubeOrchestrator::new(&settings_data.kubernetes).await),
+        "portainer" => Box::new(PortainerOrchestrator::new(&setting.portainer)),
+        "kubernetes" => Box::new(KubeOrchestrator::new(&setting.kubernetes).await),
         "docker" => Box::new(DockerOrchestrator::new()),
         def => panic!("Invalid daemon configuration: {}", def),
     };
@@ -44,7 +43,7 @@ async fn main() {
         _ = async {
             loop {
                 interval.tick().await;
-                composer::orchestrate(&settings_data, &orchestrator).await;
+                composer::orchestrate(&setting, &orchestrator).await;
             }
         } => {
             // This branch will never be reached due to the infinite loop.
