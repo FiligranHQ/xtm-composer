@@ -3,6 +3,7 @@ use crate::config::settings::{Kubernetes, Settings};
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
+use futures::StreamExt;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{Container, EnvVar, Pod, PodSpec, PodTemplateSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
@@ -34,7 +35,7 @@ impl KubeOrchestrator {
                 value_from: None,
             })
             .collect();
-        envs.push( EnvVar {
+        envs.push(EnvVar {
             name: "OPENCTI_URL".into(),
             value: Some(settings.opencti.url.clone()),
             value_from: None,
@@ -72,30 +73,6 @@ impl KubeOrchestrator {
         labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
-    pub fn from_pod(pod: &Pod) -> OrchestratorContainer {
-        let pod_spec = pod.spec.clone().unwrap();
-        let pod_container = pod_spec.containers.iter().next().unwrap();
-        OrchestratorContainer {
-            id: pod.uid().unwrap(),
-            state: KubeOrchestrator::compute_pod_status(&pod),
-            image: pod_container.image.clone().unwrap(),
-            labels: KubeOrchestrator::compute_pod_labels(&pod.labels()),
-        }
-    }
-
-    pub fn from_deployment(deployment: &Deployment) -> OrchestratorContainer {
-        let deployment_spec = deployment.spec.clone().unwrap();
-        let template_spec = deployment_spec.template.clone();
-        let spec = template_spec.spec.unwrap();
-        let pod_container = spec.containers.iter().next().unwrap();
-        OrchestratorContainer {
-            id: deployment.uid().unwrap(),
-            state: "exited".to_string(),
-            image: pod_container.image.clone().unwrap(),
-            labels: KubeOrchestrator::compute_pod_labels(&deployment.labels()),
-        }
-    }
-
     async fn get_deployment_pod(&self, connector: &ManagedConnector) -> Option<Pod> {
         let lp = &ListParams::default()
             .labels(&format!("opencti-connector-id={}", connector.id.inner()));
@@ -127,6 +104,38 @@ impl KubeOrchestrator {
             .await
             .unwrap();
     }
+
+    pub fn from_pod(pod: &Pod) -> OrchestratorContainer {
+        let pod_spec = pod.spec.clone().unwrap();
+        let pod_container = pod_spec.containers.iter().next().unwrap();
+        OrchestratorContainer {
+            id: pod.uid().unwrap(),
+            state: KubeOrchestrator::compute_pod_status(&pod),
+            image: pod_container.image.clone().unwrap(),
+            labels: KubeOrchestrator::compute_pod_labels(&pod.labels()),
+        }
+    }
+
+    pub fn from_deployment(deployment: Deployment) -> OrchestratorContainer {
+        let deployment_spec = deployment.spec.clone().unwrap();
+        let template_spec = deployment_spec.template.clone();
+        let spec = template_spec.spec.unwrap();
+        let pod_container = spec.containers.iter().next().unwrap();
+        OrchestratorContainer {
+            id: deployment.uid().unwrap(),
+            state: "exited".to_string(),
+            image: pod_container.image.clone().unwrap(),
+            labels: KubeOrchestrator::compute_pod_labels(&deployment.labels()),
+        }
+    }
+
+    async fn get_container(&self, deployment: Deployment, connector: &ManagedConnector) -> OrchestratorContainer {
+        let pod = self.get_deployment_pod(connector).await;
+        match pod {
+            Some(pod) => KubeOrchestrator::from_pod(&pod),
+            None => KubeOrchestrator::from_deployment(deployment)
+        }
+    }
 }
 
 #[async_trait]
@@ -146,30 +155,20 @@ impl Orchestrator for KubeOrchestrator {
     async fn list(&self, connector: &ManagedConnector) -> Option<Vec<OrchestratorContainer>> {
         let lp = &ListParams::default()
             .labels(&format!("opencti-connector-id={}", connector.id.inner()));
-        let containers: Vec<OrchestratorContainer> = self
-            .deployments
-            .list(lp)
-            .await
-            .unwrap()
-            .iter()
-            .map(|deployment| KubeOrchestrator::from_deployment(deployment))
-            .collect();
-        Some(containers)
+        let get_deployments = self.deployments.list(lp).await.unwrap();
+        let async_resolver = get_deployments.into_iter()
+            .map(|deployment| self.get_container(deployment, connector));
+        let deploy_to_containers = futures::stream::iter(async_resolver)
+            .buffer_unordered(3)
+            .collect::<Vec<_>>();
+        Some(deploy_to_containers.await)
     }
 
-    async fn start(
-        &self,
-        _container: &OrchestratorContainer,
-        connector: &ManagedConnector,
-    ) -> () {
+    async fn start(&self, _container: &OrchestratorContainer, connector: &ManagedConnector) -> () {
         self.set_deployment_scale(connector, 1).await;
     }
 
-    async fn stop(
-        &self,
-        _container: &OrchestratorContainer,
-        connector: &ManagedConnector,
-    ) -> () {
+    async fn stop(&self, _container: &OrchestratorContainer, connector: &ManagedConnector) -> () {
         self.set_deployment_scale(connector, 0).await;
     }
 
@@ -223,7 +222,7 @@ impl Orchestrator for KubeOrchestrator {
             .create(&PostParams::default(), &deployment_creation)
             .await
         {
-            Ok(deployment) => Some(self.container(deployment.uid()?, connector).await.unwrap()),
+            Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
             Err(kube::Error::Api(ae)) => {
                 error!("Kubernetes creation api error {:?}", ae);
                 None
