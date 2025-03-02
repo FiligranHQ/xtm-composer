@@ -41,6 +41,7 @@ pub struct PortainerGetResponseState {
 #[derive(Deserialize)]
 #[serde(rename_all(deserialize = "PascalCase"))]
 pub struct PortainerGetResponseConfig {
+    pub env: Vec<String>,
     pub labels: HashMap<String, String>,
 }
 
@@ -48,7 +49,7 @@ pub struct PortainerGetResponseConfig {
 #[serde(rename_all(deserialize = "PascalCase"))]
 pub struct PortainerGetResponse {
     pub id: String,
-    pub image: String,
+    // pub image: String,
     pub config: PortainerGetResponseConfig,
     pub state: PortainerGetResponseState,
 }

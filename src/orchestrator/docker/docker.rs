@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use bollard::container::ListContainersOptions;
 use bollard::Docker;
 use log::error;
+use std::collections::HashMap;
 
 impl DockerOrchestrator {
     pub fn new() -> Self {
@@ -116,20 +117,20 @@ async fn docker_handling() {
 
 #[async_trait]
 impl Orchestrator for DockerOrchestrator {
-    async fn container(
-        &self,
-        container_id: String,
-        connector: &ManagedConnector,
-    ) -> Option<OrchestratorContainer> {
-        todo!("docker container")
+
+    async fn get(&self, connector: &ManagedConnector) -> Option<OrchestratorContainer> {
+        None
     }
 
-    async fn list(&self, _connector: &ManagedConnector) -> Option<Vec<OrchestratorContainer>> {
+    async fn list(&self, settings: &Settings) -> Option<Vec<OrchestratorContainer>> {
+        let list_container_filters: HashMap<String, Vec<String>> = HashMap::from([
+            ("opencti-manager".into(), Vec::from([settings.manager.id.clone()]))
+        ]);
         let container_result = self
             .docker
             .list_containers(Some(ListContainersOptions::<String> {
                 all: true,
-                // filters: list_container_filters,
+                filters: list_container_filters,
                 ..Default::default()
             }))
             .await;
@@ -140,7 +141,8 @@ impl Orchestrator for DockerOrchestrator {
                     .map(|docker_container| OrchestratorContainer {
                         id: docker_container.id.unwrap(),
                         state: docker_container.state.unwrap(),
-                        image: docker_container.image.unwrap(),
+                        // image: docker_container.image.unwrap(),
+                        envs: HashMap::new(),
                         labels: docker_container.labels.unwrap(),
                     })
                     .collect(),
@@ -152,16 +154,24 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
-    async fn start(
-        &self,
-        container: &OrchestratorContainer,
-        connector: &ManagedConnector,
-    ) -> () {
+    async fn start(&self, container: &OrchestratorContainer, connector: &ManagedConnector) -> () {
         todo!("docker start")
     }
 
     async fn stop(&self, container: &OrchestratorContainer, connector: &ManagedConnector) -> () {
         todo!("docker stop")
+    }
+
+    async fn refresh(
+        &self,
+        settings: &Settings,
+        connector: &ManagedConnector,
+    ) -> Option<OrchestratorContainer> {
+        todo!("docker refresh")
+    }
+
+    async fn remove(&self, container: &OrchestratorContainer) -> () {
+        todo!("docker remove")
     }
 
     async fn deploy(

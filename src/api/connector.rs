@@ -10,6 +10,8 @@ mod schema {}
 pub struct ManagedConnector {
     pub id: cynic::Id,
     pub name: String,
+    #[cynic(rename = "manager_contract_hash")]
+    pub manager_contract_hash: Option<String>,    
     #[cynic(rename = "manager_contract_image")]
     pub manager_contract_image: Option<String>,
     #[cynic(rename = "manager_current_status")]
@@ -18,6 +20,12 @@ pub struct ManagedConnector {
     pub manager_requested_status: Option<String>,
     #[cynic(rename = "manager_contract_configuration")]
     pub manager_contract_configuration: Option<Vec<ConnectorContractConfiguration>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EnvVariable {
+    pub key: String,
+    pub value: String,
 }
 
 impl ManagedConnector {
@@ -30,14 +38,21 @@ impl ManagedConnector {
             .to_lowercase()
     }
 
-    pub fn container_envs(&self, settings: &Settings) -> Vec<String> {
+    pub fn container_envs(&self, settings: &Settings, connector: &ManagedConnector) -> Vec<EnvVariable> {
         let mut envs = self.manager_contract_configuration
             .clone()
             .unwrap()
             .into_iter()
-            .map(|config| format!("{}={}", config.key, config.value))
-            .collect::<Vec<String>>();
-        envs.push(format!("OPENCTI_URL={}", settings.opencti.url));
+            .map(|config| EnvVariable { key: config.key, value: config.value })
+            .collect::<Vec<EnvVariable>>();
+        envs.push(EnvVariable {
+            key: "OPENCTI_URL".into(),
+            value: settings.opencti.url.clone()
+        });
+        envs.push(EnvVariable {
+            key: "OPENCTI_CONFIG_HASH".into(),
+            value: connector.manager_contract_hash.clone().unwrap()
+        });
         envs
     }
 }
@@ -104,6 +119,7 @@ impl FromStr for ConnectorCurrentStatus {
         match input {
             "created" => Ok(ConnectorCurrentStatus::Created),
             "exited" => Ok(ConnectorCurrentStatus::Stopped),
+            "started" => Ok(ConnectorCurrentStatus::Started),
             "healthy" => Ok(ConnectorCurrentStatus::Started),
             "running" => Ok(ConnectorCurrentStatus::Started),
             _ => Ok(ConnectorCurrentStatus::Created),
