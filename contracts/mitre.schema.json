@@ -5,19 +5,17 @@
   "description": "A Mitre connector",
   "labels": ["ingest", "mitre"],
   "container_image": "opencti/connector-mitre",
+  "container_type": "EXTERNAL_IMPORT",
   "type": "object",
   "default": {
-    "CONNECTOR_SCOPE": [
-      "tool", "report", "malware", "identity", "campaign", "intrusion-set", "attack-pattern", "course-of-action",
-      "x-mitre-data-source", "x-mitre-data-component", "x-mitre-matrix", "x-mitre-tactic", "x-mitre-collection"
-    ],
+    "CONNECTOR_SCOPE": "tool,report,malware,identity,campaign,intrusion-set,attack-pattern,course-of-action,x-mitre-data-source,x-mitre-data-component,x-mitre-matrix,x-mitre-tactic,x-mitre-collection",
     "MITRE_REMOVE_STATEMENT_MARKING": true,
     "MITRE_INTERVAL": 7
   },
   "properties": {
     "CONNECTOR_SCOPE": {
       "description": "Connector scope",
-      "type": "array"
+      "type": "string"
     },
     "MITRE_REMOVE_STATEMENT_MARKING": {
       "description": "Connector will remove the statement marking",
@@ -28,5 +26,6 @@
       "type": "number"
     }
   },
-  "required": ["OPENCTI_URL","OPENCTI_TOKEN"]
+  "required": [],
+  "additionalProperties": false
 }

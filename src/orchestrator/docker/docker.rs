@@ -1,7 +1,7 @@
 // TODO Remove macro after implementation
 #![allow(unused_variables)]
 
-use crate::api::connector::{Connector, ConnectorCurrentStatus};
+use crate::api::connector::{ConnectorCurrentStatus, ManagedConnector};
 use crate::config::settings::Settings;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
@@ -119,12 +119,12 @@ impl Orchestrator for DockerOrchestrator {
     async fn container(
         &self,
         container_id: String,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> Option<OrchestratorContainer> {
         todo!("docker container")
     }
 
-    async fn containers(&self, _connector: &Connector) -> Option<Vec<OrchestratorContainer>> {
+    async fn list(&self, _connector: &ManagedConnector) -> Option<Vec<OrchestratorContainer>> {
         let container_result = self
             .docker
             .list_containers(Some(ListContainersOptions::<String> {
@@ -152,30 +152,30 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
-    async fn container_start(
+    async fn start(
         &self,
         container: &OrchestratorContainer,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> () {
         todo!("docker start")
     }
 
-    async fn container_stop(&self, container: &OrchestratorContainer, connector: &Connector) -> () {
+    async fn stop(&self, container: &OrchestratorContainer, connector: &ManagedConnector) -> () {
         todo!("docker stop")
     }
 
-    async fn container_deploy(
+    async fn deploy(
         &self,
         settings: &Settings,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> Option<OrchestratorContainer> {
         todo!("docker deploy")
     }
 
-    async fn container_logs(
+    async fn logs(
         &self,
         container: &OrchestratorContainer,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> Option<Vec<String>> {
         todo!("docker logs")
     }

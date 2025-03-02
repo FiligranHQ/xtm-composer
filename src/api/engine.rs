@@ -7,7 +7,7 @@ const BEARER: &str = "Bearer";
 const AUTHORIZATION_HEADER: &str = "Authorization";
 
 pub async fn query_fetch<R, V>(
-    settings_data: &Settings,
+    settings: &Settings,
     query: Operation<R, V>,
 ) -> cynic::GraphQlResponse<R>
 where
@@ -15,8 +15,8 @@ where
     R: DeserializeOwned + 'static,
 {
     use cynic::http::ReqwestExt;
-    let bearer = format!("{} {}", BEARER, settings_data.opencti.token);
-    let api_uri = format!("{}/graphql", &settings_data.opencti.url);
+    let bearer = format!("{} {}", BEARER, settings.opencti.token);
+    let api_uri = format!("{}/graphql", &settings.opencti.url);
     reqwest::Client::builder()
         .build()
         .unwrap()

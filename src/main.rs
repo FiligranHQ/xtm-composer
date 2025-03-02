@@ -11,6 +11,7 @@ use crate::orchestrator::{composer, Orchestrator};
 use env_logger::{Builder, Target};
 use std::time::Duration;
 
+use crate::api::manager::register_manager;
 use crate::system::signals;
 use log::LevelFilter::Info;
 use tokio::time::interval;
@@ -26,6 +27,8 @@ async fn main() {
         .init();
     // Build settings
     let setting = Settings::new().unwrap();
+    // Register the manager in OpenCTI
+    register_manager(&setting).await;
     // Get OpenCTI managed connectors
     let daemon_type = &setting.manager.daemon;
     // Get current deployment in target orchestrator

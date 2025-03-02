@@ -1,4 +1,4 @@
-use crate::api::connector::{Connector, ConnectorCurrentStatus};
+use crate::api::connector::{ConnectorCurrentStatus, ManagedConnector};
 use crate::config::settings::Settings;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -32,26 +32,25 @@ pub trait Orchestrator {
     async fn container(
         &self,
         container_id: String,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> Option<OrchestratorContainer>;
 
-    async fn containers(&self, connector: &Connector) -> Option<Vec<OrchestratorContainer>>;
+    async fn list(&self, connector: &ManagedConnector) -> Option<Vec<OrchestratorContainer>>;
 
-    async fn container_start(&self, container: &OrchestratorContainer, connector: &Connector)
-    -> ();
+    async fn start(&self, container: &OrchestratorContainer, connector: &ManagedConnector) -> ();
 
-    async fn container_stop(&self, container: &OrchestratorContainer, connector: &Connector) -> ();
+    async fn stop(&self, container: &OrchestratorContainer, connector: &ManagedConnector) -> ();
 
-    async fn container_deploy(
+    async fn deploy(
         &self,
         settings: &Settings,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> Option<OrchestratorContainer>;
 
-    async fn container_logs(
+    async fn logs(
         &self,
         container: &OrchestratorContainer,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> Option<Vec<String>>;
 
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus;

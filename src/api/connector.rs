@@ -7,7 +7,7 @@ use std::str::FromStr;
 mod schema {}
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
-pub struct Connector {
+pub struct ManagedConnector {
     pub id: cynic::Id,
     pub name: String,
     #[cynic(rename = "manager_contract_image")]
@@ -20,7 +20,7 @@ pub struct Connector {
     pub manager_contract_configuration: Option<Vec<ConnectorContractConfiguration>>,
 }
 
-impl Connector {
+impl ManagedConnector {
     pub fn container_name(&self) -> String {
         self.name
             .clone()
@@ -50,7 +50,7 @@ pub struct GetConnectorsVariables<'a> {
 #[cynic(graphql_type = "Query", variables = "GetConnectorsVariables")]
 pub struct GetConnectors {
     #[arguments(managerId: $manager_id)]
-    pub connectors_for_manager: Option<Vec<Connector>>,
+    pub connectors_for_manager: Option<Vec<ManagedConnector>>,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, Serialize)]
@@ -83,7 +83,7 @@ pub struct UpdateConnectorCurrentStatusVariables<'a> {
 )]
 pub struct UpdateConnectorCurrentStatus {
     #[arguments(input: $input)]
-    pub update_connector_current_status: Option<Connector>,
+    pub update_connector_current_status: Option<ManagedConnector>,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq)]
@@ -138,7 +138,7 @@ pub async fn update_current_status(
     settings_data: &Settings,
     connector_id: String,
     status: ConnectorCurrentStatus,
-) -> Option<Connector> {
+) -> Option<ManagedConnector> {
     use cynic::MutationBuilder;
     let vars = UpdateConnectorCurrentStatusVariables {
         input: CurrentConnectorStatusInput {
@@ -165,7 +165,7 @@ pub struct ReportConnectorLogsVariables<'a> {
 #[cynic(graphql_type = "Mutation", variables = "ReportConnectorLogsVariables")]
 pub struct ReportConnectorLogs {
     #[arguments(input: $input)]
-    pub update_connector_logs: Option<Connector>,
+    pub update_connector_logs: Option<ManagedConnector>,
 }
 
 #[derive(cynic::InputObject, Debug)]
@@ -175,10 +175,10 @@ pub struct LogsConnectorStatusInput<'a> {
 }
 
 pub async fn update_connector_logs(
-    settings_data: &Settings,
+    settings: &Settings,
     connector_id: String,
     logs: Vec<String>,
-) -> Option<Connector> {
+) -> Option<ManagedConnector> {
     use cynic::MutationBuilder;
     let str_logs = logs.iter().map(|c| c.as_str()).collect();
     let vars = ReportConnectorLogsVariables {
@@ -188,7 +188,7 @@ pub async fn update_connector_logs(
         },
     };
     let mutation = ReportConnectorLogs::build(vars);
-    let mutation_response = query_fetch(settings_data, mutation).await;
+    let mutation_response = query_fetch(settings, mutation).await;
     mutation_response.data.unwrap().update_connector_logs
 }
 // endregion

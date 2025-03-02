@@ -1,4 +1,4 @@
-use crate::api::connector::{Connector, ConnectorCurrentStatus};
+use crate::api::connector::{ConnectorCurrentStatus, ManagedConnector};
 use crate::config::settings::{Portainer, Settings};
 use crate::orchestrator::portainer::{
     PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
@@ -47,7 +47,7 @@ impl Orchestrator for PortainerOrchestrator {
     async fn container(
         &self,
         container_id: String,
-        _connector: &Connector,
+        _connector: &ManagedConnector,
     ) -> Option<OrchestratorContainer> {
         let container_uri = format!("{}/{}/json", self.container_uri, container_id);
         let response = self.client.get(container_uri).send().await;
@@ -60,7 +60,7 @@ impl Orchestrator for PortainerOrchestrator {
         })
     }
 
-    async fn containers(&self, _connector: &Connector) -> Option<Vec<OrchestratorContainer>> {
+    async fn list(&self, _connector: &ManagedConnector) -> Option<Vec<OrchestratorContainer>> {
         let list_uri = format!("{}/json?all=true", self.container_uri);
         let response = self.client.get(list_uri).send().await;
         let response_result = match response {
@@ -79,28 +79,28 @@ impl Orchestrator for PortainerOrchestrator {
         )
     }
 
-    async fn container_start(
+    async fn start(
         &self,
         container: &OrchestratorContainer,
-        _connector: &Connector,
+        _connector: &ManagedConnector,
     ) -> () {
         let start_container_uri = format!("{}/{}/start", self.container_uri, container.id);
         self.client.post(start_container_uri).send().await.unwrap();
     }
 
-    async fn container_stop(
+    async fn stop(
         &self,
         container: &OrchestratorContainer,
-        _connector: &Connector,
+        _connector: &ManagedConnector,
     ) -> () {
         let start_container_uri = format!("{}/{}/stop", self.container_uri, container.id);
         self.client.post(start_container_uri).send().await.unwrap();
     }
 
-    async fn container_deploy(
+    async fn deploy(
         &self,
         settings: &Settings,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> Option<OrchestratorContainer> {
         // region First operation, pull the image
         let create_image_uri = format!(
@@ -144,10 +144,10 @@ impl Orchestrator for PortainerOrchestrator {
         self.container(deploy_data.id.clone(), connector).await
     }
 
-    async fn container_logs(
+    async fn logs(
         &self,
         container: &OrchestratorContainer,
-        _connector: &Connector,
+        _connector: &ManagedConnector,
     ) -> Option<Vec<String>> {
         let logs_container_uri = format!(
             "{}/{}/logs?stderr=1&stdout=1&tail=100",

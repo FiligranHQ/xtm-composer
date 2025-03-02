@@ -1,4 +1,4 @@
-use crate::api::connector::{Connector, ConnectorCurrentStatus};
+use crate::api::connector::{ConnectorCurrentStatus, ManagedConnector};
 use crate::config::settings::{Kubernetes, Settings};
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
@@ -76,7 +76,7 @@ impl KubeOrchestrator {
         }
     }
 
-    async fn get_deployment_pod(&self, connector: &Connector) -> Option<Pod> {
+    async fn get_deployment_pod(&self, connector: &ManagedConnector) -> Option<Pod> {
         let lp = &ListParams::default()
             .labels(&format!("opencti-connector-id={}", connector.id.inner()));
         let deployment_pods_response = self.pods.list(lp).await;
@@ -92,7 +92,7 @@ impl KubeOrchestrator {
         }
     }
 
-    async fn set_deployment_scale(&self, connector: &Connector, scale: i32) -> () {
+    async fn set_deployment_scale(&self, connector: &ManagedConnector, scale: i32) -> () {
         let deployment_patch = Deployment {
             spec: Some(DeploymentSpec {
                 replicas: Some(scale),
@@ -114,7 +114,7 @@ impl Orchestrator for KubeOrchestrator {
     async fn container(
         &self,
         _container_id: String,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> Option<OrchestratorContainer> {
         let deployment_pod = self.get_deployment_pod(connector).await;
         match deployment_pod {
@@ -123,7 +123,7 @@ impl Orchestrator for KubeOrchestrator {
         }
     }
 
-    async fn containers(&self, connector: &Connector) -> Option<Vec<OrchestratorContainer>> {
+    async fn list(&self, connector: &ManagedConnector) -> Option<Vec<OrchestratorContainer>> {
         let lp = &ListParams::default()
             .labels(&format!("opencti-connector-id={}", connector.id.inner()));
         let containers: Vec<OrchestratorContainer> = self
@@ -137,26 +137,26 @@ impl Orchestrator for KubeOrchestrator {
         Some(containers)
     }
 
-    async fn container_start(
+    async fn start(
         &self,
         _container: &OrchestratorContainer,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> () {
         self.set_deployment_scale(connector, 1).await;
     }
 
-    async fn container_stop(
+    async fn stop(
         &self,
         _container: &OrchestratorContainer,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> () {
         self.set_deployment_scale(connector, 0).await;
     }
 
-    async fn container_deploy(
+    async fn deploy(
         &self,
         _settings: &Settings,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> Option<OrchestratorContainer> {
         let mut deployment_labels: BTreeMap<String, String> = BTreeMap::new();
         deployment_labels.insert(
@@ -226,10 +226,10 @@ impl Orchestrator for KubeOrchestrator {
         }
     }
 
-    async fn container_logs(
+    async fn logs(
         &self,
         _container: &OrchestratorContainer,
-        connector: &Connector,
+        connector: &ManagedConnector,
     ) -> Option<Vec<String>> {
         let deployment_pod = self.get_deployment_pod(connector).await;
         match deployment_pod {

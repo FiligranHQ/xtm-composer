@@ -5,29 +5,37 @@
   "description": "IpInfo enrichment connector",
   "labels": ["enrichment", "ip"],
   "container_image": "opencti/connector-ipinfo",
+  "container_type": "INTERNAL_ENRICHMENT",
   "type": "object",
   "default": {
     "CONNECTOR_SCOPE": "IPv4-Addr",
+    "CONNECTOR_AUTO": true,
     "IPINFO_MAX_TLP": "TLP:AMBER",
     "IPINFO_USE_ASN_NAME": false
   },
   "properties": {
     "CONNECTOR_SCOPE": {
-      "description": "Connector scope",
+      "description": "Scope",
       "type": "string"
+    },
+    "CONNECTOR_AUTO": {
+      "description": "Auto trigger",
+      "type": "boolean"
     },
     "IPINFO_TOKEN": {
-      "description": "Token key for the service",
-      "type": "string"
+      "description": "Token",
+      "type": "string",
+      "format": "password"
     },
     "IPINFO_MAX_TLP": {
-      "description": "Max TLP that will be handle by the connector",
+      "description": "Max TLP",
       "type": "string"
     },
     "IPINFO_USE_ASN_NAME": {
-      "description": "Max TLP that will be handle by the connector",
+      "description": "use ASN name",
       "type": "boolean"
     }
   },
-  "required": ["IPINFO_TOKEN"]
+  "required": ["IPINFO_TOKEN"],
+  "additionalProperties": false
 }

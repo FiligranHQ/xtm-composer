@@ -1,16 +1,16 @@
 use crate::api::connector;
-use crate::api::connector::{update_current_status, Connector, ConnectorCurrentStatus, ConnectorRequestStatus};
+use crate::api::connector::{update_current_status, ConnectorCurrentStatus, ConnectorRequestStatus, ManagedConnector};
 use crate::config::settings::Settings;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use log::info;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-async fn orchestrate_missing(settings: &Settings, orchestrator: &Box<dyn Orchestrator>, connector: &Connector) {
+async fn orchestrate_missing(settings: &Settings, orchestrator: &Box<dyn Orchestrator>, connector: &ManagedConnector) {
     // Connector is not provisioned, deploy the images
     let connector_id = connector.clone().id.into_inner();
     info!("[X] CONNECTOR IS NOT DEPLOY: {}", connector_id);
-    let deploy_action = orchestrator.container_deploy(settings, connector).await;
+    let deploy_action = orchestrator.deploy(settings, connector).await;
     match deploy_action {
         Some(_) => {
             // Update the connector status
@@ -22,7 +22,7 @@ async fn orchestrate_missing(settings: &Settings, orchestrator: &Box<dyn Orchest
     }
 }
 
-async fn orchestrate_existing(settings: &Settings, orchestrator: &Box<dyn Orchestrator>, connector: &Connector, container: &OrchestratorContainer) {
+async fn orchestrate_existing(settings: &Settings, orchestrator: &Box<dyn Orchestrator>, connector: &ManagedConnector, container: &OrchestratorContainer) {
     // Connector is provisioned
     let cloned_connector = connector.clone();
     let connector_id = cloned_connector.id.into_inner();
@@ -48,22 +48,22 @@ async fn orchestrate_existing(settings: &Settings, orchestrator: &Box<dyn Orches
     match (requested_connector_status, current_container_status) {
         (ConnectorRequestStatus::Stopping, ConnectorCurrentStatus::Started) => {
             info!("[V] CONNECTOR STARTED {} - Stopping the container", container.id);
-            orchestrator.container_stop(container, connector).await;
+            orchestrator.stop(container, connector).await;
         }
         (ConnectorRequestStatus::Starting, ConnectorCurrentStatus::Stopped) => {
             info!("[V] CONNECTOR STOPPED {} - Starting the container", container.id);
-            orchestrator.container_start(container, connector).await;
+            orchestrator.start(container, connector).await;
         }
         (ConnectorRequestStatus::Starting, ConnectorCurrentStatus::Created) => {
             info!("[V] CONNECTOR CREATED {} - Starting the container", container.id);
-            orchestrator.container_start(container, connector).await;
+            orchestrator.start(container, connector).await;
         }
         _ => {
             info!("[V] CONNECTOR {} - Nothing to execute", container.id);
         }
     }
     // Get latest logs and update opencti
-    let connector_logs = orchestrator.container_logs(container, connector).await;
+    let connector_logs = orchestrator.logs(container, connector).await;
     match connector_logs {
         Some(logs) => {
             connector::update_connector_logs(settings, connector_id, logs).await;
@@ -82,7 +82,7 @@ pub async fn orchestrate(setting: &Settings, orchestrator: &Box<dyn Orchestrator
         // Iter on each definition and check alignment between the status and the container
         for connector in connectors {
             // Get current containers in the orchestrator
-            let containers = orchestrator.containers(&connector).await.unwrap_or_default();
+            let containers = orchestrator.list(&connector).await.unwrap_or_default();
             let containers_by_id: HashMap<String, OrchestratorContainer> = containers.into_iter()
                 .map(|n| (n.extract_opencti_id().clone(), n.clone())).collect();
             match containers_by_id.get(connector.id.inner()) {
