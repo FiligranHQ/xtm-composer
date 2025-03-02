@@ -124,7 +124,7 @@ impl Orchestrator for PortainerOrchestrator {
             image_labels.insert("com.docker.compose.project".to_string(), stack_label);
         }
         let json_body = PortainerDeployPayload {
-            env: connector.container_envs(),
+            env: connector.container_envs(settings),
             image: connector.manager_contract_image.clone().unwrap(),
             labels: image_labels,
             host_config: PortainerDeployHostConfig {

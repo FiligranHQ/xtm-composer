@@ -30,13 +30,15 @@ impl ManagedConnector {
             .to_lowercase()
     }
 
-    pub fn container_envs(&self) -> Vec<String> {
-        self.manager_contract_configuration
+    pub fn container_envs(&self, settings: &Settings) -> Vec<String> {
+        let mut envs = self.manager_contract_configuration
             .clone()
             .unwrap()
             .into_iter()
             .map(|config| format!("{}={}", config.key, config.value))
-            .collect::<Vec<String>>()
+            .collect::<Vec<String>>();
+        envs.push(format!("OPENCTI_URL={}", settings.opencti.url));
+        envs
     }
 }
 

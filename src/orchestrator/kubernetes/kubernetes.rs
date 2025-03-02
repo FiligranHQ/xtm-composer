@@ -22,6 +22,26 @@ impl KubeOrchestrator {
         Self { pods, deployments }
     }
 
+    pub fn container_envs(&self, settings: &Settings, connector: &ManagedConnector) -> Vec<EnvVar> {
+        let mut envs: Vec<EnvVar> = connector
+            .clone()
+            .manager_contract_configuration
+            .unwrap()
+            .iter()
+            .map(|conf| EnvVar {
+                name: conf.key.clone(),
+                value: Some(conf.value.clone()),
+                value_from: None,
+            })
+            .collect();
+        envs.push( EnvVar {
+            name: "OPENCTI_URL".into(),
+            value: Some(settings.opencti.url.clone()),
+            value_from: None,
+        });
+        envs
+    }
+
     pub fn compute_pod_status(pod: &Pod) -> String {
         let pod_container_state = pod
             .clone()
@@ -155,7 +175,7 @@ impl Orchestrator for KubeOrchestrator {
 
     async fn deploy(
         &self,
-        _settings: &Settings,
+        settings: &Settings,
         connector: &ManagedConnector,
     ) -> Option<OrchestratorContainer> {
         let mut deployment_labels: BTreeMap<String, String> = BTreeMap::new();
@@ -163,18 +183,7 @@ impl Orchestrator for KubeOrchestrator {
             "opencti-connector-id".into(),
             connector.id.clone().into_inner(),
         );
-        let pod_env: Vec<EnvVar> = connector
-            .clone()
-            .manager_contract_configuration
-            .unwrap()
-            .iter()
-            .map(|conf| EnvVar {
-                name: conf.key.clone(),
-                value: Some(conf.value.clone()),
-                value_from: None,
-            })
-            .collect();
-
+        let pod_env = self.container_envs(settings, connector);
         let deployment_creation = Deployment {
             metadata: ObjectMeta {
                 name: Some(connector.container_name()),
