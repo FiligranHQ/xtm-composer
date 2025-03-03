@@ -1,4 +1,5 @@
 use config::{Config, ConfigError, Environment, File};
+use k8s_openapi::api::apps::v1::Deployment;
 use serde::Deserialize;
 use std::env;
 
@@ -36,7 +37,7 @@ pub struct Portainer {
 #[derive(Debug, Deserialize)]
 #[allow(unused)]
 pub struct Kubernetes {
-    pub api: String,
+    pub base_deployment: Option<Deployment>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,12 +52,17 @@ pub struct Settings {
 
 impl Settings {
     pub fn mode() -> String {
-        env::var("env").unwrap_or_else(|_| ENV_PRODUCTION.into())
+        env::var("COMPOSER_ENV").unwrap_or_else(|_| ENV_PRODUCTION.into())
     }
 
     pub fn new() -> Result<Self, ConfigError> {
         let run_mode = Self::mode();
-        let config = Config::builder().add_source(Environment::with_prefix("opencti"));
+        let config = Config::builder().add_source(
+            Environment::with_prefix("COMPOSER")
+                .try_parsing(true)
+                .separator("_")
+                .list_separator(" "),
+        );
         config
             .add_source(File::with_name("config/default"))
             .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))

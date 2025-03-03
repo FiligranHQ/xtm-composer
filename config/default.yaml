@@ -1,0 +1,23 @@
+debug: false
+
+manager:
+  id: ChangeMe
+  name: Filigran connector manager
+  daemon: kubernetes
+
+opencti:
+  url: http://host.docker.internal:4000
+  token: ChangeMe
+  unsecured_certificate: false
+  with_proxy: false
+
+portainer:
+  api: https://localhost:9443
+  api_key: ChangeMe
+  api_version: v1.41
+  env_id: 3
+  env_type: docker # only docker supported
+  stack: opencti-dev
+  network_mode: opencti-dev_default
+
+kubernetes:

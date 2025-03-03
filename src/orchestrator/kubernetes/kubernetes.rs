@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{Container, EnvVar, Pod, PodSpec, PodTemplateSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
+use k8s_openapi::DeepMerge;
 use kube::api::{DeleteParams, LogParams, Patch, PatchParams};
 use kube::{
     api::{Api, ListParams, PostParams, ResourceExt},
@@ -143,7 +144,7 @@ impl KubeOrchestrator {
             .clone()
             .unwrap()
             .eq("starting");
-        Deployment {
+        let target_deployment = Deployment {
             metadata: ObjectMeta {
                 name: Some(connector.container_name()),
                 labels: Some(deployment_labels.clone()),
@@ -180,7 +181,17 @@ impl KubeOrchestrator {
                 ..Default::default()
             }),
             ..Default::default()
-        }
+        };
+        let mut base_deployment =
+            settings
+                .kubernetes
+                .base_deployment
+                .clone()
+                .unwrap_or(Deployment {
+                    ..Default::default()
+                });
+        base_deployment.merge_from(target_deployment);
+        base_deployment
     }
 }
 

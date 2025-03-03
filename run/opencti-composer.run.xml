@@ -4,7 +4,7 @@
     <option name="command" value="run --package opencti-composer --bin opencti-composer" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$/../opencti-composer" />
     <envs>
-      <env name="env" value="development" />
+      <env name="COMPOSER_ENV" value="development" />
     </envs>
     <option name="emulateTerminal" value="true" />
     <option name="channel" value="DEFAULT" />
