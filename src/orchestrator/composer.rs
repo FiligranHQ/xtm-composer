@@ -32,7 +32,11 @@ async fn orchestrate_existing(settings: &Settings, orchestrator: &Box<dyn Orches
     let requested_connector_status = ConnectorRequestStatus::from_str(requested_status_fetch).unwrap();
     let current_container_status = orchestrator.state_converter(&container);
     // Update the connector status if needed
-    if current_container_status != current_connector_status {
+    let connector_status_is_created = current_connector_status == ConnectorCurrentStatus::Created;
+    let container_status_is_stopped = current_container_status != ConnectorCurrentStatus::Started;
+    let container_status_is_logic_same = connector_status_is_created && container_status_is_stopped;
+    let container_status_not_aligned = current_container_status != current_connector_status;
+    if !container_status_is_logic_same && container_status_not_aligned {
         update_current_status(settings, connector.id.clone().into_inner(), current_container_status).await;
         info!("[V] CONNECTOR STATUS UPDATED: {} - connector: {:?} / container: {:?}", connector.id.inner(), current_connector_status, current_container_status);
     }

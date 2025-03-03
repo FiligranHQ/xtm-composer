@@ -35,32 +35,6 @@ impl KubeOrchestrator {
             .collect()
     }
 
-    pub fn compute_pod_status(pod: &Pod) -> String {
-        let pod_container_state = pod
-            .clone()
-            .status
-            .unwrap()
-            .container_statuses
-            .unwrap()
-            .iter()
-            .next()
-            .unwrap()
-            .clone()
-            .state
-            .unwrap();
-        let status = match (
-            pod_container_state.waiting,
-            pod_container_state.running,
-            pod_container_state.terminated,
-        ) {
-            (Some(_waiting_status), None, None) => "waiting",
-            (None, Some(_running_status), None) => "running",
-            (None, None, Some(_terminated_status)) => "terminated",
-            _ => "exited",
-        };
-        status.to_string()
-    }
-
     pub fn convert_to_map(labels: &BTreeMap<String, String>) -> HashMap<String, String> {
         labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
@@ -81,35 +55,14 @@ impl KubeOrchestrator {
             .unwrap();
     }
 
-    pub fn from_pod(deployment: Deployment, pod: &Pod) -> OrchestratorContainer {
-        let pod_spec = pod.spec.clone().unwrap();
-        let pod_container = pod_spec.containers.into_iter().next().unwrap();
-        let mut annotations_as_env = KubeOrchestrator::convert_to_map(deployment.annotations());
-        pod_container
-            .env
-            .unwrap_or_default()
-            .iter()
-            .for_each(|env| {
-                annotations_as_env.insert(env.clone().name, env.clone().value.unwrap_or_default());
-            });
-        OrchestratorContainer {
-            id: pod.uid().unwrap(),
-            state: KubeOrchestrator::compute_pod_status(&pod),
-            // image: pod_container.image.clone().unwrap(),
-            envs: annotations_as_env,
-            labels: KubeOrchestrator::convert_to_map(&pod.labels()),
-        }
-    }
-
     pub fn from_deployment(deployment: Deployment) -> OrchestratorContainer {
-        // let deployment_spec = deployment.spec.clone().unwrap();
-        // let template_spec = deployment_spec.template.clone();
-        // let spec = template_spec.spec.unwrap();
-        // let pod_container = spec.containers.iter().next().unwrap();
+        let dep = deployment.clone();
+        let expected_replicas = dep.spec.unwrap().replicas.unwrap_or(0);
+        let compute_state: &str = if expected_replicas == 0 { "terminated" } else { "running" };
         let annotations_as_env = KubeOrchestrator::convert_to_map(deployment.annotations());
         OrchestratorContainer {
             id: deployment.uid().unwrap(),
-            state: "exited".to_string(),
+            state: compute_state.to_string(),
             // image: pod_container.image.clone().unwrap(),
             envs: annotations_as_env,
             labels: KubeOrchestrator::convert_to_map(&deployment.labels()),
@@ -203,19 +156,7 @@ impl Orchestrator for KubeOrchestrator {
             .get(connector.container_name().as_str())
             .await;
         match get_deployment {
-            Ok(deployment) => {
-                // Looking for an existing pod.
-                let pod = self
-                    .get_deployment_pod(connector.id.clone().into_inner())
-                    .await;
-                if pod.is_some() {
-                    // If pod exists, return container based on the pod
-                    Some(KubeOrchestrator::from_pod(deployment, &pod.unwrap()))
-                } else {
-                    // If not, return container based on the deployment
-                    Some(KubeOrchestrator::from_deployment(deployment))
-                }
-            }
+            Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
             Err(_) => None,
         }
     }
