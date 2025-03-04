@@ -9,7 +9,7 @@ use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use header::HeaderValue;
 use k8s_openapi::serde_json;
-use log::{debug, error};
+use tracing::{debug, error};
 use reqwest::header::HeaderMap;
 use reqwest::{header, Client};
 use std::collections::HashMap;
@@ -60,7 +60,7 @@ impl Orchestrator for PortainerOrchestrator {
         let response_result: Result<Vec<PortainerGetResponse>, _> = match response {
             Ok(data) => data.json().await,
             Err(err) => {
-                error!("Portainer error fetching containers: {:?}", err);
+                error!(error = err.to_string(), "Portainer error fetching containers");
                 Ok(Vec::new())
             }
         };
@@ -101,7 +101,7 @@ impl Orchestrator for PortainerOrchestrator {
         let response_result = match response {
             Ok(data) => data.json().await,
             Err(err) => {
-                error!("Portainer error fetching containers: {:?}", err);
+                error!(error = err.to_string(), "Portainer error fetching containers");
                 Ok(Vec::new())
             }
         };
@@ -187,11 +187,11 @@ impl Orchestrator for PortainerOrchestrator {
         match deploy_response {
             Ok(response) => {
                 let deploy_data: PortainerDeployResponse = response.json().await.unwrap();
-                debug!("Portainer container deployed with id: {}", deploy_data.id);
+                debug!(id = deploy_data.id, "Portainer container deployed");
                 self.get(connector).await
             }
             Err(err) => {
-                error!("Error deploying the container {:?}", err);
+                error!(error = err.to_string(), "Error deploying the container");
                 None
             }
         }

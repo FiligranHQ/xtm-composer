@@ -1,20 +1,20 @@
-use crate::api::opencti::connector::ConnectorCurrentStatus;
 use crate::api::ApiConnector;
+use crate::api::opencti::connector::ConnectorCurrentStatus;
 use crate::config::settings::{Kubernetes, Settings};
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
+use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{Container, EnvVar, Pod, PodSpec, PodTemplateSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
-use k8s_openapi::DeepMerge;
 use kube::api::{DeleteParams, LogParams, Patch, PatchParams};
 use kube::{
-    api::{Api, ListParams, PostParams, ResourceExt},
     Client,
+    api::{Api, ListParams, PostParams, ResourceExt},
 };
-use log::{error, info};
 use std::collections::{BTreeMap, HashMap};
+use tracing::{error, info};
 
 impl KubeOrchestrator {
     pub async fn new(config: Kubernetes) -> Self {
@@ -190,8 +190,8 @@ impl Orchestrator for KubeOrchestrator {
         let delete_response = self.deployments.delete_collection(dp, lp).await;
         match delete_response {
             Ok(_) => info!(
-                "Deployment {} successfully deleted",
-                container.extract_opencti_id()
+                id = container.extract_opencti_id(),
+                "Deployment successfully deleted"
             ),
             Err(_) => error!("Fail removing the deployments"),
         }
@@ -213,11 +213,11 @@ impl Orchestrator for KubeOrchestrator {
         match deployment_result {
             Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
             Err(kube::Error::Api(ae)) => {
-                error!("Kubernetes update api error {:?}", ae);
+                error!(error = ae.to_string(), "Kubernetes update api error");
                 None
             }
             Err(e) => {
-                error!("Kubernetes update unknown error {:?}", e);
+                error!(error = e.to_string(), "Kubernetes update unknown error");
                 None
             }
         }
@@ -237,11 +237,11 @@ impl Orchestrator for KubeOrchestrator {
         {
             Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
             Err(kube::Error::Api(ae)) => {
-                error!("Kubernetes creation api error {:?}", ae);
+                error!(error = ae.to_string(), "Kubernetes creation api error");
                 None
             }
             Err(e) => {
-                error!("Kubernetes creation unknown error {:?}", e);
+                error!(error = e.to_string(), "Kubernetes creation unknown error");
                 None
             }
         }

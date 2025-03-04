@@ -1,8 +1,10 @@
-debug: false
-
 manager:
   id: ChangeMe
   name: Filigran connector manager
+  logger:
+    level: info
+    directory: true
+    console: true
 
 opencti:
   enable: true

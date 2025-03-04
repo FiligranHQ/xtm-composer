@@ -1,4 +1,4 @@
-use log::info;
+use tracing::info;
 
 #[cfg(unix)]
 use tokio::signal::unix::{signal as unix_signal, SignalKind};

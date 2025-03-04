@@ -3,22 +3,33 @@ mod config;
 mod orchestrator;
 mod system;
 
+use crate::api::ComposerApi;
 use crate::api::openbas::openbas::ApiOpenBAS;
 use crate::api::opencti::opencti::ApiOpenCTI;
-use crate::api::ComposerApi;
 use crate::config::settings::Settings;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::portainer::PortainerOrchestrator;
-use crate::orchestrator::{composer, Orchestrator};
+use crate::orchestrator::{Orchestrator, composer};
 use crate::system::signals;
-use env_logger::{Builder, Target};
 use futures::future::join_all;
-use log::info;
-use log::LevelFilter::Info;
+use rolling_file::{BasicRollingFileAppender, RollingConditionBasic};
+use std::str::FromStr;
 use std::time::Duration;
+use std::{env, fs};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
+use tracing::{Level, info};
+use tracing_subscriber::fmt::Layer;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{Registry, layer::SubscriberExt};
+
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+const BASE_DIRECTORY_LOG: &str = "logs";
+const BASE_DIRECTORY_SIZE: usize = 5;
+const PREFIX_LOG_NAME: &str = "xtm-composer.log";
 
 const SCHEDULER_TIMER: u64 = 5; // 5 seconds scheduling
 
@@ -72,13 +83,39 @@ fn opencti_orchestration(settings: Settings) -> JoinHandle<()> {
     })
 }
 
+fn init_logger() -> () {
+    let setting = Settings::new().unwrap();
+    let current_exe_patch = env::current_exe().unwrap();
+    let parent_path = current_exe_patch.parent().unwrap();
+    let condition = RollingConditionBasic::new().daily();
+    let log_path = parent_path.join(BASE_DIRECTORY_LOG);
+    fs::create_dir(log_path.clone()).unwrap_or_default();
+    let log_file = log_path.join(PREFIX_LOG_NAME);
+    let file_appender =
+        BasicRollingFileAppender::new(log_file, condition, BASE_DIRECTORY_SIZE).unwrap();
+    let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
+    let logger_config = setting.manager.logger;
+    let log_level = Level::from_str(logger_config.level.as_str()).unwrap();
+    let console_layer = Layer::new()
+        .with_writer(std::io::stdout.with_max_level(log_level))
+        .pretty();
+    let file_layer = Layer::new()
+        .with_writer(file_writer.with_max_level(log_level))
+        .json();
+    Registry::default()
+        .with(logger_config.directory.then(|| console_layer))
+        .with(logger_config.console.then(|| file_layer))
+        .init();
+}
+
 #[tokio::main]
 async fn main() {
-    // Init logger
-    Builder::new()
-        .filter_level(Info)
-        .target(Target::Stdout)
-        .init();
+    init_logger();
+    info!(
+        version = VERSION,
+        env = Settings::mode(),
+        "Starting XTM composer"
+    );
     let mut orchestrations = Vec::new();
     // Register the manager in OpenCTI
     let opencti_setting = Settings::new().unwrap();

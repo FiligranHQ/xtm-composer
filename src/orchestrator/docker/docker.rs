@@ -9,7 +9,7 @@ use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use bollard::container::ListContainersOptions;
 use bollard::Docker;
-use log::error;
+use tracing::error;
 use std::collections::HashMap;
 
 impl DockerOrchestrator {
@@ -149,7 +149,7 @@ impl Orchestrator for DockerOrchestrator {
                     .collect(),
             ),
             Err(err) => {
-                error!("Docker error fetching containers: {:?}", err);
+                error!(error = err.to_string(), "Error fetching containers");
                 None
             }
         }

@@ -7,9 +7,18 @@ const ENV_PRODUCTION: &str = "production";
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
+pub struct Logger {
+    pub level: String,
+    pub directory: bool,
+    pub console: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
 pub struct Manager {
     pub id: String,
     pub name: String,
+    pub logger: Logger,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -63,7 +72,6 @@ pub struct Kubernetes {
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Settings {
-    pub debug: bool,
     pub manager: Manager,
     pub opencti: OpenCTI,
     pub openbas: OpenBAS,

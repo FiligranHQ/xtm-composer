@@ -2,9 +2,9 @@ use crate::api::opencti::connector::{ConnectorCurrentStatus, ConnectorRequestSta
 use crate::api::{ApiConnector, ComposerApi};
 use crate::config::settings::Settings;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
-use log::info;
 use std::collections::HashMap;
 use std::str::FromStr;
+use tracing::info;
 
 async fn orchestrate_missing(
     settings: &Settings,
@@ -14,10 +14,7 @@ async fn orchestrate_missing(
 ) {
     // Connector is not provisioned, deploy the images
     let connector_id = connector.id.clone();
-    info!(
-        "[X] CONNECTOR MISSING {} - Deploying the container",
-        connector_id
-    );
+    info!(id = connector_id, "Deploying the container");
     let deploy_action = orchestrator.deploy(settings, connector).await;
     match deploy_action {
         Some(_) => {
@@ -26,7 +23,7 @@ async fn orchestrate_missing(
                 .await;
         }
         None => {
-            info!("Deployment canceled")
+            info!(id = connector_id, "Deployment canceled")
         }
     }
 }
@@ -55,32 +52,32 @@ async fn orchestrate_existing(
     if !container_status_is_logic_same && container_status_not_aligned {
         api.patch_status(connector.id.clone(), current_container_status)
             .await;
-        info!("[V] CONNECTOR: {} - Patch status", connector.id);
+        info!(id = connector_id, "Patch status");
     }
     // In case of platform upgrade, we need to align all deployed connectors
     let requested_connector_hash = connector.contract_hash.clone();
     let current_container_hash = container.extract_opencti_hash();
     if !requested_connector_hash.eq(current_container_hash) {
         // Versions are not aligned
-        info!("[V] CONNECTOR: {} - Refreshing", requested_connector_hash);
+        info!(id = connector_id, hash = requested_connector_hash, "Refreshing");
         orchestrator.refresh(settings, connector).await;
     }
     // Align existing and requested status
     match (requested_connector_status, current_container_status) {
         (ConnectorRequestStatus::Stopping, ConnectorCurrentStatus::Started) => {
-            info!("[V] CONNECTOR {} - Stopping", container.id);
+            info!(id = connector_id, "Stopping");
             orchestrator.stop(&container, connector).await;
         }
         (ConnectorRequestStatus::Starting, ConnectorCurrentStatus::Stopped) => {
-            info!("[V] CONNECTOR {} - Starting", container.id);
+            info!(id = connector_id, "Starting");
             orchestrator.start(&container, connector).await;
         }
         (ConnectorRequestStatus::Starting, ConnectorCurrentStatus::Created) => {
-            info!("[V] CONNECTOR {} - Starting", container.id);
+            info!(id = connector_id, "Starting");
             orchestrator.start(&container, connector).await;
         }
         _ => {
-            info!("[V] CONNECTOR {} - Nothing to execute", container.id);
+            info!(id = connector_id, "Nothing to execute");
         }
     }
     // Get latest logs and update opencti

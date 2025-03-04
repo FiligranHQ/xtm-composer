@@ -5,7 +5,7 @@ use crate::api::opencti::connector::ConnectorCurrentStatus;
 use crate::api::{ApiConnector, ComposerApi};
 use crate::config::settings::{Daemon, Settings};
 use async_trait::async_trait;
-use log::info;
+use tracing::debug;
 
 const BEARER: &str = "Bearer";
 
@@ -31,7 +31,7 @@ impl ComposerApi for ApiOpenBAS {
     }
     
     async fn register(&self, settings: &Settings) -> Option<String> {
-        info!("{} {}", self.api_uri, self.bearer);
+        debug!(api_uri = self.api_uri, bearer = self.bearer, "OpenBAS register");
         todo!()
     }
 
