@@ -89,7 +89,10 @@ impl KubeOrchestrator {
                     false => None,
                 }
             }
-            Err(_) => None,
+            Err(err) => {
+                error!(error = err.to_string(), "Fail to get deployment pod");
+                None
+            }
         }
     }
 
@@ -157,7 +160,10 @@ impl Orchestrator for KubeOrchestrator {
             .await;
         match get_deployment {
             Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
-            Err(_) => None,
+            Err(err) => {
+                error!(error = err.to_string(), "Error fetching deployments");
+                None
+            }
         }
     }
 
@@ -193,7 +199,7 @@ impl Orchestrator for KubeOrchestrator {
                 id = container.extract_opencti_id(),
                 "Deployment successfully deleted"
             ),
-            Err(_) => error!("Fail removing the deployments"),
+            Err(err) => error!(error = err.to_string(), "Fail removing the deployments"),
         }
     }
 
@@ -260,7 +266,10 @@ impl Orchestrator for KubeOrchestrator {
                 let text_logs_response = self.pods.logs(node_name.as_str(), &lp).await;
                 match text_logs_response {
                     Ok(text_logs) => Some(text_logs.lines().map(|line| line.to_string()).collect()),
-                    Err(_) => None,
+                    Err(err) => {
+                        error!(error = err.to_string(), "Error fetching logs");
+                        None
+                    }
                 }
             }
             None => None,

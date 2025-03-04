@@ -3,6 +3,7 @@ use crate::api::{ApiConnector, ApiContractConfig};
 use crate::config::settings::Settings;
 use serde::Serialize;
 use std::str::FromStr;
+use tracing::error;
 
 #[cynic::schema("opencti")]
 mod schema {}
@@ -214,11 +215,15 @@ pub async fn patch_logs(
     };
     let mutation = ReportConnectorLogs::build(vars);
     let mutation_response = api.query_fetch(mutation).await;
-    let connector = mutation_response
-        .data
-        .unwrap()
-        .update_connector_logs
-        .unwrap();
-    Some(connector.to_api_connector())
+    let query_data = mutation_response.data.unwrap();
+    let query_errors = mutation_response.errors.unwrap();
+    if !query_errors.is_empty() {
+        let errors: Vec<String> = query_errors.iter().map(|err| err.to_string()).collect();
+        error!(error = errors.join(","), "Fail to patch logs");
+        None
+    } else {
+        let connector = query_data.update_connector_logs.unwrap();
+        Some(connector.to_api_connector())
+    }
 }
 // endregion

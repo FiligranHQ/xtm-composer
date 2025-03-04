@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: xtm-composer
+  name: xtm-composer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xtm-composer
+  template:
+    metadata:
+      labels:
+        app: xtm-composer
+    spec:
+      containers:
+        - image: xtm-composer:latest
+          name: xtm-composer
+          imagePullPolicy: Never # NEVER REQUIRED FOR LOCAL KUBE RESOLUTION
+          env:
+          - name: MANAGER_ID
+            value: 8215614c-7139-422e-b825-b20fd2a13a23 # THIS IS A DEV INTERNAL ID
+          - name: OPENCTI_URL
+            value: http://host.docker.internal:4000
+          - name: OPENCTI_TOKEN
+            value: d434ce02-e58e-4cac-8b4c-42bf16748e84 # THIS IS A SAFE DEV TOKEN
+      serviceAccountName: connector-manager

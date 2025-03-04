@@ -84,15 +84,11 @@ impl Settings {
 
     pub fn new() -> Result<Self, ConfigError> {
         let run_mode = Self::mode();
-        let config = Config::builder().add_source(
-            Environment::with_prefix("COMPOSER")
-                .try_parsing(true)
-                .separator("_")
-                .list_separator(" "),
-        );
-        config
+        let config_builder = Config::builder();
+        config_builder
             .add_source(File::with_name("config/default"))
             .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
+            .add_source(Environment::default().try_parsing(true).separator("_"))
             .build()?
             .try_deserialize()
     }

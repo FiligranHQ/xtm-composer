@@ -1,5 +1,5 @@
 manager:
-  id: ChangeMe
+  id: # Manager id is mandatory
   name: Filigran connector manager
   logger:
     level: info
