@@ -17,11 +17,15 @@ use log::{error, info};
 use std::collections::{BTreeMap, HashMap};
 
 impl KubeOrchestrator {
-    pub async fn new(_config: &Kubernetes) -> Self {
+    pub async fn new(config: Kubernetes) -> Self {
         let client = Client::try_default().await.unwrap();
         let pods: Api<Pod> = Api::default_namespaced(client.clone());
         let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
-        Self { pods, deployments }
+        Self {
+            pods,
+            deployments,
+            config,
+        }
     }
 
     pub fn container_envs(&self, settings: &Settings, connector: &ApiConnector) -> Vec<EnvVar> {
@@ -59,7 +63,11 @@ impl KubeOrchestrator {
     pub fn from_deployment(deployment: Deployment) -> OrchestratorContainer {
         let dep = deployment.clone();
         let expected_replicas = dep.spec.unwrap().replicas.unwrap_or(0);
-        let compute_state: &str = if expected_replicas == 0 { "terminated" } else { "running" };
+        let compute_state: &str = if expected_replicas == 0 {
+            "terminated"
+        } else {
+            "running"
+        };
         let annotations_as_env = KubeOrchestrator::convert_to_map(deployment.annotations());
         OrchestratorContainer {
             id: deployment.uid().unwrap(),
@@ -93,10 +101,7 @@ impl KubeOrchestrator {
     ) -> Deployment {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(settings, connector);
-        let is_starting = connector
-            .requested_status
-            .clone()
-            .eq("starting");
+        let is_starting = connector.requested_status.clone().eq("starting");
         let target_deployment = Deployment {
             metadata: ObjectMeta {
                 name: Some(connector.container_name()),
@@ -135,14 +140,9 @@ impl KubeOrchestrator {
             }),
             ..Default::default()
         };
-        let mut base_deployment =
-            settings
-                .kubernetes
-                .base_deployment
-                .clone()
-                .unwrap_or(Deployment {
-                    ..Default::default()
-                });
+        let mut base_deployment = self.config.base_deployment.clone().unwrap_or(Deployment {
+            ..Default::default()
+        });
         base_deployment.merge_from(target_deployment);
         base_deployment
     }
@@ -252,9 +252,7 @@ impl Orchestrator for KubeOrchestrator {
         _container: &OrchestratorContainer,
         connector: &ApiConnector,
     ) -> Option<Vec<String>> {
-        let deployment_pod = self
-            .get_deployment_pod(connector.id.clone())
-            .await;
+        let deployment_pod = self.get_deployment_pod(connector.id.clone()).await;
         match deployment_pod {
             Some(pod) => {
                 let lp = LogParams::default();

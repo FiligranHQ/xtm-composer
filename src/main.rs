@@ -25,29 +25,35 @@ const SCHEDULER_TIMER: u64 = 5; // 5 seconds scheduling
 async fn orchestration(settings: Settings, api: Box<dyn ComposerApi + Send + Sync>) -> () {
     // Register the manager in OpenCTI
     api.register(&settings).await;
-    // Get OpenCTI managed connectors
-    let daemon_type = &settings.manager.daemon;
     // Get current deployment in target orchestrator
-    let orchestrator:Box<dyn Orchestrator + Send + Sync> = match daemon_type.as_str() {
-        "portainer" => Box::new(PortainerOrchestrator::new(&settings.portainer)),
-        "kubernetes" => Box::new(KubeOrchestrator::new(&settings.kubernetes).await),
-        "docker" => Box::new(DockerOrchestrator::new()),
-        def => panic!("Invalid daemon configuration: {}", def),
-    };
+    let daemon_configuration = api.daemon();
+    let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+        match daemon_configuration.selector.as_str() {
+            "portainer" => match daemon_configuration.portainer.clone() {
+                Some(config) => Box::new(PortainerOrchestrator::new(config)),
+                None => panic!("Missing portainer configuration"),
+            },
+            "kubernetes" => match daemon_configuration.kubernetes.clone() {
+                Some(config) => Box::new(KubeOrchestrator::new(config).await),
+                None => panic!("Missing kubernetes configuration"),
+            },
+            "docker" => Box::new(DockerOrchestrator::new()),
+            def => panic!("Invalid daemon configuration: {}", def),
+        };
     // Init scheduler interval
     let mut interval = interval(Duration::from_secs(SCHEDULER_TIMER));
     // Start scheduling
     tokio::select! {
-            _ = signals::handle_stop_signals() => {}
-            _ = async {
-                loop {
-                    interval.tick().await;
-                    composer::orchestrate(&settings, &orchestrator, &api).await;
-                }
-            } => {
-                // This branch will never be reached due to the infinite loop.
+        _ = signals::handle_stop_signals() => {}
+        _ = async {
+            loop {
+                interval.tick().await;
+                composer::orchestrate(&settings, &orchestrator, &api).await;
             }
+        } => {
+            // This branch will never be reached due to the infinite loop.
         }
+    }
 }
 
 fn openbas_orchestration(settings: Settings) -> JoinHandle<()> {
@@ -73,9 +79,9 @@ async fn main() {
         .filter_level(Info)
         .target(Target::Stdout)
         .init();
+    let mut orchestrations = Vec::new();
     // Register the manager in OpenCTI
     let opencti_setting = Settings::new().unwrap();
-    let mut orchestrations = Vec::new();
     if opencti_setting.opencti.enable {
         let opencti = opencti_orchestration(opencti_setting);
         orchestrations.push(opencti);

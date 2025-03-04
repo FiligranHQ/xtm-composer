@@ -1,3 +1,4 @@
+use crate::config::settings::Portainer;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,11 +20,11 @@ struct PortainerDeployPayload {
     host_config: PortainerDeployHostConfig,
 }
 
-#[derive(Default)]
 pub struct PortainerOrchestrator {
     client: Client,
     image_uri: String,
     container_uri: String,
+    config: Portainer
 }
 
 #[derive(Deserialize)]

@@ -10,7 +10,14 @@ const ENV_PRODUCTION: &str = "production";
 pub struct Manager {
     pub id: String,
     pub name: String,
-    pub daemon: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct Daemon {
+    pub selector: String,
+    pub portainer: Option<Portainer>,
+    pub kubernetes: Option<Kubernetes>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -21,6 +28,7 @@ pub struct OpenCTI {
     pub token: String,
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
+    pub daemon: Daemon,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -31,6 +39,7 @@ pub struct OpenBAS {
     pub token: String,
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
+    pub daemon: Daemon,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -58,8 +67,6 @@ pub struct Settings {
     pub manager: Manager,
     pub opencti: OpenCTI,
     pub openbas: OpenBAS,
-    pub portainer: Portainer,
-    pub kubernetes: Kubernetes,
 }
 
 impl Settings {

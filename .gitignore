@@ -12,7 +12,7 @@ Cargo.lock
 
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
-config/development_.yaml
+config/development.yaml
 config/production.toml
 
 # RustRover

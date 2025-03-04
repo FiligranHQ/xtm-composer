@@ -17,7 +17,7 @@ use std::collections::HashMap;
 const X_API_KEY: &str = "X-API-KEY";
 
 impl PortainerOrchestrator {
-    pub fn new(config: &Portainer) -> Self {
+    pub fn new(config: Portainer) -> Self {
         let container_uri = format!(
             "{}/api/endpoints/{}/docker/{}/containers",
             config.api, config.env_id, config.api_version
@@ -40,6 +40,7 @@ impl PortainerOrchestrator {
             image_uri,
             container_uri,
             client,
+            config
         }
     }
 }
@@ -159,7 +160,7 @@ impl Orchestrator for PortainerOrchestrator {
         let image_name: String = connector.container_name();
         let deploy_container_uri = format!("{}/create?name={}", self.container_uri, image_name);
         let mut image_labels = self.labels(settings, connector);
-        let portainer_config = settings.portainer.clone();
+        let portainer_config = self.config.clone();
         if portainer_config.stack.is_some() {
             let stack_label = portainer_config.stack.unwrap();
             image_labels.insert("com.docker.compose.project".to_string(), stack_label);
@@ -182,12 +183,18 @@ impl Orchestrator for PortainerOrchestrator {
             .post(deploy_container_uri)
             .json(&json_body)
             .send()
-            .await
-            .unwrap();
-        let deploy_data: PortainerDeployResponse = deploy_response.json().await.unwrap();
-        debug!("Portainer container deployed with id: {}", deploy_data.id);
-        // endregion
-        self.get(connector).await
+            .await;
+        match deploy_response {
+            Ok(response) => {
+                let deploy_data: PortainerDeployResponse = response.json().await.unwrap();
+                debug!("Portainer container deployed with id: {}", deploy_data.id);
+                self.get(connector).await
+            }
+            Err(err) => {
+                error!("Error deploying the container {:?}", err);
+                None
+            }
+        }
     }
 
     async fn logs(

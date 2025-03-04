@@ -1,5 +1,5 @@
 use crate::api::opencti::connector::{ConnectorCurrentStatus, EnvVariable};
-use crate::config::settings::Settings;
+use crate::config::settings::{Daemon, Settings};
 use async_trait::async_trait;
 
 pub mod opencti;
@@ -58,6 +58,8 @@ impl ApiConnector {
 
 #[async_trait]
 pub trait ComposerApi {
+    fn daemon(&self) -> &Daemon;
+
     async fn register(&self, settings: &Settings) -> Option<String>;
 
     async fn connectors(&self, settings: &Settings) -> Option<Vec<ApiConnector>>;
