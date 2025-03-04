@@ -1,16 +1,15 @@
 // TODO Remove macro after implementation
 #![allow(unused_variables)]
 
-use crate::api::opencti::connector::ConnectorCurrentStatus;
 use crate::api::ApiConnector;
-use crate::config::settings::Settings;
+use crate::api::opencti::connector::ConnectorCurrentStatus;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
-use bollard::container::ListContainersOptions;
 use bollard::Docker;
-use tracing::error;
+use bollard::container::ListContainersOptions;
 use std::collections::HashMap;
+use tracing::error;
 
 impl DockerOrchestrator {
     pub fn new() -> Self {
@@ -118,15 +117,16 @@ async fn docker_handling() {
 
 #[async_trait]
 impl Orchestrator for DockerOrchestrator {
-
     async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         None
     }
 
-    async fn list(&self, settings: &Settings) -> Option<Vec<OrchestratorContainer>> {
-        let list_container_filters: HashMap<String, Vec<String>> = HashMap::from([
-            ("opencti-manager".into(), Vec::from([settings.manager.id.clone()]))
-        ]);
+    async fn list(&self) -> Option<Vec<OrchestratorContainer>> {
+        let settings = crate::settings();
+        let list_container_filters: HashMap<String, Vec<String>> = HashMap::from([(
+            "opencti-manager".into(),
+            Vec::from([settings.manager.id.clone()]),
+        )]);
         let container_result = self
             .docker
             .list_containers(Some(ListContainersOptions::<String> {
@@ -163,11 +163,7 @@ impl Orchestrator for DockerOrchestrator {
         todo!("docker stop")
     }
 
-    async fn refresh(
-        &self,
-        settings: &Settings,
-        connector: &ApiConnector,
-    ) -> Option<OrchestratorContainer> {
+    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         todo!("docker refresh")
     }
 
@@ -175,11 +171,7 @@ impl Orchestrator for DockerOrchestrator {
         todo!("docker remove")
     }
 
-    async fn deploy(
-        &self,
-        settings: &Settings,
-        connector: &ApiConnector,
-    ) -> Option<OrchestratorContainer> {
+    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         todo!("docker deploy")
     }
 

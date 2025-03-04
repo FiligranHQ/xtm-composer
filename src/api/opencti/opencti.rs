@@ -1,6 +1,6 @@
 use crate::api::opencti::connector::ConnectorCurrentStatus;
 use crate::api::{ApiConnector, ComposerApi};
-use crate::config::settings::{Daemon, Settings};
+use crate::config::settings::{Daemon};
 use async_trait::async_trait;
 use cynic::Operation;
 use serde::de::DeserializeOwned;
@@ -16,7 +16,8 @@ pub struct ApiOpenCTI {
 }
 
 impl ApiOpenCTI {
-    pub fn new(settings: &Settings) -> Self {
+    pub fn new() -> Self {
+        let settings = crate::settings();
         let bearer = format!("{} {}", BEARER, settings.opencti.token);
         let api_uri = format!("{}/graphql", &settings.opencti.url);
         let daemon = settings.opencti.daemon.clone();
@@ -46,12 +47,12 @@ impl ComposerApi for ApiOpenCTI {
         &self.daemon
     }
     
-    async fn register(&self, settings: &Settings) -> Option<String> {
-        crate::api::opencti::manager::register_manager(settings, self).await
+    async fn register(&self) -> Option<String> {
+        crate::api::opencti::manager::register_manager(self).await
     }
 
-    async fn connectors(&self, settings: &Settings) -> Option<Vec<ApiConnector>> {
-        crate::api::opencti::connector::list(settings, self).await
+    async fn connectors(&self) -> Option<Vec<ApiConnector>> {
+        crate::api::opencti::connector::list(self).await
     }
 
     async fn patch_status(

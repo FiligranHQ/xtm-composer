@@ -1,9 +1,9 @@
 use crate::api::opencti::connector::{ConnectorCurrentStatus, EnvVariable};
-use crate::config::settings::{Daemon, Settings};
+use crate::config::settings::{Daemon};
 use async_trait::async_trait;
 
-pub mod opencti;
 pub mod openbas;
+pub mod opencti;
 
 #[derive(Debug, Clone)]
 pub struct ApiContractConfig {
@@ -19,7 +19,7 @@ pub struct ApiConnector {
     pub contract_hash: String,
     pub current_status: Option<String>,
     pub requested_status: String,
-    pub contract_configuration: Vec<ApiContractConfig>
+    pub contract_configuration: Vec<ApiContractConfig>,
 }
 
 impl ApiConnector {
@@ -32,10 +32,8 @@ impl ApiConnector {
             .to_lowercase()
     }
 
-    pub fn container_envs(
-        &self,
-        settings: &Settings,
-    ) -> Vec<EnvVariable> {
+    pub fn container_envs(&self) -> Vec<EnvVariable> {
+        let settings = crate::settings();
         let mut envs = self
             .contract_configuration
             .iter()
@@ -60,9 +58,9 @@ impl ApiConnector {
 pub trait ComposerApi {
     fn daemon(&self) -> &Daemon;
 
-    async fn register(&self, settings: &Settings) -> Option<String>;
+    async fn register(&self) -> Option<String>;
 
-    async fn connectors(&self, settings: &Settings) -> Option<Vec<ApiConnector>>;
+    async fn connectors(&self) -> Option<Vec<ApiConnector>>;
 
     async fn patch_status(
         &self,
@@ -70,6 +68,5 @@ pub trait ComposerApi {
         status: ConnectorCurrentStatus,
     ) -> Option<ApiConnector>;
 
-    async fn patch_logs(&self, connector_id: String, logs: Vec<String>)
-    -> Option<ApiConnector>;
+    async fn patch_logs(&self, connector_id: String, logs: Vec<String>) -> Option<ApiConnector>;
 }

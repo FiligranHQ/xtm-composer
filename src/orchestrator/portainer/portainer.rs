@@ -1,6 +1,6 @@
-use crate::api::opencti::connector::ConnectorCurrentStatus;
 use crate::api::ApiConnector;
-use crate::config::settings::{Portainer, Settings};
+use crate::api::opencti::connector::ConnectorCurrentStatus;
+use crate::config::settings::{Portainer};
 use crate::orchestrator::portainer::{
     PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
     PortainerGetResponse, PortainerOrchestrator,
@@ -9,10 +9,10 @@ use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use header::HeaderValue;
 use k8s_openapi::serde_json;
-use tracing::{debug, error};
 use reqwest::header::HeaderMap;
-use reqwest::{header, Client};
+use reqwest::{Client, header};
 use std::collections::HashMap;
+use tracing::{debug, error};
 
 const X_API_KEY: &str = "X-API-KEY";
 
@@ -40,7 +40,7 @@ impl PortainerOrchestrator {
             image_uri,
             container_uri,
             client,
-            config
+            config,
         }
     }
 }
@@ -60,7 +60,10 @@ impl Orchestrator for PortainerOrchestrator {
         let response_result: Result<Vec<PortainerGetResponse>, _> = match response {
             Ok(data) => data.json().await,
             Err(err) => {
-                error!(error = err.to_string(), "Portainer error fetching containers");
+                error!(
+                    error = err.to_string(),
+                    "Portainer error fetching containers"
+                );
                 Ok(Vec::new())
             }
         };
@@ -88,7 +91,8 @@ impl Orchestrator for PortainerOrchestrator {
         }
     }
 
-    async fn list(&self, settings: &Settings) -> Option<Vec<OrchestratorContainer>> {
+    async fn list(&self) -> Option<Vec<OrchestratorContainer>> {
+        let settings = crate::settings();
         let mut label_filters = Vec::new();
         label_filters.push(format!("opencti-manager={}", settings.manager.id.clone()));
         let filter: HashMap<String, Vec<String>> = HashMap::from([("label".into(), label_filters)]);
@@ -101,7 +105,10 @@ impl Orchestrator for PortainerOrchestrator {
         let response_result = match response {
             Ok(data) => data.json().await,
             Err(err) => {
-                error!(error = err.to_string(), "Portainer error fetching containers");
+                error!(
+                    error = err.to_string(),
+                    "Portainer error fetching containers"
+                );
                 Ok(Vec::new())
             }
         };
@@ -134,19 +141,11 @@ impl Orchestrator for PortainerOrchestrator {
             .unwrap();
     }
 
-    async fn refresh(
-        &self,
-        _settings: &Settings,
-        _connector: &ApiConnector,
-    ) -> Option<OrchestratorContainer> {
+    async fn refresh(&self, _connector: &ApiConnector) -> Option<OrchestratorContainer> {
         todo!("portainer refresh")
     }
 
-    async fn deploy(
-        &self,
-        settings: &Settings,
-        connector: &ApiConnector,
-    ) -> Option<OrchestratorContainer> {
+    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         // region First operation, pull the image
         let create_image_uri = format!(
             "{}/create?fromImage={}",
@@ -159,13 +158,13 @@ impl Orchestrator for PortainerOrchestrator {
         // region Deploy the container after success
         let image_name: String = connector.container_name();
         let deploy_container_uri = format!("{}/create?name={}", self.container_uri, image_name);
-        let mut image_labels = self.labels(settings, connector);
+        let mut image_labels = self.labels(connector);
         let portainer_config = self.config.clone();
         if portainer_config.stack.is_some() {
             let stack_label = portainer_config.stack.unwrap();
             image_labels.insert("com.docker.compose.project".to_string(), stack_label);
         }
-        let env_vars = connector.container_envs(settings);
+        let env_vars = connector.container_envs();
         let container_envs = env_vars
             .iter()
             .map(|config| format!("{}={}", config.key, config.value))

@@ -1,6 +1,5 @@
-use crate::api::opencti::connector::ConnectorCurrentStatus;
 use crate::api::ApiConnector;
-use crate::config::settings::Settings;
+use crate::api::opencti::connector::ConnectorCurrentStatus;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -36,23 +35,17 @@ impl OrchestratorContainer {
 
 #[async_trait]
 pub trait Orchestrator {
-    fn labels(
-        &self,
-        settings: &Settings,
-        connector: &ApiConnector,
-    ) -> HashMap<String, String> {
+    fn labels(&self, connector: &ApiConnector) -> HashMap<String, String> {
+        let settings = crate::settings();
         let mut labels: HashMap<String, String> = HashMap::new();
         labels.insert("opencti-manager".into(), settings.manager.id.clone());
-        labels.insert(
-            "opencti-connector-id".into(),
-            connector.id.clone(),
-        );
+        labels.insert("opencti-connector-id".into(), connector.id.clone());
         labels
     }
-    
+
     async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer>;
 
-    async fn list(&self, settings: &Settings) -> Option<Vec<OrchestratorContainer>>;
+    async fn list(&self) -> Option<Vec<OrchestratorContainer>>;
 
     async fn start(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> ();
 
@@ -60,17 +53,9 @@ pub trait Orchestrator {
 
     async fn remove(&self, container: &OrchestratorContainer) -> ();
 
-    async fn refresh(
-        &self,
-        settings: &Settings,
-        connector: &ApiConnector,
-    ) -> Option<OrchestratorContainer>;
+    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer>;
 
-    async fn deploy(
-        &self,
-        settings: &Settings,
-        connector: &ApiConnector,
-    ) -> Option<OrchestratorContainer>;
+    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer>;
 
     async fn logs(
         &self,

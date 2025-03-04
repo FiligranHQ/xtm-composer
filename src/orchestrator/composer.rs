@@ -1,13 +1,11 @@
 use crate::api::opencti::connector::{ConnectorCurrentStatus, ConnectorRequestStatus};
 use crate::api::{ApiConnector, ComposerApi};
-use crate::config::settings::Settings;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use std::collections::HashMap;
 use std::str::FromStr;
 use tracing::info;
 
 async fn orchestrate_missing(
-    settings: &Settings,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
     connector: &ApiConnector,
@@ -15,7 +13,7 @@ async fn orchestrate_missing(
     // Connector is not provisioned, deploy the images
     let connector_id = connector.id.clone();
     info!(id = connector_id, "Deploying the container");
-    let deploy_action = orchestrator.deploy(settings, connector).await;
+    let deploy_action = orchestrator.deploy(connector).await;
     match deploy_action {
         Some(_) => {
             // Update the connector status
@@ -29,7 +27,6 @@ async fn orchestrate_missing(
 }
 
 async fn orchestrate_existing(
-    settings: &Settings,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
     connector: &ApiConnector,
@@ -59,8 +56,12 @@ async fn orchestrate_existing(
     let current_container_hash = container.extract_opencti_hash();
     if !requested_connector_hash.eq(current_container_hash) {
         // Versions are not aligned
-        info!(id = connector_id, hash = requested_connector_hash, "Refreshing");
-        orchestrator.refresh(settings, connector).await;
+        info!(
+            id = connector_id,
+            hash = requested_connector_hash,
+            "Refreshing"
+        );
+        orchestrator.refresh(connector).await;
     }
     // Align existing and requested status
     match (requested_connector_status, current_container_status) {
@@ -93,12 +94,11 @@ async fn orchestrate_existing(
 }
 
 pub async fn orchestrate(
-    setting: &Settings,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
 ) {
     // Get the current definition from OpenCTI
-    let connectors_response = api.connectors(&setting).await;
+    let connectors_response = api.connectors().await;
     // First round trip to instantiate and control if needed
     if connectors_response.is_some() {
         let connectors = connectors_response.unwrap();
@@ -108,9 +108,9 @@ pub async fn orchestrate(
             let container_get = orchestrator.get(connector).await;
             match container_get {
                 Some(container) => {
-                    orchestrate_existing(setting, orchestrator, api, connector, container).await
+                    orchestrate_existing(orchestrator, api, connector, container).await
                 }
-                None => orchestrate_missing(setting, orchestrator, api, connector).await,
+                None => orchestrate_missing(orchestrator, api, connector).await,
             }
         }
         // Iter on each existing container to clean the containers
@@ -118,7 +118,7 @@ pub async fn orchestrate(
             .iter()
             .map(|n| (n.id.clone(), n.clone()))
             .collect();
-        let existing_containers = orchestrator.list(setting).await.unwrap();
+        let existing_containers = orchestrator.list().await.unwrap();
         for container in existing_containers {
             let connector_id = container.extract_opencti_id();
             if !connectors_by_id.contains_key(&connector_id) {
@@ -127,7 +127,7 @@ pub async fn orchestrate(
         }
     } else {
         // Iter on each existing container to clean the containers
-        let existing_containers = orchestrator.list(setting).await.unwrap();
+        let existing_containers = orchestrator.list().await.unwrap();
         for container in existing_containers {
             orchestrator.remove(&container).await;
         }

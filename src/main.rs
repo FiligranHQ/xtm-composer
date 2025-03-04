@@ -15,6 +15,7 @@ use crate::system::signals;
 use futures::future::join_all;
 use rolling_file::{BasicRollingFileAppender, RollingConditionBasic};
 use std::str::FromStr;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::{env, fs};
 use tokio::task::JoinHandle;
@@ -33,9 +34,15 @@ const PREFIX_LOG_NAME: &str = "xtm-composer.log";
 
 const SCHEDULER_TIMER: u64 = 5; // 5 seconds scheduling
 
-async fn orchestration(settings: Settings, api: Box<dyn ComposerApi + Send + Sync>) -> () {
+// Singleton settings for all application
+fn settings() -> &'static Settings {
+    static CONFIG: OnceLock<Settings> = OnceLock::new();
+    CONFIG.get_or_init(|| Settings::new().unwrap())
+}
+
+async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) -> () {
     // Register the manager in OpenCTI
-    api.register(&settings).await;
+    api.register().await;
     // Get current deployment in target orchestrator
     let daemon_configuration = api.daemon();
     let orchestrator: Box<dyn Orchestrator + Send + Sync> =
@@ -59,7 +66,7 @@ async fn orchestration(settings: Settings, api: Box<dyn ComposerApi + Send + Syn
         _ = async {
             loop {
                 interval.tick().await;
-                composer::orchestrate(&settings, &orchestrator, &api).await;
+                composer::orchestrate(&orchestrator, &api).await;
             }
         } => {
             // This branch will never be reached due to the infinite loop.
@@ -67,19 +74,19 @@ async fn orchestration(settings: Settings, api: Box<dyn ComposerApi + Send + Syn
     }
 }
 
-fn openbas_orchestration(settings: Settings) -> JoinHandle<()> {
-    info!("[/] Starting OpenBAS connectors orchestration");
+fn openbas_orchestration() -> JoinHandle<()> {
+    info!("Starting OpenBAS connectors orchestration");
     tokio::spawn(async move {
-        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(ApiOpenBAS::new(&settings));
-        orchestration(settings, api).await;
+        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(ApiOpenBAS::new());
+        orchestration(api).await;
     })
 }
 
-fn opencti_orchestration(settings: Settings) -> JoinHandle<()> {
-    info!("[/] Starting OpenCTI connectors orchestration");
+fn opencti_orchestration() -> JoinHandle<()> {
+    info!("Starting OpenCTI connectors orchestration");
     tokio::spawn(async move {
-        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(ApiOpenCTI::new(&settings));
-        orchestration(settings, api).await;
+        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(ApiOpenCTI::new());
+        orchestration(api).await;
     })
 }
 
@@ -110,23 +117,20 @@ fn init_logger() -> () {
 
 #[tokio::main]
 async fn main() {
+    // Initialize the global logging system
     init_logger();
-    info!(
-        version = VERSION,
-        env = Settings::mode(),
-        "Starting XTM composer"
-    );
+    // Log the start
+    let env = Settings::mode();
+    info!(version = VERSION, env, "Starting XTM composer");
+    // Start according orchestration threads
     let mut orchestrations = Vec::new();
-    // Register the manager in OpenCTI
-    let opencti_setting = Settings::new().unwrap();
-    if opencti_setting.opencti.enable {
-        let opencti = opencti_orchestration(opencti_setting);
+    let setting = settings();
+    if setting.opencti.enable {
+        let opencti = opencti_orchestration();
         orchestrations.push(opencti);
     }
-    // Register the manager in OpenBAS
-    let openbas_setting = Settings::new().unwrap();
-    if openbas_setting.openbas.enable {
-        let openbas = openbas_orchestration(openbas_setting);
+    if setting.openbas.enable {
+        let openbas = openbas_orchestration();
         orchestrations.push(openbas);
     }
     // Wait for threads to terminate

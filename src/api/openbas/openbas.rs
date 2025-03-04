@@ -3,7 +3,7 @@
 
 use crate::api::opencti::connector::ConnectorCurrentStatus;
 use crate::api::{ApiConnector, ComposerApi};
-use crate::config::settings::{Daemon, Settings};
+use crate::config::settings::{Daemon};
 use async_trait::async_trait;
 use tracing::debug;
 
@@ -16,11 +16,16 @@ pub struct ApiOpenBAS {
 }
 
 impl ApiOpenBAS {
-    pub fn new(settings: &Settings) -> Self {
+    pub fn new() -> Self {
+        let settings = crate::settings();
         let bearer = format!("{} {}", BEARER, settings.openbas.token);
         let api_uri = format!("{}/api", &settings.openbas.url);
         let daemon = settings.openbas.daemon.clone();
-        Self { api_uri, bearer, daemon }
+        Self {
+            api_uri,
+            bearer,
+            daemon,
+        }
     }
 }
 
@@ -29,13 +34,17 @@ impl ComposerApi for ApiOpenBAS {
     fn daemon(&self) -> &Daemon {
         &self.daemon
     }
-    
-    async fn register(&self, settings: &Settings) -> Option<String> {
-        debug!(api_uri = self.api_uri, bearer = self.bearer, "OpenBAS register");
+
+    async fn register(&self) -> Option<String> {
+        debug!(
+            api_uri = self.api_uri,
+            bearer = self.bearer,
+            "OpenBAS register"
+        );
         todo!()
     }
 
-    async fn connectors(&self, settings: &Settings) -> Option<Vec<ApiConnector>> {
+    async fn connectors(&self) -> Option<Vec<ApiConnector>> {
         todo!()
     }
 

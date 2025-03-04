@@ -1,6 +1,5 @@
 use crate::api::opencti::opencti::ApiOpenCTI;
 use crate::api::{ApiConnector, ApiContractConfig};
-use crate::config::settings::Settings;
 use serde::Serialize;
 use std::str::FromStr;
 use tracing::error;
@@ -73,8 +72,10 @@ pub struct ConnectorContractConfiguration {
     pub value: String,
 }
 
-pub async fn list(settings: &Settings, api: &ApiOpenCTI) -> Option<Vec<ApiConnector>> {
+pub async fn list(api: &ApiOpenCTI) -> Option<Vec<ApiConnector>> {
     use cynic::QueryBuilder;
+
+    let settings = crate::settings();
     let manager_id = settings.manager.id.clone();
     let vars = GetConnectorsVariables {
         manager_id: (&manager_id).into(),

@@ -1,5 +1,4 @@
 use crate::api::opencti::opencti::ApiOpenCTI;
-use crate::config::settings::Settings;
 use std::fs;
 
 #[cynic::schema("opencti")]
@@ -32,8 +31,10 @@ pub struct RegisterConnectorsManagerInput<'a> {
     pub contracts: Vec<&'a str>,
 }
 
-pub async fn register_manager(settings: &Settings, api: &ApiOpenCTI) -> Option<String> {
+pub async fn register_manager(api: &ApiOpenCTI) -> Option<String> {
     use cynic::MutationBuilder;
+
+    let settings = crate::settings();
     let directory = fs::read_dir("./contracts/opencti").unwrap();
     let contracts: Vec<String> = directory
         .map(|file| fs::read_to_string(file.unwrap().path()).unwrap())
