@@ -3,7 +3,6 @@
   "$id": "https://www.filigran.io/mitre.schema.json",
   "title": "Mitre connector",
   "description": "A Mitre connector",
-  "labels": ["ingest", "mitre"],
   "container_image": "opencti/connector-mitre",
   "container_type": "EXTERNAL_IMPORT",
   "type": "object",

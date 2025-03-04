@@ -1,4 +1,5 @@
-use crate::api::connector::{ConnectorCurrentStatus, ManagedConnector};
+use crate::api::opencti::connector::ConnectorCurrentStatus;
+use crate::api::ApiConnector;
 use crate::config::settings::{Kubernetes, Settings};
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
@@ -23,8 +24,8 @@ impl KubeOrchestrator {
         Self { pods, deployments }
     }
 
-    pub fn container_envs(&self, settings: &Settings, connector: &ManagedConnector) -> Vec<EnvVar> {
-        let env_vars = connector.container_envs(settings, connector);
+    pub fn container_envs(&self, settings: &Settings, connector: &ApiConnector) -> Vec<EnvVar> {
+        let env_vars = connector.container_envs(settings);
         env_vars
             .iter()
             .map(|config| EnvVar {
@@ -39,7 +40,7 @@ impl KubeOrchestrator {
         labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
-    async fn set_deployment_scale(&self, connector: &ManagedConnector, scale: i32) -> () {
+    async fn set_deployment_scale(&self, connector: &ApiConnector, scale: i32) -> () {
         let deployment_patch = Deployment {
             spec: Some(DeploymentSpec {
                 replicas: Some(scale),
@@ -87,15 +88,14 @@ impl KubeOrchestrator {
     pub fn build_configuration(
         &self,
         settings: &Settings,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
         labels: HashMap<String, String>,
     ) -> Deployment {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(settings, connector);
         let is_starting = connector
-            .manager_requested_status
+            .requested_status
             .clone()
-            .unwrap()
             .eq("starting");
         let target_deployment = Deployment {
             metadata: ObjectMeta {
@@ -104,7 +104,7 @@ impl KubeOrchestrator {
                 // Specific case to let the hash config on top level
                 annotations: Some(BTreeMap::from([(
                     "OPENCTI_CONFIG_HASH".into(),
-                    connector.manager_contract_hash.clone().unwrap(),
+                    connector.contract_hash.clone(),
                 )])),
                 ..Default::default()
             },
@@ -122,7 +122,7 @@ impl KubeOrchestrator {
                     spec: Some(PodSpec {
                         containers: vec![Container {
                             name: connector.container_name(),
-                            image: connector.manager_contract_image.clone(),
+                            image: Some(connector.image.clone()),
                             env: Some(pod_env),
                             image_pull_policy: Some("IfNotPresent".into()),
                             ..Default::default()
@@ -150,7 +150,7 @@ impl KubeOrchestrator {
 
 #[async_trait]
 impl Orchestrator for KubeOrchestrator {
-    async fn get(&self, connector: &ManagedConnector) -> Option<OrchestratorContainer> {
+    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let get_deployment = self
             .deployments
             .get(connector.container_name().as_str())
@@ -173,11 +173,11 @@ impl Orchestrator for KubeOrchestrator {
         )
     }
 
-    async fn start(&self, _container: &OrchestratorContainer, connector: &ManagedConnector) -> () {
+    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
         self.set_deployment_scale(connector, 1).await;
     }
 
-    async fn stop(&self, _container: &OrchestratorContainer, connector: &ManagedConnector) -> () {
+    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
         self.set_deployment_scale(connector, 0).await;
     }
 
@@ -200,7 +200,7 @@ impl Orchestrator for KubeOrchestrator {
     async fn refresh(
         &self,
         settings: &Settings,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
     ) -> Option<OrchestratorContainer> {
         let labels = self.labels(settings, connector);
         let deployment_patch = self.build_configuration(settings, connector, labels);
@@ -226,7 +226,7 @@ impl Orchestrator for KubeOrchestrator {
     async fn deploy(
         &self,
         settings: &Settings,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
     ) -> Option<OrchestratorContainer> {
         let labels = self.labels(settings, connector);
         let deployment_creation = self.build_configuration(settings, connector, labels);
@@ -250,10 +250,10 @@ impl Orchestrator for KubeOrchestrator {
     async fn logs(
         &self,
         _container: &OrchestratorContainer,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
     ) -> Option<Vec<String>> {
         let deployment_pod = self
-            .get_deployment_pod(connector.id.clone().into_inner())
+            .get_deployment_pod(connector.id.clone())
             .await;
         match deployment_pod {
             Some(pod) => {

@@ -6,6 +6,14 @@ manager:
   daemon: kubernetes
 
 opencti:
+  enable: true
+  url: http://host.docker.internal:4000
+  token: ChangeMe
+  unsecured_certificate: false
+  with_proxy: false
+
+openbas:
+  enable: false
   url: http://host.docker.internal:4000
   token: ChangeMe
   unsecured_certificate: false
@@ -21,3 +29,6 @@ portainer:
   network_mode: opencti-dev_default
 
 kubernetes:
+  # Nothing to setup by default
+  base_deployment:
+

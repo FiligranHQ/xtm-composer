@@ -5,7 +5,7 @@ use std::env;
 
 const ENV_PRODUCTION: &str = "production";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Manager {
     pub id: String,
@@ -13,9 +13,20 @@ pub struct Manager {
     pub daemon: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct OpenCTI {
+    pub enable: bool,
+    pub url: String,
+    pub token: String,
+    pub unsecured_certificate: bool,
+    pub with_proxy: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct OpenBAS {
+    pub enable: bool,
     pub url: String,
     pub token: String,
     pub unsecured_certificate: bool,
@@ -34,18 +45,19 @@ pub struct Portainer {
     pub network_mode: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Kubernetes {
     pub base_deployment: Option<Deployment>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Settings {
     pub debug: bool,
     pub manager: Manager,
     pub opencti: OpenCTI,
+    pub openbas: OpenBAS,
     pub portainer: Portainer,
     pub kubernetes: Kubernetes,
 }

@@ -3,7 +3,6 @@
   "$id": "https://www.filigran.io/mitre.schema.json",
   "title": "IpInfo connector",
   "description": "IpInfo enrichment connector",
-  "labels": ["enrichment", "ip"],
   "container_image": "opencti/connector-ipinfo",
   "container_type": "INTERNAL_ENRICHMENT",
   "type": "object",

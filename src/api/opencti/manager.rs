@@ -1,4 +1,4 @@
-use crate::api::engine::query_fetch;
+use crate::api::opencti::opencti::ApiOpenCTI;
 use crate::config::settings::Settings;
 use std::fs;
 
@@ -32,9 +32,9 @@ pub struct RegisterConnectorsManagerInput<'a> {
     pub contracts: Vec<&'a str>,
 }
 
-pub async fn register_manager(settings: &Settings) -> Option<cynic::Id> {
+pub async fn register_manager(settings: &Settings, api: &ApiOpenCTI) -> Option<String> {
     use cynic::MutationBuilder;
-    let directory = fs::read_dir("./contracts").unwrap();
+    let directory = fs::read_dir("./contracts/opencti").unwrap();
     let contracts: Vec<String> = directory
         .map(|file| fs::read_to_string(file.unwrap().path()).unwrap())
         .collect();
@@ -47,6 +47,14 @@ pub async fn register_manager(settings: &Settings) -> Option<cynic::Id> {
         },
     };
     let mutation = RegisterConnectorsManager::build(vars);
-    let mutation_response = query_fetch(settings, mutation).await;
-    Some(mutation_response.data.unwrap().register_connectors_manager.unwrap().id)
+    let mutation_response = api.query_fetch(mutation).await;
+    let response = mutation_response.data.unwrap().register_connectors_manager;
+    match response {
+        Some(_) => {
+            Some(response.unwrap().id.into_inner())
+        }
+        None => {
+            panic!("{:?}", mutation_response.errors.unwrap());
+        }
+    }
 }

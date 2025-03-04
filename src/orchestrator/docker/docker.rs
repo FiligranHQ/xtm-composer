@@ -1,7 +1,8 @@
 // TODO Remove macro after implementation
 #![allow(unused_variables)]
 
-use crate::api::connector::{ConnectorCurrentStatus, ManagedConnector};
+use crate::api::opencti::connector::ConnectorCurrentStatus;
+use crate::api::ApiConnector;
 use crate::config::settings::Settings;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
@@ -118,7 +119,7 @@ async fn docker_handling() {
 #[async_trait]
 impl Orchestrator for DockerOrchestrator {
 
-    async fn get(&self, connector: &ManagedConnector) -> Option<OrchestratorContainer> {
+    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         None
     }
 
@@ -154,18 +155,18 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
-    async fn start(&self, container: &OrchestratorContainer, connector: &ManagedConnector) -> () {
+    async fn start(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> () {
         todo!("docker start")
     }
 
-    async fn stop(&self, container: &OrchestratorContainer, connector: &ManagedConnector) -> () {
+    async fn stop(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> () {
         todo!("docker stop")
     }
 
     async fn refresh(
         &self,
         settings: &Settings,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
     ) -> Option<OrchestratorContainer> {
         todo!("docker refresh")
     }
@@ -177,7 +178,7 @@ impl Orchestrator for DockerOrchestrator {
     async fn deploy(
         &self,
         settings: &Settings,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
     ) -> Option<OrchestratorContainer> {
         todo!("docker deploy")
     }
@@ -185,7 +186,7 @@ impl Orchestrator for DockerOrchestrator {
     async fn logs(
         &self,
         container: &OrchestratorContainer,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
     ) -> Option<Vec<String>> {
         todo!("docker logs")
     }

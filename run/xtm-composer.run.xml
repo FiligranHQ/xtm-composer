@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="opencti-composer" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+  <configuration default="false" name="xtm-composer" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="dev" />
-    <option name="command" value="run --package opencti-composer --bin opencti-composer" />
+    <option name="command" value="run --package xtm-composer --bin xtm-composer" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$/../opencti-composer" />
     <envs>
       <env name="COMPOSER_ENV" value="development" />

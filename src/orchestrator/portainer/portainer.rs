@@ -1,4 +1,5 @@
-use crate::api::connector::{ConnectorCurrentStatus, ManagedConnector};
+use crate::api::opencti::connector::ConnectorCurrentStatus;
+use crate::api::ApiConnector;
 use crate::config::settings::{Portainer, Settings};
 use crate::orchestrator::portainer::{
     PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
@@ -45,16 +46,15 @@ impl PortainerOrchestrator {
 
 #[async_trait]
 impl Orchestrator for PortainerOrchestrator {
-    
-    async fn get(&self, connector: &ManagedConnector) -> Option<OrchestratorContainer> {
+    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let mut label_filters = Vec::new();
-        label_filters.push(format!(
-            "opencti-connector-id={}",
-            connector.id.clone().into_inner()
-        ));
+        label_filters.push(format!("opencti-connector-id={}", connector.id.clone()));
         let filter: HashMap<String, Vec<String>> = HashMap::from([("label".into(), label_filters)]);
         let serialized_filter = serde_json::to_string(&filter).unwrap();
-        let list_uri = format!("{}/json?all=true&filters={}", self.container_uri, serialized_filter);
+        let list_uri = format!(
+            "{}/json?all=true&filters={}",
+            self.container_uri, serialized_filter
+        );
         let response = self.client.get(list_uri).send().await;
         let response_result: Result<Vec<PortainerGetResponse>, _> = match response {
             Ok(data) => data.json().await,
@@ -66,10 +66,15 @@ impl Orchestrator for PortainerOrchestrator {
         let containers_get = response_result.unwrap_or_default();
         if !containers_get.is_empty() {
             let response_data = containers_get.into_iter().next().unwrap();
-            let container_envs: HashMap<String, String> = response_data.config.env.iter().map(|env| {
-                let parts: Vec<&str> = env.split(',').collect();
-                (parts[0].into(), parts[1].into())
-            }).collect();
+            let container_envs: HashMap<String, String> = response_data
+                .config
+                .env
+                .iter()
+                .map(|env| {
+                    let parts: Vec<&str> = env.split(',').collect();
+                    (parts[0].into(), parts[1].into())
+                })
+                .collect();
             Some(OrchestratorContainer {
                 id: response_data.id,
                 state: response_data.state.status,
@@ -84,13 +89,13 @@ impl Orchestrator for PortainerOrchestrator {
 
     async fn list(&self, settings: &Settings) -> Option<Vec<OrchestratorContainer>> {
         let mut label_filters = Vec::new();
-        label_filters.push(format!(
-            "opencti-manager={}",
-            settings.manager.id.clone()
-        ));
+        label_filters.push(format!("opencti-manager={}", settings.manager.id.clone()));
         let filter: HashMap<String, Vec<String>> = HashMap::from([("label".into(), label_filters)]);
         let serialized_filter = serde_json::to_string(&filter).unwrap();
-        let list_uri = format!("{}/json?all=true&filters={}", self.container_uri, serialized_filter);
+        let list_uri = format!(
+            "{}/json?all=true&filters={}",
+            self.container_uri, serialized_filter
+        );
         let response = self.client.get(list_uri).send().await;
         let response_result = match response {
             Ok(data) => data.json().await,
@@ -108,25 +113,30 @@ impl Orchestrator for PortainerOrchestrator {
         )
     }
 
-    async fn start(&self, container: &OrchestratorContainer, _connector: &ManagedConnector) -> () {
+    async fn start(&self, container: &OrchestratorContainer, _connector: &ApiConnector) -> () {
         let start_container_uri = format!("{}/{}/start", self.container_uri, container.id);
         self.client.post(start_container_uri).send().await.unwrap();
     }
 
-    async fn stop(&self, container: &OrchestratorContainer, _connector: &ManagedConnector) -> () {
+    async fn stop(&self, container: &OrchestratorContainer, _connector: &ApiConnector) -> () {
         let start_container_uri = format!("{}/{}/stop", self.container_uri, container.id);
         self.client.post(start_container_uri).send().await.unwrap();
     }
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
-        let delete_container_uri = format!("{}/{}?v=0&force=true", self.container_uri, container.id);
-        self.client.delete(delete_container_uri).send().await.unwrap();
+        let delete_container_uri =
+            format!("{}/{}?v=0&force=true", self.container_uri, container.id);
+        self.client
+            .delete(delete_container_uri)
+            .send()
+            .await
+            .unwrap();
     }
 
     async fn refresh(
         &self,
         _settings: &Settings,
-        _connector: &ManagedConnector,
+        _connector: &ApiConnector,
     ) -> Option<OrchestratorContainer> {
         todo!("portainer refresh")
     }
@@ -134,13 +144,13 @@ impl Orchestrator for PortainerOrchestrator {
     async fn deploy(
         &self,
         settings: &Settings,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
     ) -> Option<OrchestratorContainer> {
         // region First operation, pull the image
         let create_image_uri = format!(
             "{}/create?fromImage={}",
             self.image_uri,
-            connector.manager_contract_image.clone().unwrap()
+            connector.image.clone()
         );
         let mut create_response = self.client.post(create_image_uri).send().await.unwrap();
         while let Some(_chunk) = create_response.chunk().await.unwrap() {} // Iter chunk to fetch all
@@ -154,13 +164,14 @@ impl Orchestrator for PortainerOrchestrator {
             let stack_label = portainer_config.stack.unwrap();
             image_labels.insert("com.docker.compose.project".to_string(), stack_label);
         }
-        let env_vars = connector.container_envs(settings, connector);
-        let container_envs = env_vars.iter()
+        let env_vars = connector.container_envs(settings);
+        let container_envs = env_vars
+            .iter()
             .map(|config| format!("{}={}", config.key, config.value))
             .collect();
         let json_body = PortainerDeployPayload {
             env: container_envs,
-            image: connector.manager_contract_image.clone().unwrap(),
+            image: connector.image.clone(),
             labels: image_labels,
             host_config: PortainerDeployHostConfig {
                 network_mode: portainer_config.network_mode,
@@ -182,7 +193,7 @@ impl Orchestrator for PortainerOrchestrator {
     async fn logs(
         &self,
         container: &OrchestratorContainer,
-        _connector: &ManagedConnector,
+        _connector: &ApiConnector,
     ) -> Option<Vec<String>> {
         let logs_container_uri = format!(
             "{}/{}/logs?stderr=1&stdout=1&tail=100",

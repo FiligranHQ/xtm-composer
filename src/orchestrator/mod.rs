@@ -1,4 +1,5 @@
-use crate::api::connector::{ConnectorCurrentStatus, ManagedConnector};
+use crate::api::opencti::connector::ConnectorCurrentStatus;
+use crate::api::ApiConnector;
 use crate::config::settings::Settings;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -38,43 +39,43 @@ pub trait Orchestrator {
     fn labels(
         &self,
         settings: &Settings,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
     ) -> HashMap<String, String> {
         let mut labels: HashMap<String, String> = HashMap::new();
         labels.insert("opencti-manager".into(), settings.manager.id.clone());
         labels.insert(
             "opencti-connector-id".into(),
-            connector.id.clone().into_inner(),
+            connector.id.clone(),
         );
         labels
     }
     
-    async fn get(&self, connector: &ManagedConnector) -> Option<OrchestratorContainer>;
+    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer>;
 
     async fn list(&self, settings: &Settings) -> Option<Vec<OrchestratorContainer>>;
 
-    async fn start(&self, container: &OrchestratorContainer, connector: &ManagedConnector) -> ();
+    async fn start(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> ();
 
-    async fn stop(&self, container: &OrchestratorContainer, connector: &ManagedConnector) -> ();
+    async fn stop(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> ();
 
     async fn remove(&self, container: &OrchestratorContainer) -> ();
 
     async fn refresh(
         &self,
         settings: &Settings,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
     ) -> Option<OrchestratorContainer>;
 
     async fn deploy(
         &self,
         settings: &Settings,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
     ) -> Option<OrchestratorContainer>;
 
     async fn logs(
         &self,
         container: &OrchestratorContainer,
-        connector: &ManagedConnector,
+        connector: &ApiConnector,
     ) -> Option<Vec<String>>;
 
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus;

@@ -1,4 +1,5 @@
-use crate::api::engine::query_fetch;
+use crate::api::opencti::opencti::ApiOpenCTI;
+use crate::api::{ApiConnector, ApiContractConfig};
 use crate::config::settings::Settings;
 use serde::Serialize;
 use std::str::FromStr;
@@ -11,7 +12,7 @@ pub struct ManagedConnector {
     pub id: cynic::Id,
     pub name: String,
     #[cynic(rename = "manager_contract_hash")]
-    pub manager_contract_hash: Option<String>,    
+    pub manager_contract_hash: Option<String>,
     #[cynic(rename = "manager_contract_image")]
     pub manager_contract_image: Option<String>,
     #[cynic(rename = "manager_current_status")]
@@ -29,31 +30,26 @@ pub struct EnvVariable {
 }
 
 impl ManagedConnector {
-    pub fn container_name(&self) -> String {
-        self.name
-            .clone()
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '-' })
-            .collect::<String>()
-            .to_lowercase()
-    }
-
-    pub fn container_envs(&self, settings: &Settings, connector: &ManagedConnector) -> Vec<EnvVariable> {
-        let mut envs = self.manager_contract_configuration
+    pub fn to_api_connector(&self) -> ApiConnector {
+        let contract_configuration = self
+            .manager_contract_configuration
             .clone()
             .unwrap()
             .into_iter()
-            .map(|config| EnvVariable { key: config.key, value: config.value })
-            .collect::<Vec<EnvVariable>>();
-        envs.push(EnvVariable {
-            key: "OPENCTI_URL".into(),
-            value: settings.opencti.url.clone()
-        });
-        envs.push(EnvVariable {
-            key: "OPENCTI_CONFIG_HASH".into(),
-            value: connector.manager_contract_hash.clone().unwrap()
-        });
-        envs
+            .map(|c| ApiContractConfig {
+                key: c.key,
+                value: c.value,
+            })
+            .collect();
+        ApiConnector {
+            id: self.id.clone().into_inner(),
+            name: self.name.clone(),
+            image: self.manager_contract_image.clone().unwrap(),
+            contract_hash: self.manager_contract_hash.clone().unwrap(),
+            current_status: self.manager_current_status.clone(),
+            requested_status: self.manager_requested_status.clone().unwrap(),
+            contract_configuration,
+        }
     }
 }
 
@@ -76,14 +72,23 @@ pub struct ConnectorContractConfiguration {
     pub value: String,
 }
 
-pub async fn list(settings_data: &Settings) -> cynic::GraphQlResponse<GetConnectors> {
+pub async fn list(settings: &Settings, api: &ApiOpenCTI) -> Option<Vec<ApiConnector>> {
     use cynic::QueryBuilder;
-    let manager_id = settings_data.manager.id.clone();
+    let manager_id = settings.manager.id.clone();
     let vars = GetConnectorsVariables {
         manager_id: (&manager_id).into(),
     };
     let query = GetConnectors::build(vars);
-    query_fetch(settings_data, query).await
+    let get_connectors = api.query_fetch(query).await;
+    let connectors = get_connectors
+        .data
+        .unwrap()
+        .connectors_for_manager
+        .unwrap()
+        .into_iter()
+        .map(|managed_connector| managed_connector.to_api_connector())
+        .collect();
+    Some(connectors)
 }
 // endregion
 
@@ -152,11 +157,11 @@ pub struct CurrentConnectorStatusInput<'a> {
     pub status: ConnectorCurrentStatus,
 }
 
-pub async fn update_current_status(
-    settings_data: &Settings,
+pub async fn patch_status(
     connector_id: String,
     status: ConnectorCurrentStatus,
-) -> Option<ManagedConnector> {
+    api: &ApiOpenCTI,
+) -> Option<ApiConnector> {
     use cynic::MutationBuilder;
     let vars = UpdateConnectorCurrentStatusVariables {
         input: CurrentConnectorStatusInput {
@@ -165,11 +170,13 @@ pub async fn update_current_status(
         },
     };
     let mutation = UpdateConnectorCurrentStatus::build(vars);
-    let mutation_response = query_fetch(settings_data, mutation).await;
-    mutation_response
+    let mutation_response = api.query_fetch(mutation).await;
+    let connector = mutation_response
         .data
         .unwrap()
         .update_connector_current_status
+        .unwrap();
+    Some(connector.to_api_connector())
 }
 // endregion
 
@@ -192,11 +199,11 @@ pub struct LogsConnectorStatusInput<'a> {
     pub logs: Vec<&'a str>,
 }
 
-pub async fn update_connector_logs(
-    settings: &Settings,
+pub async fn patch_logs(
     connector_id: String,
     logs: Vec<String>,
-) -> Option<ManagedConnector> {
+    api: &ApiOpenCTI,
+) -> Option<ApiConnector> {
     use cynic::MutationBuilder;
     let str_logs = logs.iter().map(|c| c.as_str()).collect();
     let vars = ReportConnectorLogsVariables {
@@ -206,7 +213,12 @@ pub async fn update_connector_logs(
         },
     };
     let mutation = ReportConnectorLogs::build(vars);
-    let mutation_response = query_fetch(settings, mutation).await;
-    mutation_response.data.unwrap().update_connector_logs
+    let mutation_response = api.query_fetch(mutation).await;
+    let connector = mutation_response
+        .data
+        .unwrap()
+        .update_connector_logs
+        .unwrap();
+    Some(connector.to_api_connector())
 }
 // endregion
