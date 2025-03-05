@@ -17,11 +17,11 @@
       "type": "string"
     },
     "MITRE_REMOVE_STATEMENT_MARKING": {
-      "description": "Connector will remove the statement marking",
+      "description": "Remove the statement marking",
       "type": "boolean"
     },
     "MITRE_INTERVAL": {
-      "description": "Connector will remove the statement marking",
+      "description": "Scheduling period in days",
       "type": "number"
     }
   },

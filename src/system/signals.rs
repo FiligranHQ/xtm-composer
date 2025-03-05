@@ -9,10 +9,9 @@ pub async fn handle_stop_signals() -> Option<()> {
     tokio::select! {
         _ = sigterm_stream.recv() => {
             info!("SIGTERM received.  Exiting gracefully.");
-            // Perform cleanup here...
-            Some(()) // Indicate graceful exit
+            Some(())
         }
-        else => Some(()) // Handle the case when both futures are not ready
+        else => Some(())
     }
 }
 
@@ -29,6 +28,6 @@ pub async fn handle_stop_signals() -> Option<()> {
             info!("Ctrl+C received, exiting.");
             None
         }
-        else => Some(()) // Handle the case when both futures are not ready
+        else => Some(())
     }
 }
