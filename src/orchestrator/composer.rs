@@ -1,5 +1,4 @@
-use crate::api::opencti::connector::{ConnectorCurrentStatus, ConnectorRequestStatus};
-use crate::api::{ApiConnector, ComposerApi};
+use crate::api::{ApiConnector, ComposerApi, ConnectorStatus, RequestedStatus};
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -11,17 +10,16 @@ async fn orchestrate_missing(
     connector: &ApiConnector,
 ) {
     // Connector is not provisioned, deploy the images
-    let connector_id = connector.id.clone();
-    info!(id = connector_id, "Deploying the container");
+    let id = connector.id.clone();
+    info!(id = id, "Deploying the container");
     let deploy_action = orchestrator.deploy(connector).await;
     match deploy_action {
+        // Update the connector status
         Some(_) => {
-            // Update the connector status
-            api.patch_status(connector_id, ConnectorCurrentStatus::Created)
-                .await;
+            api.patch_status(id, ConnectorStatus::Stopped).await;
         }
         None => {
-            info!(id = connector_id, "Deployment canceled")
+            info!(id = id, "Deployment canceled");
         }
     }
 }
@@ -35,19 +33,13 @@ async fn orchestrate_existing(
     // Connector is provisioned
     let connector_id = connector.id.clone();
     let current_status_fetch = connector.current_status.clone().unwrap_or("created".into()); // Default current to created
-    let current_connector_status =
-        ConnectorCurrentStatus::from_str(current_status_fetch.as_str()).unwrap();
+    let connector_status = ConnectorStatus::from_str(current_status_fetch.as_str()).unwrap();
     let requested_status_fetch = connector.requested_status.clone();
-    let requested_connector_status =
-        ConnectorRequestStatus::from_str(requested_status_fetch.as_str()).unwrap();
-    let current_container_status = orchestrator.state_converter(&container);
+    let container_status = orchestrator.state_converter(&container);
     // Update the connector status if needed
-    let connector_status_is_created = current_connector_status == ConnectorCurrentStatus::Created;
-    let container_status_is_stopped = current_container_status != ConnectorCurrentStatus::Started;
-    let container_status_is_logic_same = connector_status_is_created && container_status_is_stopped;
-    let container_status_not_aligned = current_container_status != current_connector_status;
-    if !container_status_is_logic_same && container_status_not_aligned {
-        api.patch_status(connector.id.clone(), current_container_status)
+    let container_status_not_aligned = container_status != connector_status;
+    if container_status_not_aligned {
+        api.patch_status(connector.id.clone(), container_status)
             .await;
         info!(id = connector_id, "Patch status");
     }
@@ -64,16 +56,13 @@ async fn orchestrate_existing(
         orchestrator.refresh(connector).await;
     }
     // Align existing and requested status
-    match (requested_connector_status, current_container_status) {
-        (ConnectorRequestStatus::Stopping, ConnectorCurrentStatus::Started) => {
+    let requested_status = RequestedStatus::from_str(requested_status_fetch.as_str()).unwrap();
+    match (requested_status, container_status) {
+        (RequestedStatus::Stopping, ConnectorStatus::Started) => {
             info!(id = connector_id, "Stopping");
             orchestrator.stop(&container, connector).await;
         }
-        (ConnectorRequestStatus::Starting, ConnectorCurrentStatus::Stopped) => {
-            info!(id = connector_id, "Starting");
-            orchestrator.start(&container, connector).await;
-        }
-        (ConnectorRequestStatus::Starting, ConnectorCurrentStatus::Created) => {
+        (RequestedStatus::Starting, ConnectorStatus::Stopped) => {
             info!(id = connector_id, "Starting");
             orchestrator.start(&container, connector).await;
         }
@@ -85,6 +74,8 @@ async fn orchestrate_existing(
     let connector_logs = orchestrator.logs(&container, connector).await;
     match connector_logs {
         Some(logs) => {
+            // TODO JRI PATCH ALSO THE STATUS OF THE CONTAINER
+            // TODO MAINTAINS A LOCAL CACHE TO PREVENT SENDING LOGS ALL THE TIME?
             api.patch_logs(connector_id, logs).await;
         }
         None => {
@@ -99,8 +90,8 @@ pub async fn orchestrate(
 ) {
     // Get the current definition from OpenCTI
     let connectors_response = api.connectors().await;
-    // First round trip to instantiate and control if needed
     if connectors_response.is_some() {
+        // First round trip to instantiate and control if needed
         let connectors = connectors_response.unwrap();
         // Iter on each definition and check alignment between the status and the container
         for connector in &connectors {
@@ -126,7 +117,7 @@ pub async fn orchestrate(
             }
         }
     } else {
-        // Iter on each existing container to clean the containers
+        // Second round trip to clean the containers if needed
         let existing_containers = orchestrator.list().await.unwrap();
         for container in existing_containers {
             orchestrator.remove(&container).await;

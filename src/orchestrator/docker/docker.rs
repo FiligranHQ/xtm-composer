@@ -1,8 +1,7 @@
 // TODO Remove macro after implementation
 #![allow(unused_variables)]
 
-use crate::api::ApiConnector;
-use crate::api::opencti::connector::ConnectorCurrentStatus;
+use crate::api::{ApiConnector, ConnectorStatus};
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
@@ -183,7 +182,7 @@ impl Orchestrator for DockerOrchestrator {
         todo!("docker logs")
     }
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus {
+    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
         todo!("docker state_converter")
     }
 }

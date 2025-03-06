@@ -1,5 +1,4 @@
-use crate::api::ApiConnector;
-use crate::api::opencti::connector::ConnectorCurrentStatus;
+use crate::api::{ApiConnector, ConnectorStatus};
 use crate::config::settings::{Portainer};
 use crate::orchestrator::portainer::{
     PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
@@ -210,11 +209,11 @@ impl Orchestrator for PortainerOrchestrator {
         Some(text_logs.lines().map(|line| line.to_string()).collect())
     }
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus {
+    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
         match container.state.as_str() {
-            "running" => ConnectorCurrentStatus::Started,
-            "exited" => ConnectorCurrentStatus::Stopped,
-            _ => ConnectorCurrentStatus::Stopped,
+            "running" => ConnectorStatus::Started,
+            "exited" => ConnectorStatus::Stopped,
+            _ => ConnectorStatus::Stopped,
         }
     }
 }

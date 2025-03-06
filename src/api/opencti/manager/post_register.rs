@@ -1,8 +1,9 @@
-use crate::api::opencti::opencti::ApiOpenCTI;
 use std::fs;
+use crate::api::opencti::ApiOpenCTI;
+use crate::api::opencti::manager::ConnectorManager;
 
-#[cynic::schema("opencti")]
-mod schema {}
+use cynic;
+use crate::api::opencti::opencti as schema;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct RegisterConnectorsManageVariables<'a> {
@@ -17,11 +18,6 @@ pub struct RegisterConnectorsManageVariables<'a> {
 pub struct RegisterConnectorsManager {
     #[arguments(input: $input)]
     pub register_connectors_manager: Option<ConnectorManager>,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-pub struct ConnectorManager {
-    pub id: cynic::Id,
 }
 
 #[derive(cynic::InputObject, Debug)]

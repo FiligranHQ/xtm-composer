@@ -1,5 +1,4 @@
-use crate::api::ApiConnector;
-use crate::api::opencti::connector::ConnectorCurrentStatus;
+use crate::api::{ApiConnector, ConnectorStatus};
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -63,5 +62,5 @@ pub trait Orchestrator {
         connector: &ApiConnector,
     ) -> Option<Vec<String>>;
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus;
+    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus;
 }

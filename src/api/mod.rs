@@ -1,9 +1,16 @@
-use crate::api::opencti::connector::{ConnectorCurrentStatus, EnvVariable};
+use std::str::FromStr;
 use crate::config::settings::{Daemon};
 use async_trait::async_trait;
+use serde::Serialize;
 
 pub mod openbas;
 pub mod opencti;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EnvVariable {
+    pub key: String,
+    pub value: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct ApiContractConfig {
@@ -20,6 +27,43 @@ pub struct ApiConnector {
     pub current_status: Option<String>,
     pub requested_status: String,
     pub contract_configuration: Vec<ApiContractConfig>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ConnectorStatus {
+    Started,
+    Stopped,
+}
+
+impl FromStr for ConnectorStatus {
+    type Err = ();
+    fn from_str(input: &str) -> Result<ConnectorStatus, Self::Err> {
+        match input {
+            "created" => Ok(ConnectorStatus::Stopped),
+            "exited" => Ok(ConnectorStatus::Stopped),
+            "started" => Ok(ConnectorStatus::Started),
+            "healthy" => Ok(ConnectorStatus::Started),
+            "running" => Ok(ConnectorStatus::Started),
+            _ => Ok(ConnectorStatus::Stopped),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RequestedStatus {
+    Starting,
+    Stopping,
+}
+
+impl FromStr for RequestedStatus {
+    type Err = ();
+    fn from_str(input: &str) -> Result<RequestedStatus, Self::Err> {
+        match input {
+            "starting" => Ok(RequestedStatus::Starting),
+            "stopping" => Ok(RequestedStatus::Stopping),
+            _ => Ok(RequestedStatus::Stopping),
+        }
+    }
 }
 
 impl ApiConnector {
@@ -58,6 +102,8 @@ impl ApiConnector {
 pub trait ComposerApi {
     fn daemon(&self) -> &Daemon;
 
+    async fn ping_alive(&self) -> ();
+
     async fn register(&self) -> Option<String>;
 
     async fn connectors(&self) -> Option<Vec<ApiConnector>>;
@@ -65,7 +111,7 @@ pub trait ComposerApi {
     async fn patch_status(
         &self,
         connector_id: String,
-        status: ConnectorCurrentStatus,
+        status: ConnectorStatus,
     ) -> Option<ApiConnector>;
 
     async fn patch_logs(&self, connector_id: String, logs: Vec<String>) -> Option<ApiConnector>;

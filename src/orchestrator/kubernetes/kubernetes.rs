@@ -1,6 +1,5 @@
-use crate::api::ApiConnector;
-use crate::api::opencti::connector::ConnectorCurrentStatus;
-use crate::config::settings::{Kubernetes};
+use crate::api::{ApiConnector, ConnectorStatus};
+use crate::config::settings::Kubernetes;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
@@ -14,7 +13,7 @@ use kube::{
     api::{Api, ListParams, PostParams, ResourceExt},
 };
 use std::collections::{BTreeMap, HashMap};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 impl KubeOrchestrator {
     pub async fn new(config: Kubernetes) -> Self {
@@ -160,7 +159,7 @@ impl Orchestrator for KubeOrchestrator {
         match get_deployment {
             Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
             Err(err) => {
-                error!(error = err.to_string(), "Error fetching deployments");
+                debug!(error = err.to_string(), "Cant find deployment");
                 None
             }
         }
@@ -268,13 +267,13 @@ impl Orchestrator for KubeOrchestrator {
         }
     }
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorCurrentStatus {
+    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
         match container.state.as_str() {
-            "running" => ConnectorCurrentStatus::Started,
-            "waiting" => ConnectorCurrentStatus::Started,
-            "exited" => ConnectorCurrentStatus::Stopped,
-            "terminated" => ConnectorCurrentStatus::Stopped,
-            _ => ConnectorCurrentStatus::Stopped,
+            "running" => ConnectorStatus::Started,
+            "waiting" => ConnectorStatus::Started,
+            "exited" => ConnectorStatus::Stopped,
+            "terminated" => ConnectorStatus::Stopped,
+            _ => ConnectorStatus::Stopped,
         }
     }
 }
