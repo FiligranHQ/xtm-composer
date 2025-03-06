@@ -28,7 +28,7 @@ pub struct UpdateConnectorManagerStatusInput<'a> {
 }
 // endregion
 
-pub async fn ping(api: &ApiOpenCTI) -> () {
+pub async fn ping(api: &ApiOpenCTI) {
     use cynic::MutationBuilder;
 
     let settings = settings();

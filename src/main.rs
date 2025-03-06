@@ -32,7 +32,7 @@ fn settings() -> &'static Settings {
 }
 
 // Global init logger
-fn init_logger() -> () {
+fn init_logger() {
     let setting = Settings::new().unwrap();
     let current_exe_patch = env::current_exe().unwrap();
     let parent_path = current_exe_patch.parent().unwrap();
@@ -58,7 +58,7 @@ fn init_logger() -> () {
 }
 
 // Init opencti
-fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) -> () {
+fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     let setting = settings();
     if setting.opencti.enable {
         let opencti_orchestration = opencti_orchestration();
@@ -71,7 +71,7 @@ fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) -> () {
 }
 
 // Init openbas
-fn openbas_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) -> () {
+fn openbas_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     let setting = settings();
     if setting.openbas.enable {
         let openbas_orchestration = openbas_orchestration();

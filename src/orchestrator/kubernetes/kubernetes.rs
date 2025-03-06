@@ -43,7 +43,7 @@ impl KubeOrchestrator {
         labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
-    async fn set_deployment_scale(&self, connector: &ApiConnector, scale: i32) -> () {
+    async fn set_deployment_scale(&self, connector: &ApiConnector, scale: i32) {
         let deployment_patch = Deployment {
             spec: Some(DeploymentSpec {
                 replicas: Some(scale),

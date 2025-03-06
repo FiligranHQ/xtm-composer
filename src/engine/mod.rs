@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 
-async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) -> () {
+async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
     let settings = settings();
     // Register the manager in OpenCTI
     api.register().await;
