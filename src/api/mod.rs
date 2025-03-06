@@ -1,7 +1,7 @@
-use std::str::FromStr;
-use crate::config::settings::{Daemon};
+use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use serde::Serialize;
+use std::str::FromStr;
 
 pub mod openbas;
 pub mod opencti;
@@ -108,11 +108,7 @@ pub trait ComposerApi {
 
     async fn connectors(&self) -> Option<Vec<ApiConnector>>;
 
-    async fn patch_status(
-        &self,
-        connector_id: String,
-        status: ConnectorStatus,
-    ) -> Option<ApiConnector>;
+    async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiConnector>;
 
-    async fn patch_logs(&self, connector_id: String, logs: Vec<String>) -> Option<ApiConnector>;
+    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<ApiConnector>;
 }

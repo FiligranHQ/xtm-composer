@@ -1,12 +1,12 @@
-use async_trait::async_trait;
-use cynic::Operation;
-use serde::de::DeserializeOwned;
-use serde::Serialize;
 use crate::api::{ApiConnector, ComposerApi, ConnectorStatus};
 use crate::config::settings::Daemon;
+use async_trait::async_trait;
+use cynic::Operation;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
-pub mod manager;
 pub mod connector;
+pub mod manager;
 
 const BEARER: &str = "Bearer";
 const AUTHORIZATION_HEADER: &str = "Authorization";
@@ -26,7 +26,11 @@ impl ApiOpenCTI {
         let bearer = format!("{} {}", BEARER, settings.opencti.token);
         let api_uri = format!("{}/graphql", &settings.opencti.url);
         let daemon = settings.opencti.daemon.clone();
-        Self { api_uri, bearer, daemon }
+        Self {
+            api_uri,
+            bearer,
+            daemon,
+        }
     }
 
     pub async fn query_fetch<R, V>(&self, query: Operation<R, V>) -> cynic::GraphQlResponse<R>
@@ -53,26 +57,22 @@ impl ComposerApi for ApiOpenCTI {
     }
 
     async fn ping_alive(&self) -> () {
-        crate::api::opencti::manager::post_ping::ping_alive(self).await
+        manager::post_ping::ping(self).await
     }
 
     async fn register(&self) -> Option<String> {
-        crate::api::opencti::manager::post_register::register_manager(self).await
+        manager::post_register::register(self).await
     }
 
     async fn connectors(&self) -> Option<Vec<ApiConnector>> {
-        crate::api::opencti::connector::get_listing::list(self).await
+        connector::get_listing::list(self).await
     }
 
-    async fn patch_status(
-        &self,
-        connector_id: String,
-        status: ConnectorStatus,
-    ) -> Option<ApiConnector> {
-        crate::api::opencti::connector::post_status::patch_status(connector_id, status, self).await
+    async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiConnector> {
+        connector::post_status::status(id, status, self).await
     }
 
-    async fn patch_logs(&self, connector_id: String, logs: Vec<String>) -> Option<ApiConnector> {
-        crate::api::opencti::connector::post_logs::patch_logs(connector_id, logs, self).await
+    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<ApiConnector> {
+        connector::post_logs::logs(id, logs, self).await
     }
 }

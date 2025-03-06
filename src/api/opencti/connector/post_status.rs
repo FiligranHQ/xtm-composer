@@ -1,10 +1,11 @@
-use crate::api::{ApiConnector, ConnectorStatus};
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
+use crate::api::{ApiConnector, ConnectorStatus};
 
-use cynic;
 use crate::api::opencti::opencti as schema;
+use cynic;
 
+// region schema
 #[derive(cynic::QueryVariables, Debug)]
 pub struct UpdateConnectorCurrentStatusVariables<'a> {
     pub input: CurrentConnectorStatusInput<'a>,
@@ -43,12 +44,9 @@ pub struct CurrentConnectorStatusInput<'a> {
     pub id: &'a cynic::Id,
     pub status: ConnectorCurrentStatus,
 }
+//endregion
 
-pub async fn patch_status(
-    connector_id: String,
-    status: ConnectorStatus,
-    api: &ApiOpenCTI,
-) -> Option<ApiConnector> {
+pub async fn status(id: String, status: ConnectorStatus, api: &ApiOpenCTI) -> Option<ApiConnector> {
     use cynic::MutationBuilder;
 
     let update_status = match status {
@@ -58,7 +56,7 @@ pub async fn patch_status(
 
     let vars = UpdateConnectorCurrentStatusVariables {
         input: CurrentConnectorStatusInput {
-            id: &cynic::Id::new(connector_id),
+            id: &cynic::Id::new(id),
             status: update_status,
         },
     };

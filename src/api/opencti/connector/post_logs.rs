@@ -1,10 +1,11 @@
-use tracing::error;
 use crate::api::ApiConnector;
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
+use tracing::error;
 
-use cynic;
+// region schema
 use crate::api::opencti::opencti as schema;
+use cynic;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct ReportConnectorLogsVariables<'a> {
@@ -23,17 +24,14 @@ pub struct LogsConnectorStatusInput<'a> {
     pub id: &'a cynic::Id,
     pub logs: Vec<&'a str>,
 }
+// endregion
 
-pub async fn patch_logs(
-    connector_id: String,
-    logs: Vec<String>,
-    api: &ApiOpenCTI,
-) -> Option<ApiConnector> {
+pub async fn logs(id: String, logs: Vec<String>, api: &ApiOpenCTI) -> Option<ApiConnector> {
     use cynic::MutationBuilder;
     let str_logs = logs.iter().map(|c| c.as_str()).collect();
     let vars = ReportConnectorLogsVariables {
         input: LogsConnectorStatusInput {
-            id: &cynic::Id::new(connector_id),
+            id: &cynic::Id::new(id),
             logs: str_logs,
         },
     };

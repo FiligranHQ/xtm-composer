@@ -2,8 +2,9 @@ use crate::api::ApiConnector;
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
 
-use cynic;
+// region schema
 use crate::api::opencti::opencti as schema;
+use cynic;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct GetConnectorsVariables<'a> {
@@ -16,6 +17,7 @@ pub struct GetConnectors {
     #[arguments(managerId: $manager_id)]
     pub connectors_for_manager: Option<Vec<ManagedConnector>>,
 }
+// endregion
 
 pub async fn list(api: &ApiOpenCTI) -> Option<Vec<ApiConnector>> {
     use cynic::QueryBuilder;

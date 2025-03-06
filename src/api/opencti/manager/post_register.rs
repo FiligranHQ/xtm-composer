@@ -1,10 +1,11 @@
-use std::fs;
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::manager::ConnectorManager;
+use std::fs;
 
-use cynic;
 use crate::api::opencti::opencti as schema;
+use cynic;
 
+// region schema
 #[derive(cynic::QueryVariables, Debug)]
 pub struct RegisterConnectorsManageVariables<'a> {
     pub input: RegisterConnectorsManagerInput<'a>,
@@ -26,8 +27,9 @@ pub struct RegisterConnectorsManagerInput<'a> {
     pub name: &'a str,
     pub contracts: Vec<&'a str>,
 }
+// endregion
 
-pub async fn register_manager(api: &ApiOpenCTI) -> Option<String> {
+pub async fn register(api: &ApiOpenCTI) -> Option<String> {
     use cynic::MutationBuilder;
 
     let settings = crate::settings();
@@ -47,9 +49,7 @@ pub async fn register_manager(api: &ApiOpenCTI) -> Option<String> {
     let mutation_response = api.query_fetch(mutation).await;
     let response = mutation_response.data.unwrap().register_connectors_manager;
     match response {
-        Some(_) => {
-            Some(response.unwrap().id.into_inner())
-        }
+        Some(_) => Some(response.unwrap().id.into_inner()),
         None => {
             panic!("{:?}", mutation_response.errors.unwrap());
         }

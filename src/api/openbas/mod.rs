@@ -2,7 +2,7 @@
 #![allow(unused_variables)]
 
 use crate::api::{ApiConnector, ComposerApi, ConnectorStatus};
-use crate::config::settings::{Daemon};
+use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use tracing::debug;
 
@@ -51,11 +51,7 @@ impl ComposerApi for ApiOpenBAS {
         todo!()
     }
 
-    async fn patch_status(
-        &self,
-        connector_id: String,
-        status: ConnectorStatus,
-    ) -> Option<ApiConnector> {
+    async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiConnector> {
         todo!()
     }
 
