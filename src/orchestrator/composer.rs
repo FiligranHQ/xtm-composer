@@ -2,6 +2,7 @@ use crate::api::{ApiConnector, ComposerApi, ConnectorStatus, RequestedStatus};
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::time::Instant;
 use tracing::info;
 
 async fn orchestrate_missing(
@@ -25,6 +26,7 @@ async fn orchestrate_missing(
 }
 
 async fn orchestrate_existing(
+    tick: &mut Instant,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
     connector: &ApiConnector,
@@ -32,7 +34,7 @@ async fn orchestrate_existing(
 ) {
     // Connector is provisioned
     let connector_id = connector.id.clone();
-    let current_status_fetch = connector.current_status.clone().unwrap_or("created".into()); // Default current to created
+    let current_status_fetch = connector.current_status.clone().unwrap_or("stopped".into()); // Default current to created
     let connector_status = ConnectorStatus::from_str(current_status_fetch.as_str()).unwrap();
     let requested_status_fetch = connector.requested_status.clone();
     let container_status = orchestrator.state_converter(&container);
@@ -70,21 +72,27 @@ async fn orchestrate_existing(
             info!(id = connector_id, "Nothing to execute");
         }
     }
-    // Get latest logs and update opencti
-    let connector_logs = orchestrator.logs(&container, connector).await;
-    match connector_logs {
-        Some(logs) => {
-            // TODO JRI PATCH ALSO THE STATUS OF THE CONTAINER
-            // TODO MAINTAINS A LOCAL CACHE TO PREVENT SENDING LOGS ALL THE TIME?
-            api.patch_logs(connector_id, logs).await;
+    // Get latest logs and update opencti every 5 minutes
+    let now = Instant::now();
+    if now.duration_since(tick.clone()) >= api.post_logs_schedule() {
+        info!(">>>>> LOGGSSSSSSSSSSSS");
+        let connector_logs = orchestrator.logs(&container, connector).await;
+        match connector_logs {
+            Some(logs) => {
+                // TODO JRI PATCH ALSO THE STATUS OF THE CONTAINER
+                // TODO MAINTAINS A LOCAL CACHE TO PREVENT SENDING LOGS ALL THE TIME?
+                api.patch_logs(connector_id, logs).await;
+            }
+            None => {
+                // No logs
+            }
         }
-        None => {
-            // No logs
-        }
+        *tick = now;
     }
 }
 
 pub async fn orchestrate(
+    tick: &mut Instant,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
 ) {
@@ -99,7 +107,7 @@ pub async fn orchestrate(
             let container_get = orchestrator.get(connector).await;
             match container_get {
                 Some(container) => {
-                    orchestrate_existing(orchestrator, api, connector, container).await
+                    orchestrate_existing(tick, orchestrator, api, connector, container).await
                 }
                 None => orchestrate_missing(orchestrator, api, connector).await,
             }

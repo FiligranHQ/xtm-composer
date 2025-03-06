@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use cynic::Operation;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::time::Duration;
 
 pub mod connector;
 pub mod manager;
@@ -18,6 +19,7 @@ pub struct ApiOpenCTI {
     api_uri: String,
     bearer: String,
     daemon: Daemon,
+    logs_schedule: u64,
 }
 
 impl ApiOpenCTI {
@@ -26,10 +28,12 @@ impl ApiOpenCTI {
         let bearer = format!("{} {}", BEARER, settings.opencti.token);
         let api_uri = format!("{}/graphql", &settings.opencti.url);
         let daemon = settings.opencti.daemon.clone();
+        let logs_schedule = settings.opencti.logs_schedule;
         Self {
             api_uri,
             bearer,
             daemon,
+            logs_schedule,
         }
     }
 
@@ -54,6 +58,10 @@ impl ApiOpenCTI {
 impl ComposerApi for ApiOpenCTI {
     fn daemon(&self) -> &Daemon {
         &self.daemon
+    }
+
+    fn post_logs_schedule(&self) -> Duration {
+        Duration::from_secs(self.logs_schedule * 60)
     }
 
     async fn ping_alive(&self) -> () {

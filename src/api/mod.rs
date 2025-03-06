@@ -2,6 +2,7 @@ use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use serde::Serialize;
 use std::str::FromStr;
+use std::time::Duration;
 
 pub mod openbas;
 pub mod opencti;
@@ -101,6 +102,8 @@ impl ApiConnector {
 #[async_trait]
 pub trait ComposerApi {
     fn daemon(&self) -> &Daemon;
+
+    fn post_logs_schedule(&self) -> Duration;
 
     async fn ping_alive(&self) -> ();
 

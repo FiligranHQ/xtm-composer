@@ -1,31 +1,29 @@
 mod api;
 mod config;
+mod engine;
 mod orchestrator;
 mod system;
-mod engine;
 
 use crate::config::settings::Settings;
+use crate::engine::openbas::{openbas_alive, openbas_orchestration};
+use crate::engine::opencti::{opencti_alive, opencti_orchestration};
 use futures::future::join_all;
 use rolling_file::{BasicRollingFileAppender, RollingConditionBasic};
 use std::str::FromStr;
 use std::sync::OnceLock;
 use std::{env, fs};
+use tokio::task::JoinHandle;
 use tracing::{Level, info};
 use tracing_subscriber::fmt::Layer;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Registry, layer::SubscriberExt};
-use crate::engine::openbas::{openbas_alive, openbas_orchestration};
-use crate::engine::opencti::{opencti_alive, opencti_orchestration};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const BASE_DIRECTORY_LOG: &str = "logs";
 const BASE_DIRECTORY_SIZE: usize = 5;
 const PREFIX_LOG_NAME: &str = "xtm-composer.log";
-
-const ALIVE_TIMER: u64 = 60; // 1 minute scheduling
-const SCHEDULER_TIMER: u64 = 5; // 5 seconds scheduling
 
 // Singleton settings for all application
 fn settings() -> &'static Settings {
@@ -59,6 +57,32 @@ fn init_logger() -> () {
         .init();
 }
 
+// Init opencti
+fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) -> () {
+    let setting = settings();
+    if setting.opencti.enable {
+        let opencti_orchestration = opencti_orchestration();
+        orchestrations.push(opencti_orchestration);
+        let opencti_alive = opencti_alive();
+        orchestrations.push(opencti_alive);
+    } else {
+        info!("OpenCTI connectors orchestration disabled");
+    }
+}
+
+// Init openbas
+fn openbas_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) -> () {
+    let setting = settings();
+    if setting.openbas.enable {
+        let openbas_orchestration = openbas_orchestration();
+        orchestrations.push(openbas_orchestration);
+        let openbas_alive = openbas_alive();
+        orchestrations.push(openbas_alive);
+    } else {
+        info!("OpenBAS connectors orchestration disabled");
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize the global logging system
@@ -66,21 +90,10 @@ async fn main() {
     // Log the start
     let env = Settings::mode();
     info!(version = VERSION, env, "Starting XTM composer");
-    // Start according orchestration threads
+    // Start orchestration threads
     let mut orchestrations = Vec::new();
-    let setting = settings();
-    if setting.opencti.enable {
-        let opencti_orchestration = opencti_orchestration();
-        orchestrations.push(opencti_orchestration);
-        let opencti_alive = opencti_alive();
-        orchestrations.push(opencti_alive);
-    }
-    if setting.openbas.enable {
-        let openbas_orchestration = openbas_orchestration();
-        orchestrations.push(openbas_orchestration);
-        let openbas_alive = openbas_alive();
-        orchestrations.push(openbas_alive);
-    }
+    opencti_orchestrate(&mut orchestrations);
+    openbas_orchestrate(&mut orchestrations);
     // Wait for threads to terminate
     join_all(orchestrations).await;
 }

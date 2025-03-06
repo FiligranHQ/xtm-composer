@@ -19,6 +19,8 @@ pub struct Manager {
     pub id: String,
     pub name: String,
     pub logger: Logger,
+    pub execute_schedule: u64,
+    pub ping_alive_schedule: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -37,6 +39,7 @@ pub struct OpenCTI {
     pub token: String,
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
+    pub logs_schedule: u64,
     pub daemon: Daemon,
 }
 
@@ -48,6 +51,7 @@ pub struct OpenBAS {
     pub token: String,
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
+    pub logs_schedule: u64,
     pub daemon: Daemon,
 }
 

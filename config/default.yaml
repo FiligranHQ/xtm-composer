@@ -1,6 +1,8 @@
 manager:
   id: # Manager id is mandatory
   name: Filigran connector manager
+  execute_schedule: 10 # Check every 10 secs
+  ping_alive_schedule: 60 # Ping every 60 seconds
   logger:
     level: info
     directory: true
@@ -12,6 +14,7 @@ opencti:
   token: ChangeMe
   unsecured_certificate: false
   with_proxy: false
+  logs_schedule: 5 # report logs every 5 minutes
   daemon:
     selector: kubernetes
     kubernetes:
@@ -23,6 +26,7 @@ openbas:
   token: ChangeMe
   unsecured_certificate: false
   with_proxy: false
+  logs_schedule: 5 # report logs every 5 minutes
   daemon:
     selector: portainer
     portainer:

@@ -1,18 +1,19 @@
-pub mod opencti;
 pub mod openbas;
+pub mod opencti;
 
-use std::time::{Duration};
-use tokio::task::JoinHandle;
-use tokio::time::interval;
-use crate::{ALIVE_TIMER, SCHEDULER_TIMER};
 use crate::api::ComposerApi;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
-use crate::orchestrator::{composer, Orchestrator};
 use crate::orchestrator::portainer::PortainerOrchestrator;
+use crate::orchestrator::{Orchestrator, composer};
+use crate::settings;
 use crate::system::signals;
+use std::time::{Duration, Instant};
+use tokio::task::JoinHandle;
+use tokio::time::interval;
 
 async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) -> () {
+    let settings = settings();
     // Register the manager in OpenCTI
     api.register().await;
     // Get current deployment in target orchestrator
@@ -31,14 +32,15 @@ async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) -> () {
             def => panic!("Invalid daemon configuration: {}", def),
         };
     // Init scheduler interval
-    let mut interval = interval(Duration::from_secs(SCHEDULER_TIMER));
+    let mut interval = interval(Duration::from_secs(settings.manager.execute_schedule));
     // Start scheduling
     tokio::select! {
         _ = signals::handle_stop_signals() => {}
         _ = async {
+            let mut tick = Instant::now();
             loop {
                 interval.tick().await; // Wait for period
-                composer::orchestrate(&orchestrator, &api).await;
+                composer::orchestrate(&mut tick, &orchestrator, &api).await;
             }
         } => {
             // This branch will never be reached due to the infinite loop.
@@ -46,20 +48,21 @@ async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) -> () {
     }
 }
 
-pub async fn alive(api: Box<dyn ComposerApi + Send + Sync>) -> JoinHandle<()>  {
-    let mut interval = interval(Duration::from_secs(ALIVE_TIMER));
+pub async fn alive(api: Box<dyn ComposerApi + Send + Sync>) -> JoinHandle<()> {
+    let settings = settings();
+    let mut interval = interval(Duration::from_secs(settings.manager.ping_alive_schedule));
     tokio::spawn(async move {
         // Start scheduling
         tokio::select! {
-        _ = signals::handle_stop_signals() => {}
-        _ = async {
-            loop {
-                interval.tick().await; // Wait for period
-                api.ping_alive().await;
+            _ = signals::handle_stop_signals() => {}
+            _ = async {
+                loop {
+                    interval.tick().await; // Wait for period
+                    api.ping_alive().await;
+                }
+            } => {
+                // This branch will never be reached due to the infinite loop.
             }
-        } => {
-            // This branch will never be reached due to the infinite loop.
         }
-    }
     })
 }

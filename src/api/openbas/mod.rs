@@ -4,6 +4,7 @@
 use crate::api::{ApiConnector, ComposerApi, ConnectorStatus};
 use crate::config::settings::Daemon;
 use async_trait::async_trait;
+use std::time::Duration;
 use tracing::debug;
 
 const BEARER: &str = "Bearer";
@@ -12,6 +13,7 @@ pub struct ApiOpenBAS {
     api_uri: String,
     bearer: String,
     daemon: Daemon,
+    logs_schedule: u64,
 }
 
 impl ApiOpenBAS {
@@ -20,10 +22,12 @@ impl ApiOpenBAS {
         let bearer = format!("{} {}", BEARER, settings.openbas.token);
         let api_uri = format!("{}/api", &settings.openbas.url);
         let daemon = settings.openbas.daemon.clone();
+        let logs_schedule = settings.openbas.logs_schedule;
         Self {
             api_uri,
             bearer,
             daemon,
+            logs_schedule,
         }
     }
 }
@@ -32,6 +36,10 @@ impl ApiOpenBAS {
 impl ComposerApi for ApiOpenBAS {
     fn daemon(&self) -> &Daemon {
         &self.daemon
+    }
+
+    fn post_logs_schedule(&self) -> Duration {
+        Duration::from_secs(self.logs_schedule * 60)
     }
 
     async fn ping_alive(&self) -> () {
@@ -55,7 +63,7 @@ impl ComposerApi for ApiOpenBAS {
         todo!()
     }
 
-    async fn patch_logs(&self, connector_id: String, logs: Vec<String>) -> Option<ApiConnector> {
+    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<ApiConnector> {
         todo!()
     }
 }
