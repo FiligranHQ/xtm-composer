@@ -24,7 +24,7 @@ pub struct PortainerOrchestrator {
     client: Client,
     image_uri: String,
     container_uri: String,
-    config: Portainer
+    config: Portainer,
 }
 
 #[derive(Deserialize)]
@@ -50,7 +50,7 @@ pub struct PortainerGetResponseConfig {
 #[serde(rename_all(deserialize = "PascalCase"))]
 pub struct PortainerGetResponse {
     pub id: String,
-    // pub image: String,
+    pub name: String,
     pub config: PortainerGetResponseConfig,
     pub state: PortainerGetResponseState,
 }

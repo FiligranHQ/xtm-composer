@@ -70,8 +70,8 @@ impl KubeOrchestrator {
         let annotations_as_env = KubeOrchestrator::convert_to_map(deployment.annotations());
         OrchestratorContainer {
             id: deployment.uid().unwrap(),
+            name: dep.metadata.name.unwrap(),
             state: compute_state.to_string(),
-            // image: pod_container.image.clone().unwrap(),
             envs: annotations_as_env,
             labels: KubeOrchestrator::convert_to_map(&deployment.labels()),
         }
@@ -165,17 +165,15 @@ impl Orchestrator for KubeOrchestrator {
         }
     }
 
-    async fn list(&self) -> Option<Vec<OrchestratorContainer>> {
+    async fn list(&self) -> Vec<OrchestratorContainer> {
         let settings = crate::settings();
         let lp = &ListParams::default()
             .labels(&format!("opencti-manager={}", settings.manager.id.clone()));
         let get_deployments = self.deployments.list(lp).await.unwrap();
-        Some(
-            get_deployments
-                .into_iter()
-                .map(|deployment| KubeOrchestrator::from_deployment(deployment))
-                .collect(),
-        )
+        get_deployments
+            .into_iter()
+            .map(|deployment| KubeOrchestrator::from_deployment(deployment))
+            .collect()
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {

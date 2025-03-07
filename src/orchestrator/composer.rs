@@ -3,7 +3,7 @@ use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
 
 async fn orchestrate_missing(
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
@@ -20,7 +20,7 @@ async fn orchestrate_missing(
             api.patch_status(id, ConnectorStatus::Stopped).await;
         }
         None => {
-            info!(id = id, "Deployment canceled");
+            warn!(id = id, "Deployment canceled");
         }
     }
 }
@@ -75,7 +75,6 @@ async fn orchestrate_existing(
     // Get latest logs and update opencti every 5 minutes
     let now = Instant::now();
     if now.duration_since(tick.clone()) >= api.post_logs_schedule() {
-        info!(">>>>> LOGGSSSSSSSSSSSS");
         let connector_logs = orchestrator.logs(&container, connector).await;
         match connector_logs {
             Some(logs) => {
@@ -117,7 +116,7 @@ pub async fn orchestrate(
             .iter()
             .map(|n| (n.id.clone(), n.clone()))
             .collect();
-        let existing_containers = orchestrator.list().await.unwrap();
+        let existing_containers = orchestrator.list().await;
         for container in existing_containers {
             let connector_id = container.extract_opencti_id();
             if !connectors_by_id.contains_key(&connector_id) {
@@ -126,7 +125,7 @@ pub async fn orchestrate(
         }
     } else {
         // Second round trip to clean the containers if needed
-        let existing_containers = orchestrator.list().await.unwrap();
+        let existing_containers = orchestrator.list().await;
         for container in existing_containers {
             orchestrator.remove(&container).await;
         }

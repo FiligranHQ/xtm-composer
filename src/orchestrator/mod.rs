@@ -12,7 +12,7 @@ pub mod portainer;
 #[serde(rename_all(deserialize = "PascalCase"))]
 pub struct OrchestratorContainer {
     pub id: String,
-    // pub image: String,
+    pub name: String,
     pub state: String,
     pub labels: HashMap<String, String>,
     pub envs: HashMap<String, String>,
@@ -44,7 +44,7 @@ pub trait Orchestrator {
 
     async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer>;
 
-    async fn list(&self) -> Option<Vec<OrchestratorContainer>>;
+    async fn list(&self) -> Vec<OrchestratorContainer>;
 
     async fn start(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> ();
 

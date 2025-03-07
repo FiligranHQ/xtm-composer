@@ -1,131 +1,72 @@
-// TODO Remove macro after implementation
-#![allow(unused_variables)]
-
 use crate::api::{ApiConnector, ConnectorStatus};
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use bollard::Docker;
-use bollard::container::ListContainersOptions;
+use bollard::container::{
+    Config, CreateContainerOptions, InspectContainerOptions, ListContainersOptions, LogsOptions,
+    RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
+};
+use bollard::image::CreateImageOptions;
+use bollard::models::ContainerConfig;
+use futures::TryStreamExt;
+use futures::future;
 use std::collections::HashMap;
-use tracing::error;
+use tracing::{debug, error, info};
 
 impl DockerOrchestrator {
     pub fn new() -> Self {
         let docker = Docker::connect_with_socket_defaults().unwrap();
         Self { docker }
     }
-}
 
-/*
-async fn docker_handling() {
-    use futures::TryStreamExt;
-
-    info!("01. Connecting to docker socket");
-
-
-    let version = docker.version().await.unwrap();
-    info!("{:?}", version.version);
-
-    // let mut list_container_filters = HashMap::new();
-    // list_container_filters.insert("status", vec!["running"]);
-    info!("02. Getting containers");
-    let containers = docker.list_containers(Some(ListContainersOptions::<String> {
-        all: true,
-        // filters: list_container_filters,
-        ..Default::default()
-    })).await.unwrap();
-
-    for _container in containers {
-        // debug!("{:?} -> {:?} -- {:?}", container.id, container.state, container.labels);
+    pub fn convert_labels(labels: Vec<String>) -> HashMap<String, String> {
+        labels
+            .iter()
+            .map(|label| {
+                let parts: Vec<&str> = label.split('=').collect();
+                (parts[0].into(), parts[1].into())
+            })
+            .collect()
     }
 
-    info!("03. Create image / pulling");
-    let _ = docker.create_image(Some(CreateImageOptions {
-        from_image: "opencti/connector-ipinfo:latest",
-        ..Default::default()
-    }), None, None).try_for_each(|info| {
-        info!("opencti/connector-ipinfo {:?} {:?} pulling...", info.status.as_deref(), info.progress.as_deref());
-        future::ok(())
-    }).await.unwrap();
-
-
-    // Test create
-    let container_name = "my-container";
-    let existing_container = docker.inspect_container(container_name, None).await;
-    match existing_container {
-        Ok(_image) => {
-            info!("04. Container {} already exists, removing ...", container_name);
-            docker.remove_container(container_name, Some(RemoveContainerOptions {
-                v: true,
-                force: true,
-                link: false
-            })).await.unwrap();
-        }
-        Err(_err) => {
-            info!("04. Container {} doest not exists, creating ...", container_name);
-        }
+    pub fn normalize_name(name: Option<String>) -> String {
+        name.unwrap().strip_prefix("/").unwrap().into()
     }
-
-    let connector_id = "1445c7fd-42bf-466a-b4e6-d1b24fcca66d";
-    let connector_contract = HashMap::from([
-        ("OPENCTI_URL", "http://localhost:4000"),
-        ("OPENCTI_TOKEN", "d434ce02-e58e-4cac-8b4c-42bf16748e84"),
-        ("CONNECTOR_ID", connector_id),
-        ("CONNECTOR_TYPE", "INTERNAL_ENRICHMENT"),
-        ("CONNECTOR_NAME", "IpInfo"),
-        ("CONNECTOR_SCOPE", "IPv4-Addr"),
-        ("CONNECTOR_AUTO", "true"),
-        ("IPINFO_TOKEN", "4f0b8a3ffc13d8"),
-        ("IPINFO_MAX_TLP", "TLP:AMBER"),
-        ("IPINFO_USE_ASN_NAME", "false"),
-    ]);
-
-    // let mut vec = Vec::new();
-    // vec.append()
-
-    let container_env_variables = connector_contract
-        .into_iter()
-        .map(|(name, value)| format!("{name}={value}"))
-        .collect::<Vec<String>>();
-    let connector_env_config = container_env_variables
-        .iter()
-        .map(|t| t.as_str()).collect();
-
-    let connector_config = Config {
-        image: Some("opencti/connector-ipinfo"),
-        env: Some(connector_env_config), // Contrat to env
-        labels: Some(HashMap::from([("opencti-connector-id", connector_id)])),
-        ..Default::default()
-    };
-
-    let _created_connector = docker
-        .create_container::<&str, &str>(Some(CreateContainerOptions {
-            name: container_name,
-            platform: None,
-        }), connector_config)
-        .await.unwrap();
-
-    info!("05. Starting the connector");
-    //
-    // docker.start_container(connector_config.i, None::<StartContainerOptions<String>>).unwrap()
-    // docker.stop_container()
-    // docker.kill_container()
 }
-*/
 
 #[async_trait]
 impl Orchestrator for DockerOrchestrator {
     async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        None
+        let container_name = connector.container_name();
+        let opts = Some(InspectContainerOptions::default());
+        let container = self
+            .docker
+            .inspect_container(container_name.as_str(), opts)
+            .await;
+        match container {
+            Ok(docker_container) => Some(OrchestratorContainer {
+                id: docker_container.id.unwrap(),
+                name: DockerOrchestrator::normalize_name(docker_container.name),
+                state: docker_container.state.unwrap().status.unwrap().to_string(),
+                envs: DockerOrchestrator::convert_labels(
+                    docker_container.config.clone()?.env.unwrap(),
+                ),
+                labels: docker_container.config.clone()?.labels.unwrap(),
+            }),
+            Err(_) => {
+                debug!(name = container_name, "Could not find docker container");
+                None
+            }
+        }
     }
 
-    async fn list(&self) -> Option<Vec<OrchestratorContainer>> {
+    async fn list(&self) -> Vec<OrchestratorContainer> {
         let settings = crate::settings();
-        let list_container_filters: HashMap<String, Vec<String>> = HashMap::from([(
-            "opencti-manager".into(),
-            Vec::from([settings.manager.id.clone()]),
-        )]);
+        let manager_label = format!("opencti-manager={}", settings.manager.id.clone());
+        let list_container_filters: HashMap<String, Vec<String>> =
+            HashMap::from([("label".to_string(), Vec::from([manager_label]))]);
+
         let container_result = self
             .docker
             .list_containers(Some(ListContainersOptions::<String> {
@@ -135,54 +76,182 @@ impl Orchestrator for DockerOrchestrator {
             }))
             .await;
         match container_result {
-            Ok(containers) => Some(
-                containers
-                    .into_iter()
-                    .map(|docker_container| OrchestratorContainer {
+            Ok(containers) => containers
+                .into_iter()
+                .map(|docker_container| {
+                    let container_name: Option<String> =
+                        docker_container.names.unwrap().first().cloned();
+                    OrchestratorContainer {
                         id: docker_container.id.unwrap(),
+                        name: DockerOrchestrator::normalize_name(container_name),
                         state: docker_container.state.unwrap(),
-                        // image: docker_container.image.unwrap(),
                         envs: HashMap::new(),
                         labels: docker_container.labels.unwrap(),
-                    })
-                    .collect(),
-            ),
+                    }
+                })
+                .collect(),
             Err(err) => {
                 error!(error = err.to_string(), "Error fetching containers");
+                Vec::new()
+            }
+        }
+    }
+
+    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+        let container_name = connector.container_name();
+        let _ = self
+            .docker
+            .start_container(
+                container_name.as_str(),
+                None::<StartContainerOptions<String>>,
+            )
+            .await;
+    }
+
+    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+        let container_name = connector.container_name();
+        let _ = self
+            .docker
+            .stop_container(container_name.as_str(), None::<StopContainerOptions>)
+            .await;
+    }
+
+    async fn remove(&self, container: &OrchestratorContainer) -> () {
+        let container_name = container.name.as_str();
+        let remove_response = self
+            .docker
+            .remove_container(
+                container_name,
+                Some(RemoveContainerOptions {
+                    v: true,
+                    force: true,
+                    link: false,
+                }),
+            )
+            .await;
+        match remove_response {
+            Ok(_) => {
+                info!(name = container_name, "Removed container");
+            }
+            Err(err) => {
+                error!(
+                    name = container_name,
+                    error = err.to_string(),
+                    "Could not remove container"
+                );
+            }
+        }
+    }
+
+    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        // Remove the current container if needed
+        let container = self.get(connector).await;
+        if container.is_some() {
+            let _ = self.remove(&container.unwrap()).await;
+        }
+        // Deploy the new one
+        self.deploy(connector).await
+    }
+
+    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        // We need to pull the image first
+        let deploy_response = self
+            .docker
+            .create_image(
+                Some(CreateImageOptions {
+                    from_image: connector.image.as_str(),
+                    ..Default::default()
+                }),
+                None,
+                None,
+            )
+            .try_for_each(|info| {
+                info!(
+                    "{} {:?} {:?} pulling...",
+                    connector.image,
+                    info.status.as_deref(),
+                    info.progress.as_deref()
+                );
+                future::ok(())
+            })
+            .await;
+        match deploy_response {
+            Ok(_) => {
+                // Create the container
+                let container_env_variables = connector
+                    .container_envs()
+                    .into_iter()
+                    .map(|config| format!("{}={}", config.key, config.value))
+                    .collect::<Vec<String>>();
+                let labels = self.labels(connector);
+                let connector_config = ContainerConfig {
+                    image: Some(connector.image.clone()),
+                    env: Some(container_env_variables),
+                    labels: Some(labels),
+                    ..Default::default()
+                };
+
+                let create_response = self
+                    .docker
+                    .create_container::<String, String>(
+                        Some(CreateContainerOptions {
+                            name: connector.container_name(),
+                            platform: None,
+                        }),
+                        Config::from(connector_config),
+                    )
+                    .await;
+                match create_response {
+                    Ok(_) => {}
+                    Err(err) => {
+                        error!(error = err.to_string(), "Error creating container");
+                    }
+                }
+
+                // Get the created connector
+                let created = self.get(connector).await;
+                // Start the container if needed
+                let is_starting = connector.requested_status.clone().eq("starting");
+                if is_starting {
+                    self.start(&created.clone().unwrap(), connector).await;
+                }
+                // Return the created container
+                created
+            }
+            Err(_) => {
+                error!(image = connector.image, "Error fetching container image");
                 None
             }
         }
     }
 
-    async fn start(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> () {
-        todo!("docker start")
-    }
-
-    async fn stop(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> () {
-        todo!("docker stop")
-    }
-
-    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        todo!("docker refresh")
-    }
-
-    async fn remove(&self, container: &OrchestratorContainer) -> () {
-        todo!("docker remove")
-    }
-
-    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        todo!("docker deploy")
-    }
-
     async fn logs(
         &self,
-        container: &OrchestratorContainer,
+        _container: &OrchestratorContainer,
         connector: &ApiConnector,
     ) -> Option<Vec<String>> {
-        todo!("docker logs")
+        let opts = Some(LogsOptions::<String> {
+            follow: false,
+            stdout: true,
+            stderr: true,
+            tail: "100".to_string(),
+            ..Default::default()
+        });
+        let logs = self.docker.logs(connector.container_name().as_str(), opts);
+        let mut logs_content = Vec::new();
+        logs.try_for_each(|log| {
+            logs_content.push(log.to_string());
+            future::ok(())
+        })
+        .await
+        .unwrap();
+        Some(logs_content)
     }
 
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
-        todo!("docker state_converter")
+        match container.state.as_str() {
+            "running" => ConnectorStatus::Started,
+            _ => ConnectorStatus::Stopped,
+        }
     }
 }

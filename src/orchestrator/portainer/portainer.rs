@@ -1,5 +1,5 @@
 use crate::api::{ApiConnector, ConnectorStatus};
-use crate::config::settings::{Portainer};
+use crate::config::settings::Portainer;
 use crate::orchestrator::portainer::{
     PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
     PortainerGetResponse, PortainerOrchestrator,
@@ -80,17 +80,17 @@ impl Orchestrator for PortainerOrchestrator {
                 .collect();
             Some(OrchestratorContainer {
                 id: response_data.id,
+                name: response_data.name,
                 state: response_data.state.status,
                 labels: response_data.config.labels,
                 envs: container_envs,
-                // image: response_data.image,
             })
         } else {
             None
         }
     }
 
-    async fn list(&self) -> Option<Vec<OrchestratorContainer>> {
+    async fn list(&self) -> Vec<OrchestratorContainer> {
         let settings = crate::settings();
         let mut label_filters = Vec::new();
         label_filters.push(format!("opencti-manager={}", settings.manager.id.clone()));
@@ -112,12 +112,10 @@ impl Orchestrator for PortainerOrchestrator {
             }
         };
         let containers_get = response_result.unwrap_or_default();
-        Some(
-            containers_get
-                .into_iter()
-                .filter(|c: &OrchestratorContainer| c.is_managed())
-                .collect(),
-        )
+        containers_get
+            .into_iter()
+            .filter(|c: &OrchestratorContainer| c.is_managed())
+            .collect()
     }
 
     async fn start(&self, container: &OrchestratorContainer, _connector: &ApiConnector) -> () {
@@ -212,7 +210,6 @@ impl Orchestrator for PortainerOrchestrator {
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
         match container.state.as_str() {
             "running" => ConnectorStatus::Started,
-            "exited" => ConnectorStatus::Stopped,
             _ => ConnectorStatus::Stopped,
         }
     }
