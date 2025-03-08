@@ -4,6 +4,7 @@ use crate::api::{ApiConnector, ConnectorStatus};
 
 use crate::api::opencti::opencti as schema;
 use cynic;
+use tracing::error;
 
 // region schema
 #[derive(cynic::QueryVariables, Debug)]
@@ -23,8 +24,6 @@ pub struct UpdateConnectorCurrentStatus {
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq)]
 pub enum ConnectorCurrentStatus {
-    #[cynic(rename = "created")]
-    Created,
     #[cynic(rename = "started")]
     Started,
     #[cynic(rename = "stopped")]
@@ -62,10 +61,18 @@ pub async fn status(id: String, status: ConnectorStatus, api: &ApiOpenCTI) -> Op
     };
     let mutation = UpdateConnectorCurrentStatus::build(vars);
     let mutation_response = api.query_fetch(mutation).await;
-    let connector = mutation_response
-        .data
-        .unwrap()
-        .update_connector_current_status
-        .unwrap();
-    Some(connector.to_api_connector())
+    match mutation_response {
+        Ok(connector_response) => {
+            let connector = connector_response
+                .data
+                .unwrap()
+                .update_connector_current_status
+                .unwrap();
+            Some(connector.to_api_connector())
+        }
+        Err(e) => {
+            error!(error = e.to_string(), "Fail to modify status");
+            None
+        }
+    }
 }

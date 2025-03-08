@@ -14,8 +14,6 @@ use tokio::time::interval;
 
 async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
     let settings = settings();
-    // Register the manager in OpenCTI
-    api.register().await;
     // Get current deployment in target orchestrator
     let daemon_configuration = api.daemon();
     let orchestrator: Box<dyn Orchestrator + Send + Sync> =
@@ -59,9 +57,20 @@ pub async fn alive(api: Box<dyn ComposerApi + Send + Sync>) -> JoinHandle<()> {
         tokio::select! {
             _ = signals::handle_stop_signals() => {}
             _ = async {
+                let mut detected_version: String = String::new();
                 loop {
+                    let ping_response = api.ping_alive().await;
+                    match ping_response {
+                        Some(platform_version) => {
+                            // Register the manager at start or when version change
+                            if platform_version != detected_version {
+                                api.register(platform_version.clone()).await;
+                                detected_version = platform_version;
+                            }
+                        }
+                        _ => {}
+                    }
                     interval.tick().await; // Wait for period
-                    api.ping_alive().await;
                 }
             } => {
                 // This branch will never be reached due to the infinite loop.

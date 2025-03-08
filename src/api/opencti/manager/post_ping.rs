@@ -28,7 +28,7 @@ pub struct UpdateConnectorManagerStatusInput<'a> {
 }
 // endregion
 
-pub async fn ping(api: &ApiOpenCTI) {
+pub async fn ping(api: &ApiOpenCTI) -> Option<String> {
     use cynic::MutationBuilder;
 
     let settings = settings();
@@ -39,13 +39,26 @@ pub async fn ping(api: &ApiOpenCTI) {
     };
     let mutation = UpdateConnectorManagerStatus::build(vars);
     let mutation_response = api.query_fetch(mutation).await;
-    let _response = mutation_response
-        .data
-        .unwrap()
-        .update_connector_manager_status;
-    let query_errors = mutation_response.errors.unwrap_or_default();
-    if !query_errors.is_empty() {
-        let errors: Vec<String> = query_errors.iter().map(|err| err.to_string()).collect();
-        error!(error = errors.join(","), "Fail to ping api");
+    match mutation_response {
+        Ok(response) => {
+            let query_errors = response.errors.unwrap_or_default();
+            if !query_errors.is_empty() {
+                let errors: Vec<String> = query_errors.iter().map(|err| err.to_string()).collect();
+                error!(error = errors.join(","), "Fail to ping api");
+                None
+            } else {
+                let version = response
+                    .data
+                    .unwrap()
+                    .update_connector_manager_status
+                    .unwrap()
+                    .about_version;
+                Some(version)
+            }
+        }
+        Err(err) => {
+            error!(error = err.to_string(), "Fail to ping api");
+            None
+        }
     }
 }

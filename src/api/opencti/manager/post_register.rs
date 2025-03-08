@@ -1,9 +1,9 @@
+use crate::api::ApiConnector;
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::manager::ConnectorManager;
-use std::fs;
-
 use crate::api::opencti::opencti as schema;
 use cynic;
+use tracing::{error, info};
 
 // region schema
 #[derive(cynic::QueryVariables, Debug)]
@@ -29,15 +29,14 @@ pub struct RegisterConnectorsManagerInput<'a> {
 }
 // endregion
 
-pub async fn register(api: &ApiOpenCTI) -> Option<String> {
+pub async fn register(api: &ApiOpenCTI, platform_version: String) {
     use cynic::MutationBuilder;
 
     let settings = crate::settings();
-    let directory = fs::read_dir("./contracts/opencti").unwrap();
-    let contracts: Vec<String> = directory
-        .map(|file| fs::read_to_string(file.unwrap().path()).unwrap())
-        .collect();
-    let contracts = contracts.iter().map(|content| content.as_str()).collect();
+    // Build contracts and register
+    let contract_build =
+        ApiConnector::contracts_getter(settings.opencti.contracts.clone(), platform_version).await;
+    let contracts: Vec<&str> = contract_build.iter().map(|s| s.as_str()).collect();
     let vars = RegisterConnectorsManageVariables {
         input: RegisterConnectorsManagerInput {
             id: &cynic::Id::new(&settings.manager.id),
@@ -47,11 +46,22 @@ pub async fn register(api: &ApiOpenCTI) -> Option<String> {
     };
     let mutation = RegisterConnectorsManager::build(vars);
     let mutation_response = api.query_fetch(mutation).await;
-    let response = mutation_response.data.unwrap().register_connectors_manager;
-    match response {
-        Some(_) => Some(response.unwrap().id.into_inner()),
-        None => {
-            panic!("{:?}", mutation_response.errors.unwrap());
+    match mutation_response {
+        Ok(response) => {
+            let query_errors = response.errors.unwrap_or_default();
+            if !query_errors.is_empty() {
+                let errors: Vec<String> = query_errors.iter().map(|err| err.to_string()).collect();
+                error!(
+                    error = errors.join(","),
+                    "Error registering connector manager"
+                );
+            } else {
+                let data = response.data.unwrap().register_connectors_manager.unwrap();
+                info!(manager_id = data.id.into_inner(), "Manager registered");
+            }
+        }
+        Err(e) => {
+            error!(error = e.to_string(), "Error registering connector manager");
         }
     }
 }

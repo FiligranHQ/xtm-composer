@@ -17,7 +17,6 @@ RUN apk add --no-cache musl openssl openssl-libs-static
 WORKDIR /opt/xtm-composer
 COPY --from=builder /opt/xtm-composer/target/release/xtm-composer /usr/local/bin/xtm-composer
 COPY --from=builder /opt/xtm-composer/config/default.yaml /opt/xtm-composer/config/default.yaml
-COPY --from=builder /opt/xtm-composer/contracts /opt/xtm-composer/contracts
 
 # Defiine the env to production
 ENV COMPOSER_ENV=production

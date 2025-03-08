@@ -78,8 +78,6 @@ async fn orchestrate_existing(
         let connector_logs = orchestrator.logs(&container, connector).await;
         match connector_logs {
             Some(logs) => {
-                // TODO JRI PATCH ALSO THE STATUS OF THE CONTAINER
-                // TODO MAINTAINS A LOCAL CACHE TO PREVENT SENDING LOGS ALL THE TIME?
                 api.patch_logs(connector_id, logs).await;
             }
             None => {
@@ -122,12 +120,6 @@ pub async fn orchestrate(
             if !connectors_by_id.contains_key(&connector_id) {
                 orchestrator.remove(&container).await;
             }
-        }
-    } else {
-        // Second round trip to clean the containers if needed
-        let existing_containers = orchestrator.list().await;
-        for container in existing_containers {
-            orchestrator.remove(&container).await;
         }
     }
 }

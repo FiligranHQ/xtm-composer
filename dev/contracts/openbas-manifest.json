@@ -1,0 +1,51 @@
+{
+  "name": "OpenBAS Connectors contracts",
+  "contracts": [
+    {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "$id": "https://www.filigran.io/mitre.schema.json",
+      "title": "Microsoft Sentinel Collector",
+      "description": "OpenBAS Microsoft Sentinel Collector",
+      "container_image": "openbas/collector-microsoft-sentinel",
+      "container_type": "COLLECTOR",
+      "type": "object",
+      "default": {
+        "CONNECTOR_SCOPE": "IPv4-Addr",
+        "CONNECTOR_AUTO": true,
+        "IPINFO_MAX_TLP": "TLP:AMBER",
+        "IPINFO_USE_ASN_NAME": false
+      },
+      "properties": {
+        "MICROSOFT_SENTINEL_TENANT_ID": {
+          "description": "Tenant ID",
+          "type": "string"
+        },
+        "MICROSOFT_SENTINEL_CLIENT_ID": {
+          "description": "Client ID",
+          "type": "string"
+        },
+        "MICROSOFT_SENTINEL_CLIENT_SECRET": {
+          "description": "Client secret",
+          "type": "string",
+          "format": "password"
+        },
+        "MICROSOFT_SENTINEL_SUBSCRIPTION_ID": {
+          "description": "Subscription Id",
+          "type": "string"
+        },
+        "MICROSOFT_SENTINEL_WORKSPACE_ID": {
+          "description": "Workspace Id",
+          "type": "string"
+        },
+        "MICROSOFT_SENTINEL_RESOURCE_GROUP": {
+          "description": "Resource group",
+          "type": "string"
+        }
+      },
+      "required": [
+        "MICROSOFT_SENTINEL_TENANT_ID"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

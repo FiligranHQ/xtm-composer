@@ -37,14 +37,22 @@ pub async fn logs(id: String, logs: Vec<String>, api: &ApiOpenCTI) -> Option<Api
     };
     let mutation = ReportConnectorLogs::build(vars);
     let mutation_response = api.query_fetch(mutation).await;
-    let query_data = mutation_response.data.unwrap();
-    let query_errors = mutation_response.errors.unwrap_or_default();
-    if !query_errors.is_empty() {
-        let errors: Vec<String> = query_errors.iter().map(|err| err.to_string()).collect();
-        error!(error = errors.join(","), "Fail to patch logs");
-        None
-    } else {
-        let connector = query_data.update_connector_logs.unwrap();
-        Some(connector.to_api_connector())
+    match mutation_response {
+        Ok(response) => {
+            let query_data = response.data.unwrap();
+            let query_errors = response.errors.unwrap_or_default();
+            if !query_errors.is_empty() {
+                let errors: Vec<String> = query_errors.iter().map(|err| err.to_string()).collect();
+                error!(error = errors.join(","), "Fail to patch logs");
+                None
+            } else {
+                let connector = query_data.update_connector_logs.unwrap();
+                Some(connector.to_api_connector())
+            }
+        }
+        Err(e) => {
+            error!(error = e.to_string(), "Fail to push logs");
+            None
+        }
     }
 }

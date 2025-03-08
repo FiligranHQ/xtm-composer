@@ -40,6 +40,7 @@ pub struct OpenCTI {
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
     pub logs_schedule: u64,
+    pub contracts: Vec<String>,
     pub daemon: Daemon,
 }
 
@@ -52,6 +53,7 @@ pub struct OpenBAS {
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
     pub logs_schedule: u64,
+    pub contracts: Vec<String>,
     pub daemon: Daemon,
 }
 

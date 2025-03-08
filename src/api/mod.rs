@@ -1,11 +1,21 @@
 use crate::config::settings::Daemon;
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::fs;
 use std::str::FromStr;
 use std::time::Duration;
+use tracing::error;
+use url::Url;
 
 pub mod openbas;
 pub mod opencti;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ContractsManifest {
+    name: String,
+    contracts: Value,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EnvVariable {
@@ -97,6 +107,53 @@ impl ApiConnector {
         });
         envs
     }
+
+    async fn contracts_fetcher(contracts: &mut Vec<String>, path: String, version: String) {
+        let full_path = path.ends_with("manifest.json");
+        let target_path = match full_path {
+            true => path,
+            false => format!("{}/{}/manifest.json", path, version),
+        };
+        let is_uri = Url::parse(target_path.as_str()).is_ok();
+        let content = match is_uri {
+            true => {
+                let client = reqwest::Client::builder()
+                    .danger_accept_invalid_certs(true)
+                    .build()
+                    .unwrap();
+                let response = client.get(target_path).send().await.unwrap();
+                response.text().await.unwrap()
+            }
+            false => fs::read_to_string(target_path).unwrap(),
+        };
+        let contracts_response: Result<ContractsManifest, _> =
+            serde_json::from_str(content.as_str());
+        match contracts_response {
+            Ok(json_manifest) => {
+                if let Value::Array(array) = json_manifest.contracts {
+                    for contract in array {
+                        let contract_value = serde_json::to_string(&contract).unwrap();
+                        contracts.push(contract_value);
+                    }
+                } else {
+                    error!("Invalid contracts manifest");
+                    panic!("Composer cant start without contracts")
+                }
+            }
+            Err(err) => {
+                error!(err = err.to_string(), "Invalid contracts manifest");
+                panic!("Composer cant start without contracts")
+            }
+        }
+    }
+
+    pub async fn contracts_getter(paths: Vec<String>, version: String) -> Vec<String> {
+        let mut contracts_input: Vec<String> = Vec::new();
+        for path in paths {
+            Self::contracts_fetcher(&mut contracts_input, path, version.clone()).await;
+        }
+        contracts_input
+    }
 }
 
 #[async_trait]
@@ -105,9 +162,9 @@ pub trait ComposerApi {
 
     fn post_logs_schedule(&self) -> Duration;
 
-    async fn ping_alive(&self) -> ();
+    async fn ping_alive(&self) -> Option<String>;
 
-    async fn register(&self) -> Option<String>;
+    async fn register(&self, platform_version: String) -> ();
 
     async fn connectors(&self) -> Option<Vec<ApiConnector>>;
 

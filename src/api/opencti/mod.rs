@@ -2,6 +2,7 @@ use crate::api::{ApiConnector, ComposerApi, ConnectorStatus};
 use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use cynic::Operation;
+use cynic::http::CynicReqwestError;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
@@ -37,7 +38,10 @@ impl ApiOpenCTI {
         }
     }
 
-    pub async fn query_fetch<R, V>(&self, query: Operation<R, V>) -> cynic::GraphQlResponse<R>
+    pub async fn query_fetch<R, V>(
+        &self,
+        query: Operation<R, V>,
+    ) -> Result<cynic::GraphQlResponse<R>, CynicReqwestError>
     where
         V: Serialize,
         R: DeserializeOwned + 'static,
@@ -50,7 +54,6 @@ impl ApiOpenCTI {
             .header(AUTHORIZATION_HEADER, self.bearer.clone().as_str())
             .run_graphql(query)
             .await
-            .unwrap()
     }
 }
 
@@ -64,12 +67,12 @@ impl ComposerApi for ApiOpenCTI {
         Duration::from_secs(self.logs_schedule * 60)
     }
 
-    async fn ping_alive(&self) -> () {
+    async fn ping_alive(&self) -> Option<String> {
         manager::post_ping::ping(self).await
     }
 
-    async fn register(&self) -> Option<String> {
-        manager::post_register::register(self).await
+    async fn register(&self, platform_version: String) {
+        manager::post_register::register(self, platform_version).await
     }
 
     async fn connectors(&self) -> Option<Vec<ApiConnector>> {

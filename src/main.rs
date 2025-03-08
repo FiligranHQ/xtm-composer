@@ -61,10 +61,10 @@ fn init_logger() {
 fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     let setting = settings();
     if setting.opencti.enable {
-        let opencti_orchestration = opencti_orchestration();
-        orchestrations.push(opencti_orchestration);
         let opencti_alive = opencti_alive();
         orchestrations.push(opencti_alive);
+        let opencti_orchestration = opencti_orchestration();
+        orchestrations.push(opencti_orchestration);
     } else {
         info!("OpenCTI connectors orchestration disabled");
     }
@@ -74,10 +74,10 @@ fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
 fn openbas_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     let setting = settings();
     if setting.openbas.enable {
-        let openbas_orchestration = openbas_orchestration();
-        orchestrations.push(openbas_orchestration);
         let openbas_alive = openbas_alive();
         orchestrations.push(openbas_alive);
+        let openbas_orchestration = openbas_orchestration();
+        orchestrations.push(openbas_orchestration);
     } else {
         info!("OpenBAS connectors orchestration disabled");
     }
