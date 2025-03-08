@@ -19,6 +19,12 @@ opencti:
     selector: kubernetes
     kubernetes:
       base_deployment:
+    portainer:
+      api: https://host.docker.internal:9443
+      api_key: ChangeMe
+      env_id: 3
+      env_type: docker # only docker supported
+      api_version: v1.41
 
 openbas:
   enable: false
@@ -29,6 +35,8 @@ openbas:
   logs_schedule: 5 # report logs every 5 minutes
   daemon:
     selector: portainer
+    kubernetes:
+      base_deployment:
     portainer:
       api: https://localhost:9443
       api_key: ChangeMe

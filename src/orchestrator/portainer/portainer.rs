@@ -11,7 +11,7 @@ use k8s_openapi::serde_json;
 use reqwest::header::HeaderMap;
 use reqwest::{Client, header};
 use std::collections::HashMap;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 const X_API_KEY: &str = "X-API-KEY";
 
@@ -47,34 +47,27 @@ impl PortainerOrchestrator {
 #[async_trait]
 impl Orchestrator for PortainerOrchestrator {
     async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        let mut label_filters = Vec::new();
-        label_filters.push(format!("opencti-connector-id={}", connector.id.clone()));
-        let filter: HashMap<String, Vec<String>> = HashMap::from([("label".into(), label_filters)]);
-        let serialized_filter = serde_json::to_string(&filter).unwrap();
-        let list_uri = format!(
-            "{}/json?all=true&filters={}",
-            self.container_uri, serialized_filter
-        );
-        let response = self.client.get(list_uri).send().await;
-        let response_result: Result<Vec<PortainerGetResponse>, _> = match response {
+        let get_uri = format!("{}/{}/json", self.container_uri, connector.container_name());
+        let response = self.client.get(get_uri).send().await;
+        let response_result: Result<Option<PortainerGetResponse>, _> = match response {
             Ok(data) => data.json().await,
             Err(err) => {
                 error!(
                     error = err.to_string(),
                     "Portainer error fetching containers"
                 );
-                Ok(Vec::new())
+                Ok(None)
             }
         };
-        let containers_get = response_result.unwrap_or_default();
-        if !containers_get.is_empty() {
-            let response_data = containers_get.into_iter().next().unwrap();
+        let container_get = response_result.unwrap_or_default();
+        if container_get.is_some() {
+            let response_data = container_get.unwrap();
             let container_envs: HashMap<String, String> = response_data
                 .config
                 .env
                 .iter()
                 .map(|env| {
-                    let parts: Vec<&str> = env.split(',').collect();
+                    let parts: Vec<&str> = env.split('=').collect();
                     (parts[0].into(), parts[1].into())
                 })
                 .collect();
@@ -129,17 +122,32 @@ impl Orchestrator for PortainerOrchestrator {
     }
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
+        let container_name = container.name.as_str();
         let delete_container_uri =
             format!("{}/{}?v=0&force=true", self.container_uri, container.id);
-        self.client
-            .delete(delete_container_uri)
-            .send()
-            .await
-            .unwrap();
+        let remove_response = self.client.delete(delete_container_uri).send().await;
+        match remove_response {
+            Ok(_) => {
+                info!(name = container_name, "Removed container");
+            }
+            Err(err) => {
+                error!(
+                    name = container_name,
+                    error = err.to_string(),
+                    "Could not remove container"
+                );
+            }
+        }
     }
 
-    async fn refresh(&self, _connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        todo!("portainer refresh")
+    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        // Remove the current container if needed
+        let container = self.get(connector).await;
+        if container.is_some() {
+            let _ = self.remove(&container.unwrap()).await;
+        }
+        // Deploy the new one
+        self.deploy(connector).await
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
