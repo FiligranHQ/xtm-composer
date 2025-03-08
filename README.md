@@ -10,6 +10,7 @@ with https://doc.rust-lang.org/book.
 Composer act as a micro orchestration tool to interface Filigran product to different major container orchestration
 systems.
 Every type of orchestration must implement the trait Orchestrator to be fully supported.
+If your system is not in this list, please create a feature request.
 
 ### Kubernetes
 
@@ -22,14 +23,14 @@ containerized applications. https://kubernetes.io/
 
 Portainer is a universal container management platform. You can manage environments of any type, anywhere (Docker and
 Kubernetes, running on dev laptops, in your DC, in the cloud, or at the edge), and we don't require you to run any
-specific Kubernetes distro.
+specific Kubernetes distro. https://www.portainer.io/
 
 > Portainer required a direct bind to the daemon socket
 
 ### Docker
 
 Docker is a set of platform as a service (PaaS) products that use OS-level virtualization to deliver software in
-packages called containers.
+packages called containers. https://www.docker.com/
 If you don't have any orchestration system and you use direct docker-composer, its the mode you need
 
 > Direct docker daemon access require also a direct socket binding

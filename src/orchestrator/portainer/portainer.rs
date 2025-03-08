@@ -1,16 +1,19 @@
 use crate::api::{ApiConnector, ConnectorStatus};
 use crate::config::settings::Portainer;
+use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::portainer::{
     PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
     PortainerGetResponse, PortainerOrchestrator,
 };
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
+use bollard::models::ContainerSummary;
 use header::HeaderValue;
 use k8s_openapi::serde_json;
 use reqwest::header::HeaderMap;
 use reqwest::{Client, header};
 use std::collections::HashMap;
+use std::fmt::Error;
 use tracing::{debug, error, info};
 
 const X_API_KEY: &str = "X-API-KEY";
@@ -93,9 +96,26 @@ impl Orchestrator for PortainerOrchestrator {
             "{}/json?all=true&filters={}",
             self.container_uri, serialized_filter
         );
-        let response = self.client.get(list_uri).send().await;
-        let response_result = match response {
-            Ok(data) => data.json().await,
+        let response = self.client.get(list_uri.clone()).send().await;
+        let response_result: Result<Vec<OrchestratorContainer>, _> = match response {
+            Ok(data) => {
+                let response: Vec<ContainerSummary> = data.json().await.unwrap();
+                let containers = response
+                    .into_iter()
+                    .map(|summary| {
+                        let container_name: Option<String> =
+                            summary.names.unwrap().first().cloned();
+                        OrchestratorContainer {
+                            id: summary.id.unwrap(),
+                            name: DockerOrchestrator::normalize_name(container_name),
+                            state: summary.state.unwrap(),
+                            envs: HashMap::new(),
+                            labels: summary.labels.unwrap(),
+                        }
+                    })
+                    .collect();
+                Ok::<Vec<OrchestratorContainer>, Error>(containers)
+            }
             Err(err) => {
                 error!(
                     error = err.to_string(),
