@@ -25,7 +25,7 @@ Portainer is a universal container management platform. You can manage environme
 Kubernetes, running on dev laptops, in your DC, in the cloud, or at the edge), and we don't require you to run any
 specific Kubernetes distro. https://www.portainer.io/
 
-> Portainer required a direct bind to the daemon socket
+> Only docker through portainer is currently supported using a direct socket binding
 
 ### Docker
 

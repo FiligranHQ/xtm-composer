@@ -23,7 +23,7 @@ opencti:
       api: https://host.docker.internal:9443
       api_key: ChangeMe
       env_id: 3
-      env_type: docker # only docker supported
+      env_type: docker
       api_version: v1.41
 
 openbas:
@@ -42,7 +42,7 @@ openbas:
       api_key: ChangeMe
       api_version: v1.41
       env_id: 3
-      env_type: docker # only docker supported
+      env_type: docker
       stack: opencti-dev
       network_mode: opencti-dev_default
 

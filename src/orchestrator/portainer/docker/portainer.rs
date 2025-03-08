@@ -1,9 +1,9 @@
 use crate::api::{ApiConnector, ConnectorStatus};
 use crate::config::settings::Portainer;
 use crate::orchestrator::docker::DockerOrchestrator;
-use crate::orchestrator::portainer::{
+use crate::orchestrator::portainer::docker::{
     PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
-    PortainerGetResponse, PortainerOrchestrator,
+    PortainerDockerOrchestrator, PortainerGetResponse,
 };
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
@@ -18,7 +18,7 @@ use tracing::{debug, error, info};
 
 const X_API_KEY: &str = "X-API-KEY";
 
-impl PortainerOrchestrator {
+impl PortainerDockerOrchestrator {
     pub fn new(config: Portainer) -> Self {
         let container_uri = format!(
             "{}/api/endpoints/{}/docker/{}/containers",
@@ -48,7 +48,7 @@ impl PortainerOrchestrator {
 }
 
 #[async_trait]
-impl Orchestrator for PortainerOrchestrator {
+impl Orchestrator for PortainerDockerOrchestrator {
     async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let get_uri = format!("{}/{}/json", self.container_uri, connector.container_name());
         let response = self.client.get(get_uri).send().await;

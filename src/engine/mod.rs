@@ -4,7 +4,7 @@ pub mod opencti;
 use crate::api::ComposerApi;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
-use crate::orchestrator::portainer::PortainerOrchestrator;
+use crate::orchestrator::portainer::docker::PortainerDockerOrchestrator;
 use crate::orchestrator::{Orchestrator, composer};
 use crate::settings;
 use crate::system::signals;
@@ -21,7 +21,10 @@ async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
     let orchestrator: Box<dyn Orchestrator + Send + Sync> =
         match daemon_configuration.selector.as_str() {
             "portainer" => match daemon_configuration.portainer.clone() {
-                Some(config) => Box::new(PortainerOrchestrator::new(config)),
+                Some(config) => match config.env_type.as_str() {
+                    "docker" => Box::new(PortainerDockerOrchestrator::new(config)),
+                    def => panic!("Invalid portainer type configuration: {}", def),
+                },
                 None => panic!("Missing portainer configuration"),
             },
             "kubernetes" => match daemon_configuration.kubernetes.clone() {
