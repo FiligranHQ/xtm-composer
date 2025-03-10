@@ -94,7 +94,7 @@ impl Settings {
         config_builder
             .add_source(File::with_name("config/default"))
             .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
-            .add_source(Environment::default().try_parsing(true).separator("_"))
+            .add_source(Environment::default().list_separator(",").with_list_parse_key("opencti.contracts").try_parsing(true).separator("_"))
             .build()?
             .try_deserialize()
     }
