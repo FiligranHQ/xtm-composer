@@ -42,6 +42,10 @@ impl ComposerApi for ApiOpenBAS {
         Duration::from_secs(self.logs_schedule * 60)
     }
 
+    async fn version(&self) -> Option<String> {
+        todo!()
+    }
+
     async fn ping_alive(&self) -> Option<String> {
         todo!()
     }

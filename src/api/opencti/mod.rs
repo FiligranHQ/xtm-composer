@@ -67,6 +67,10 @@ impl ComposerApi for ApiOpenCTI {
         Duration::from_secs(self.logs_schedule * 60)
     }
 
+    async fn version(&self) -> Option<String> {
+        manager::get_version::version(self).await
+    }
+
     async fn ping_alive(&self) -> Option<String> {
         manager::post_ping::ping(self).await
     }

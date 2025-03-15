@@ -1,11 +1,11 @@
 use crate::api::ApiConnector;
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
+use tracing::error;
 
 // region schema
 use crate::api::opencti::opencti as schema;
 use cynic;
-use tracing::error;
 
 #[derive(cynic::QueryVariables, Debug)]
 pub struct GetConnectorsVariables<'a> {

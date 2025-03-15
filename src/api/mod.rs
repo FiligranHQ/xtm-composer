@@ -162,6 +162,8 @@ pub trait ComposerApi {
 
     fn post_logs_schedule(&self) -> Duration;
 
+    async fn version(&self) -> Option<String>;
+
     async fn ping_alive(&self) -> Option<String>;
 
     async fn register(&self, platform_version: String) -> ();

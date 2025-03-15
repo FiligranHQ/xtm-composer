@@ -57,21 +57,35 @@ pub async fn alive(api: Box<dyn ComposerApi + Send + Sync>) -> JoinHandle<()> {
         tokio::select! {
             _ = signals::handle_stop_signals() => {}
             _ = async {
-                let mut detected_version: String = String::new();
-                loop {
-                    let ping_response = api.ping_alive().await;
-                    match ping_response {
-                        Some(platform_version) => {
-                            // Register the manager at start or when version change
-                            if platform_version != detected_version {
-                                api.register(platform_version.clone()).await;
-                                detected_version = platform_version;
+                // Get the api version
+                let version = api.version().await;
+                match version {
+                    Some(version) => {
+                        // Register the manager with contracts align with api version
+                        api.register(version.clone()).await;
+                        let mut detected_version: String = version.clone();
+                        loop {
+                            let ping_response = api.ping_alive().await;
+                            match ping_response {
+                                Some(platform_version) => {
+                                    // Register the manager at start or when version change
+                                    if platform_version != detected_version {
+                                        api.register(platform_version.clone()).await;
+                                        detected_version = platform_version;
+                                    }
+                                }
+                                _ => {
+                                    // Error already handle in upper level
+                                }
                             }
+                            interval.tick().await; // Wait for period
                         }
-                        _ => {}
+                    },
+                    _ => {
+                        // Error already handle in upper level
                     }
-                    interval.tick().await; // Wait for period
                 }
+
             } => {
                 // This branch will never be reached due to the infinite loop.
             }

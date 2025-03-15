@@ -94,7 +94,12 @@ impl Settings {
         config_builder
             .add_source(File::with_name("config/default"))
             .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
-            .add_source(Environment::default().try_parsing(true).separator("_"))
+            .add_source(
+                Environment::default()
+                    .try_parsing(true)
+                    .separator("_")
+                    .list_separator(","),
+            )
             .build()?
             .try_deserialize()
     }

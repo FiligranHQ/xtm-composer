@@ -1,3 +1,4 @@
+pub mod get_version;
 pub mod post_ping;
 pub mod post_register;
 
