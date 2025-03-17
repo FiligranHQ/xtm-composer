@@ -98,6 +98,8 @@ impl Settings {
                 Environment::default()
                     .try_parsing(true)
                     .separator("_")
+                    .with_list_parse_key("opencti.contracts")
+                    .with_list_parse_key("openbas.contracts")
                     .list_separator(","),
             )
             .build()?
