@@ -31,16 +31,23 @@ pub async fn list(api: &ApiOpenCTI) -> Option<Vec<ApiConnector>> {
     let query = GetConnectors::build(vars);
     let get_connectors = api.query_fetch(query).await;
     match get_connectors {
-        Ok(connectors) => {
-            let connectors = connectors
-                .data
-                .unwrap()
-                .connectors_for_manager
-                .unwrap()
-                .into_iter()
-                .map(|managed_connector| managed_connector.to_api_connector())
-                .collect();
-            Some(connectors)
+        Ok(connectors_response) => {
+            let query_errors = connectors_response.errors.unwrap_or_default();
+            if !query_errors.is_empty() {
+                let errors: Vec<String> = query_errors.iter().map(|err| err.to_string()).collect();
+                error!(error = errors.join(","), "Fail to list connectors");
+                None
+            } else {
+                let connectors = connectors_response
+                    .data
+                    .unwrap()
+                    .connectors_for_manager
+                    .unwrap()
+                    .into_iter()
+                    .map(|managed_connector| managed_connector.to_api_connector())
+                    .collect();
+                Some(connectors)
+            }
         }
         Err(e) => {
             error!(error = e.to_string(), "Fail to fetch connectors");

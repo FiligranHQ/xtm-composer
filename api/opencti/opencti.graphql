@@ -128,9 +128,9 @@ enum FilterOperator {
     nil
     not_nil
     search
+    within
 }
 
-# noinspection GraphQLSchemaValidation
 input FilterGroup {
     mode: FilterMode!
     filters: [Filter!]!
@@ -1412,6 +1412,7 @@ type Settings implements InternalObject & BasicObject {
     platform_openbas_disable_display: Boolean
     platform_openerm_url: String
     platform_openmtd_url: String
+    platform_xtmhub_url: String
     platform_ai_enabled: Boolean!
     platform_ai_type: String
     platform_ai_model: String
@@ -1944,6 +1945,7 @@ input RegisterConnectorInput {
     auto: Boolean
     only_contextual: Boolean
     playbook_compatible: Boolean
+    listen_callback_uri: String
 }
 
 input EditManagedConnectorInput {
@@ -2018,6 +2020,7 @@ type ConnectorConfig {
     listen: String!
     listen_routing: String!
     listen_exchange: String!
+    listen_callback_uri: String
     push: String!
     push_routing: String!
     push_exchange: String!
@@ -2040,7 +2043,7 @@ type ConnectorQueueDetails {
 
 type ConnectorContractConfiguration {
     key: String!
-    value: String!
+    value: String
 }
 
 enum ConnectorRequestStatus {
@@ -8864,7 +8867,7 @@ type Mutation {
     stixCoreObjectEdit(id: ID!): StixCoreObjectEditMutations
     stixCoreObjectsExportAsk(input: StixCoreObjectsExportAskInput!): [File!]
     stixCoreObjectsExportPush(entity_id: String, entity_type: String!, file: Upload!, file_markings: [String]!, listFilters: String): Boolean
-    stixBundlePush(connectorId: String!, bundle: String!): Boolean
+    stixBundlePush(connectorId: String!, bundle: String!, work_id: String): Boolean
     stixDomainObjectAdd(input: StixDomainObjectAddInput!): StixDomainObject
     stixDomainObjectEdit(id: ID!): StixDomainObjectEditMutations
     stixDomainObjectsExportAsk(format: String!, exportType: String!, contentMaxMarkings: [String], fileMarkings: [String], search: String, exportContext: ExportContext, relationship_type: [String], orderBy: StixDomainObjectsOrdering, orderMode: OrderingMode, filters: FilterGroup, selectedIds: [String]): [File!]
@@ -9124,6 +9127,7 @@ type Mutation {
     aiChangeTone(id: ID!, content: String!, format: Format, tone: Tone): String
     aiSummarize(id: ID!, content: String!, format: Format): String
     aiExplain(id: ID!, content: String!): String
+    aiNLQ(search: String!): NLQResponse
     obasContainerGenerateScenario(id: ID!, interval: Int, selection: Selection, simulationType: SimulationType, useAI: Boolean, filters: FilterGroup): String @deprecated(reason: "[>=6.5 & <6.8]. Use `obasContainerGenerateScenarioWithInjectPlaceholders`.")
     obasThreatGenerateScenario(id: ID!, interval: Int, selection: Selection, simulationType: SimulationType, useAI: Boolean, filters: FilterGroup): String @deprecated(reason: "[>=6.5 & <6.8]. Use `obasThreatGenerateScenarioWithInjectPlaceholders`.")
     obasVictimGenerateScenario(id: ID!, interval: Int, selection: Selection, simulationType: SimulationType, useAI: Boolean, filters: FilterGroup): String @deprecated(reason: "[>=6.5 & <6.8]. Use `obasVictimGenerateScenarioWithInjectPlaceholders`.")
@@ -12436,6 +12440,11 @@ type AIBus {
     content: String!
 }
 
+type NLQResponse {
+    filters: String!
+    notResolvedValues: [String!]!
+}
+
 enum ScenarioType {
     container
     threat
@@ -12619,6 +12628,11 @@ input ExclusionListFileAddInput {
     file: Upload!
 }
 
+enum DraftStatus {
+    open
+    validated
+}
+
 type DraftWorkspace implements InternalObject & BasicObject {
     id: ID!
     entity_type: String!
@@ -12629,6 +12643,10 @@ type DraftWorkspace implements InternalObject & BasicObject {
     creators: [Creator!]
     entity_id: String
     objectsCount: DraftObjectsCount!
+    draft_status: DraftStatus!
+    processingCount: Int!
+    works(first: Int): [Work!]
+    validationWork: Work
 }
 
 type DraftObjectsCount {
@@ -12644,6 +12662,7 @@ enum DraftWorkspacesOrdering {
     name
     created_at
     creator
+    draft_status
 }
 
 type DraftWorkspaceConnection {

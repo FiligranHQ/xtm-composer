@@ -11,7 +11,7 @@ use crate::api::opencti::opencti as schema;
 #[derive(cynic::QueryFragment, Debug, Clone, Serialize)]
 pub struct ConnectorContractConfiguration {
     pub key: String,
-    pub value: String,
+    pub value: Option<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
@@ -39,7 +39,7 @@ impl ManagedConnector {
             .into_iter()
             .map(|c| ApiContractConfig {
                 key: c.key,
-                value: c.value,
+                value: c.value.unwrap_or_default(),
             })
             .collect();
         ApiConnector {
