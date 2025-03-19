@@ -141,7 +141,16 @@ impl KubeOrchestrator {
             }),
             ..Default::default()
         };
-        let mut base_deployment = self.config.base_deployment.clone().unwrap_or(Deployment {
+        let mut base_deploy = self.config.base_deployment.clone();
+        // No direct deploy configuration, check the json format
+        if base_deploy.is_none() {
+            let json_deploy = self.config.base_deployment_json.clone();
+            // If json base deploy defined, try to generate the base from it
+            if json_deploy.is_some() {
+                base_deploy = Some(serde_json::from_str(json_deploy.unwrap().as_str()).unwrap());
+            }
+        }
+        let mut base_deployment = base_deploy.unwrap_or(Deployment {
             ..Default::default()
         });
         base_deployment.merge_from(target_deployment);

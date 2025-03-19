@@ -73,6 +73,7 @@ pub struct Portainer {
 #[allow(unused)]
 pub struct Kubernetes {
     pub base_deployment: Option<Deployment>,
+    pub base_deployment_json: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -97,7 +98,7 @@ impl Settings {
             .add_source(
                 Environment::default()
                     .try_parsing(true)
-                    .separator("_")
+                    .separator("__")
                     .with_list_parse_key("opencti.contracts")
                     .with_list_parse_key("openbas.contracts")
                     .list_separator(","),
