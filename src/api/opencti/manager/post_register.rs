@@ -1,4 +1,3 @@
-use crate::api::ApiConnector;
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::manager::ConnectorManager;
 use crate::api::opencti::opencti as schema;
@@ -25,23 +24,17 @@ pub struct RegisterConnectorsManager {
 pub struct RegisterConnectorsManagerInput<'a> {
     pub id: &'a cynic::Id,
     pub name: &'a str,
-    pub contracts: Vec<&'a str>,
 }
 // endregion
 
-pub async fn register(api: &ApiOpenCTI, platform_version: String) {
+pub async fn register(api: &ApiOpenCTI) {
     use cynic::MutationBuilder;
 
     let settings = crate::settings();
-    // Build contracts and register
-    let contract_build =
-        ApiConnector::contracts_getter(settings.opencti.contracts.clone(), platform_version).await;
-    let contracts: Vec<&str> = contract_build.iter().map(|s| s.as_str()).collect();
     let vars = RegisterConnectorsManageVariables {
         input: RegisterConnectorsManagerInput {
             id: &cynic::Id::new(&settings.manager.id),
             name: &settings.manager.name,
-            contracts,
         },
     };
     let mutation = RegisterConnectorsManager::build(vars);

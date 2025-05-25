@@ -62,7 +62,7 @@ pub async fn alive(api: Box<dyn ComposerApi + Send + Sync>) -> JoinHandle<()> {
                 match version {
                     Some(version) => {
                         // Register the manager with contracts align with api version
-                        api.register(version.clone()).await;
+                        api.register().await;
                         let mut detected_version: String = version.clone();
                         loop {
                             let ping_response = api.ping_alive().await;
@@ -70,7 +70,7 @@ pub async fn alive(api: Box<dyn ComposerApi + Send + Sync>) -> JoinHandle<()> {
                                 Some(platform_version) => {
                                     // Register the manager at start or when version change
                                     if platform_version != detected_version {
-                                        api.register(platform_version.clone()).await;
+                                        api.register().await;
                                         detected_version = platform_version;
                                     }
                                 }

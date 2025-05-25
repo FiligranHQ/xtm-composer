@@ -721,6 +721,7 @@ type SubType {
     id: ID!
     label: String!
     statuses: [Status!]!
+    statusesRequestAccess: [Status!]!
     workflowEnabled: Boolean
     settings: EntitySetting
 }
@@ -754,6 +755,11 @@ enum StatusOrdering {
     _score
 }
 
+enum StatusScope {
+    GLOBAL
+    REQUEST_ACCESS
+}
+
 type Status {
     id: ID!
     template_id: String!
@@ -761,6 +767,7 @@ type Status {
     type: String!
     order: Int!
     disabled: Boolean
+    scope: StatusScope
 }
 
 type StatusConnection {
@@ -776,6 +783,7 @@ type StatusEdge {
 input StatusAddInput {
     template_id: String!
     order: Int!
+    scope: StatusScope!
 }
 
 input StatusTemplateAddInput {
@@ -1367,6 +1375,7 @@ type PlatformProtectedSensitiveConfig {
     roles: PlatformProtectedSubConfig!
     rules: PlatformProtectedSubConfig!
     ce_ee_toggle: PlatformProtectedSubConfig!
+    connector_reset: PlatformProtectedSubConfig!
     file_indexing: PlatformProtectedSubConfig!
     platform_organization: PlatformProtectedSubConfig!
 }
@@ -1446,6 +1455,7 @@ type Settings implements InternalObject & BasicObject {
     messages_administration: [SettingsMessage!]
     analytics_google_analytics_v4: String
     playground_enabled: Boolean!
+    request_access_enabled: Boolean!
     editContext: [EditUserContext!]
 }
 
@@ -1605,16 +1615,24 @@ type Member {
     group_confidence_level: ConfidenceLevel
 }
 
+type MemberGroupRestriction {
+    id: String!
+    name: String!
+}
+
 type MemberAccess {
-    id: ID!
+    id: String!
+    member_id: ID!
     name: String!
     entity_type: String!
     access_right: String!
+    groups_restriction: [MemberGroupRestriction!]
 }
 
 input MemberAccessInput {
     id: ID!
     access_right: String!
+    groups_restriction_ids: [ID!]
 }
 
 type OtpElement {
@@ -1877,6 +1895,11 @@ enum ConnectorType {
     STREAM
 }
 
+input ConnectorWithConfig {
+    connectorId: String
+    configuration: String
+}
+
 input ExportAskInput {
     format: String!
     exportType: String!
@@ -1957,8 +1980,8 @@ input EditManagedConnectorInput {
 
 input AddManagedConnectorInput {
     name: String!
-    manager_id: ID!
     connector_user_id: ID!
+    catalog_id: ID!
     manager_contract_image: String!
     manager_contract_configuration: [ContractConfigInput!]!
 }
@@ -1966,7 +1989,6 @@ input AddManagedConnectorInput {
 input RegisterConnectorsManagerInput {
     id: ID!
     name: String!
-    contracts: [String!]!
 }
 
 input UpdateConnectorManagerStatusInput {
@@ -2056,6 +2078,11 @@ enum ConnectorCurrentStatus {
     stopped
 }
 
+type ManagerContractConfiguration {
+    key: String
+    value: String
+}
+
 type Connector implements BasicObject & InternalObject {
     id: ID!
     standard_id: String!
@@ -2083,6 +2110,13 @@ type Connector implements BasicObject & InternalObject {
     config: ConnectorConfig
     works(status: String): [Work]
     is_managed: Boolean
+    manager_current_status: String
+    manager_requested_status: String
+    manager_contract_image: String
+    manager_contract_definition: String
+    manager_contract_configuration: [ManagerContractConfiguration!]
+    manager_connector_logs: [String!]
+    manager_contract_hash: String
     built_in: Boolean
     configurations: [ConnectorConfiguration!]
 }
@@ -2096,7 +2130,7 @@ type ManagedConnector implements BasicObject & InternalObject {
     connector_user_id: ID
     connector_user: User
     connector_state_timestamp: DateTime
-    manager_id: String!
+    manager: ConnectorManager
     manager_contract_image: String!
     manager_current_status: String
     manager_requested_status: String!
@@ -2111,7 +2145,6 @@ type ConnectorManager implements BasicObject & InternalObject {
     entity_type: String!
     parent_types: [String]!
     name: String!
-    connector_manager_contracts: [String!]!
     last_sync_execution: DateTime
     about_version: String!
     active: Boolean!
@@ -7978,6 +8011,7 @@ type Query {
     importFiles(first: Int, after: ID, orderBy: FileOrdering, orderMode: OrderingMode, search: String, filters: FilterGroup): FileConnection
     pendingFiles(first: Int, after: ID, orderBy: FileOrdering, orderMode: OrderingMode, search: String, filters: FilterGroup): FileConnection
     filesMetrics: FilesMetrics
+    guessMimeType(fileId: String!): String
     askAiActivity(busId: String, language: String, forceRefresh: Boolean): AiActivity
     indexedFiles(first: Int, after: ID, search: String): IndexedFileConnection
     indexedFilesCount(search: String): Int
@@ -7999,10 +8033,10 @@ type Query {
     role(id: String!): Role
     capabilities(first: Int): CapabilityConnection
     connector(id: String!): Connector
-    connectors: [Connector!]
+    connectors: [Connector!]!
     connectorManager(managerId: ID!): ConnectorManager!
-    connectorManagers: [ConnectorManager!]
-    connectorsForManager(managerId: ID!): [ManagedConnector!]
+    connectorManagers: [ConnectorManager!]!
+    connectorsForManagers: [ManagedConnector!]
     connectorsForWorker: [Connector]
     connectorsForExport: [Connector]
     connectorsForImport: [Connector]
@@ -8022,8 +8056,9 @@ type Query {
     streamCollections(first: Int, after: ID, orderBy: StreamCollectionOrdering, orderMode: OrderingMode, search: String, filters: FilterGroup): StreamCollectionConnection!
     statusTemplate(id: String!): StatusTemplate
     statusTemplates(first: Int, after: ID, orderBy: StatusTemplateOrdering, orderMode: OrderingMode, search: String): StatusTemplateConnection
+    statusTemplatesByStatusScope(search: String, scope: StatusScope): [StatusTemplate]
     status(id: String!): Status
-    statuses(first: Int, after: ID, orderBy: StatusOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): StatusConnection
+    statuses(first: Int, after: ID, orderBy: StatusOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String, scope: StatusScope): StatusConnection
     backgroundTask(id: String!): BackgroundTask
     backgroundTasks(first: Int, after: ID, orderBy: BackgroundTasksOrdering, orderMode: OrderingMode, includeAuthorities: Boolean, filters: FilterGroup, search: String): BackgroundTaskConnection
     rule(id: String!): Rule
@@ -8179,6 +8214,8 @@ type Query {
     csvMapperTest(configuration: String!, content: String!): CsvMapperTestResult @deprecated(reason: "[>=6.4 & <6.7]. Use `csvMapperTest mutation`.")
     channel(id: String!): Channel
     channels(first: Int, after: ID, orderBy: ChannelsOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): ChannelConnection
+    catalog(id: String!): Catalog
+    catalogs: [Catalog!]!
     language(id: String!): Language
     languages(first: Int, after: ID, orderBy: LanguagesOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): LanguageConnection
     event(id: String!): Event
@@ -8209,7 +8246,7 @@ type Query {
     vocabularyCategories: [VocabularyDefinition!]!
     vocabularies(category: VocabularyCategory, first: Int, after: ID, orderBy: VocabularyOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): VocabularyConnection
     administrativeArea(id: String!): AdministrativeArea
-    administrativeAreas(first: Int, after: ID, orderBy: AdministrativeAreasOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): AdministrativeAreaConnection
+    administrativeAreas(first: Int, after: ID, orderBy: AdministrativeAreasOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String, toStix: Boolean): AdministrativeAreaConnection
     task(id: String!): Task
     tasks(first: Int, after: ID, orderBy: TasksOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String, toStix: Boolean): TaskConnection
     taskContainsStixObjectOrStixRelationship(id: String!, stixObjectOrStixRelationshipId: String!): Boolean
@@ -8259,8 +8296,11 @@ type Query {
     ingestionTaxiiCollections(first: Int, after: ID, orderBy: IngestionTaxiiCollectionOrdering, orderMode: OrderingMode, filters: FilterGroup, includeAuthorities: Boolean, search: String): IngestionTaxiiCollectionConnection
     ingestionCsv(id: String!): IngestionCsv
     ingestionCsvs(first: Int, after: ID, orderBy: IngestionCsvOrdering, orderMode: OrderingMode, filters: FilterGroup, includeAuthorities: Boolean, search: String): IngestionCsvConnection
+    csvFeedAddInputFromImport(file: Upload!): CSVFeedAddInputFromImport!
+    ingestionJson(id: String!): IngestionJson
+    ingestionJsons(first: Int, after: ID, orderBy: IngestionJsonOrdering, orderMode: OrderingMode, filters: FilterGroup, includeAuthorities: Boolean, search: String): IngestionJsonConnection
     indicator(id: String!): Indicator
-    indicators(first: Int, after: ID, orderBy: IndicatorsOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): IndicatorConnection
+    indicators(first: Int, after: ID, orderBy: IndicatorsOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String, toStix: Boolean): IndicatorConnection
     indicatorsTimeSeries(objectId: String, field: String!, operation: StatsOperation!, startDate: DateTime!, endDate: DateTime!, interval: String!, filters: FilterGroup): [TimeSeries]
     indicatorsNumber(pattern_type: String, objectId: String, endDate: DateTime): Number
     indicatorsDistribution(objectId: String, field: String!, operation: StatsOperation!, limit: Int, order: String, startDate: DateTime, endDate: DateTime, dateAttribute: String): [Distribution]
@@ -8272,6 +8312,8 @@ type Query {
     csvMappers(first: Int, after: ID, orderBy: CsvMapperOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): CsvMapperConnection
     csvMapperSchemaAttributes: [CsvMapperSchemaAttributes!]!
     csvMapperAddInputFromImport(file: Upload!): CsvMapperAddInputFromImport!
+    jsonMapper(id: ID!): JsonMapper
+    jsonMappers(first: Int, after: ID, orderBy: JsonMapperOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): JsonMapperConnection
     publicDashboard(id: String!): PublicDashboard
     publicDashboards(first: Int, after: ID, orderBy: PublicDashboardsOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): PublicDashboardConnection
     publicDashboardByUriKey(uri_key: String!): PublicDashboard
@@ -8301,6 +8343,9 @@ type Query {
     fintelTemplate(id: ID!): FintelTemplate
     disseminationList(id: ID!): DisseminationList
     disseminationLists(first: Int, after: ID, orderBy: DisseminationListOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): DisseminationListConnection
+    savedFilters(first: Int, after: ID, orderBy: SavedFilterOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): SavedFilterConnection
+    fintelDesign(id: String!): FintelDesign
+    fintelDesigns(first: Int, after: ID, orderBy: FintelDesignOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): FintelDesignConnection
 }
 
 type Subscription {
@@ -8486,6 +8531,7 @@ type StixCoreObjectEditMutations {
     analysisPush(file: Upload!, contentSource: String!, contentType: AnalysisContentType!, analysisType: String!): File
     analysisClear(contentSource: String!, contentType: AnalysisContentType!): Boolean
     importPush(file: Upload!, fileMarkings: [String], version: DateTime, noTriggerImport: Boolean, fromTemplate: Boolean): File
+    uploadAndAskJobImport(file: Upload!, connectors: [ConnectorWithConfig!], fileMarkings: [String!], validationMode: ValidationMode, draftId: String, noTriggerImport: Boolean): File
     exportAsk(input: ExportAskInput!): [File!]
     exportPush(file: Upload!): Boolean
     removeFromDraft: ID
@@ -8791,8 +8837,9 @@ enum ValidationMode {
 type Mutation {
     deleteImport(fileName: String): ID
     uploadImport(file: Upload!, fileMarkings: [String]): File
+    uploadAndAskJobImport(file: Upload!, fileMarkings: [String!], connectors: [ConnectorWithConfig!], validationMode: ValidationMode, draftId: String, noTriggerImport: Boolean): File
     uploadPending(file: Upload!, entityId: String, labels: [String], errorOnExisting: Boolean, file_markings: [String!], refreshEntity: Boolean): File
-    askJobImport(fileName: ID!, connectorId: String, configuration: String, bypassEntityId: String, bypassValidation: Boolean, validationMode: ValidationMode): File
+    askJobImport(fileName: ID!, connectorId: String, configuration: String, bypassEntityId: String, bypassValidation: Boolean, validationMode: ValidationMode, forceValidation: Boolean): File
     resetFileIndexing: Boolean
     synchronizerAdd(input: SynchronizerAddInput!): Synchronizer
     synchronizerEdit(id: ID!): SynchronizerEditMutations
@@ -9027,6 +9074,8 @@ type Mutation {
     caseIncidentDelete(id: ID!): ID
     caseRfiAdd(input: CaseRfiAddInput!): CaseRfi
     caseRfiDelete(id: ID!): ID
+    caseRfiApprove(id: ID!): CaseRfi
+    caseRfiDecline(id: ID!): CaseRfi
     caseRftAdd(input: CaseRftAddInput!): CaseRft
     caseRftDelete(id: ID!): ID
     feedbackAdd(input: FeedbackAddInput!): Feedback
@@ -9087,6 +9136,12 @@ type Mutation {
     ingestionCsvResetState(id: ID!): IngestionCsv
     ingestionCsvDelete(id: ID!): ID
     ingestionCsvFieldPatch(id: ID!, input: [EditInput!]!): IngestionCsv
+    ingestionJsonTester(input: IngestionJsonAddInput!): JsonMapperTestResult
+    ingestionJsonAdd(input: IngestionJsonAddInput!): IngestionJson
+    ingestionJsonResetState(id: ID!): IngestionJson
+    ingestionJsonDelete(id: ID!): ID
+    ingestionJsonFieldPatch(id: ID!, input: [EditInput!]!): IngestionJson
+    ingestionJsonEdit(id: ID!, input: IngestionJsonAddInput!): IngestionJson
     indicatorAdd(input: IndicatorAddInput!): Indicator
     indicatorDelete(id: ID!): ID
     indicatorFieldPatch(id: ID!, input: [EditInput!]!, commitMessage: String, references: [String]): Indicator
@@ -9111,6 +9166,11 @@ type Mutation {
     csvMapperTest(configuration: String!, file: Upload!): CsvMapperTestResult
     csvMapperDelete(id: ID!): ID
     csvMapperFieldPatch(id: ID!, input: [EditInput!]!): CsvMapper
+    jsonMapperAdd(input: JsonMapperAddInput!): JsonMapper
+    jsonMapperTest(configuration: String!, file: Upload!): JsonMapperTestResult
+    jsonMapperDelete(id: ID!): ID
+    jsonMapperImport(file: Upload!): String!
+    jsonMapperFieldPatch(id: ID!, input: [EditInput!]!): JsonMapper
     publicDashboardAdd(input: PublicDashboardAddInput!): PublicDashboard
     publicDashboardDelete(id: ID!): ID
     publicDashboardFieldPatch(id: ID!, input: [EditInput!]!): PublicDashboard
@@ -9153,6 +9213,18 @@ type Mutation {
     disseminationListDelete(id: ID!): ID
     disseminationListFieldPatch(id: ID!, input: [EditInput!]!): DisseminationList
     disseminationListSend(id: ID!, input: DisseminationListSendInput!): Boolean
+    savedFilterAdd(input: SavedFilterAddInput!): SavedFilter
+    savedFilterDelete(id: ID!): ID
+    savedFilterFieldPatch(id: ID!, input: [EditInput!]): SavedFilter
+    requestAccessAdd(input: RequestAccessAddInput!): ID
+    requestAccessConfigure(input: RequestAccessConfigureInput!): RequestAccessConfiguration
+    fintelDesignAdd(input: FintelDesignAddInput!): FintelDesign
+    fintelDesignDelete(id: ID!): ID
+    fintelDesignFieldPatch(id: ID!, input: [EditInput!]!): FintelDesign
+    askSendOtp(input: AskSendOtpInput!): String
+    verifyOtp(input: VerifyOtpInput!): VerifyOtp
+    verifyMfa(input: VerifyMfaInput!): Boolean
+    changePassword(input: ChangePasswordInput!): Boolean
 }
 
 type Channel implements BasicObject & StixObject & StixCoreObject & StixDomainObject {
@@ -9256,6 +9328,31 @@ input ChannelAddInput {
     clientMutationId: String
     update: Boolean
     file: Upload
+}
+
+type Catalog implements InternalObject & BasicObject {
+    id: ID!
+    entity_type: String!
+    standard_id: String!
+    parent_types: [String!]!
+    name: String!
+    description: String!
+    contracts: [String!]!
+}
+
+enum CatalogsOrdering {
+    name
+    _score
+}
+
+type CatalogConnection {
+    pageInfo: PageInfo!
+    edges: [CatalogEdge!]!
+}
+
+type CatalogEdge {
+    cursor: String!
+    node: Catalog!
 }
 
 type Language implements BasicObject & StixCoreObject & StixDomainObject & StixObject {
@@ -10664,6 +10761,11 @@ input CaseIncidentAddInput {
     authorized_members: [MemberAccessInput!]
 }
 
+type RfiRequestAccessConfiguration {
+    configuration: RequestAccessConfiguration
+    isUserCanAction: Boolean!
+}
+
 type CaseRfi implements BasicObject & StixObject & StixCoreObject & StixDomainObject & Container & Case {
     id: ID!
     standard_id: String!
@@ -10729,6 +10831,9 @@ type CaseRfi implements BasicObject & StixObject & StixCoreObject & StixDomainOb
     information_types: [String!]
     severity: String
     priority: String
+    x_opencti_request_access: String
+    requestAccessConfiguration: RfiRequestAccessConfiguration
+    x_opencti_workflow_id: String
 }
 
 enum CaseRfisOrdering {
@@ -10787,6 +10892,7 @@ input CaseRfiAddInput {
     information_types: [String!]
     caseTemplates: [String!]
     authorized_members: [MemberAccessInput!]
+    x_opencti_request_access: String
 }
 
 type CaseRft implements BasicObject & StixObject & StixCoreObject & StixDomainObject & Container & Case {
@@ -11085,6 +11191,7 @@ type EntitySetting implements InternalObject & BasicObject {
     updated_at: DateTime!
     overview_layout_customization: [OverviewWidgetCustomization!]
     fintelTemplates(first: Int, after: ID, orderBy: FintelTemplateOrdering, orderMode: OrderingMode, search: String): FintelTemplateConnection
+    requestAccessConfiguration: RequestAccessConfiguration
 }
 
 enum EntitySettingsOrdering {
@@ -11111,7 +11218,7 @@ type Workspace implements InternalObject & BasicObject {
     name: String!
     description: String
     owner: Creator
-    tags: [String]
+    tags: [String!]
     manifest: String
     created_at: DateTime
     updated_at: DateTime
@@ -11149,7 +11256,7 @@ input WorkspaceAddInput {
     type: String!
     name: String!
     description: String
-    tags: [String]
+    tags: [String!]
     authorized_members: [MemberAccessInput!]
     investigated_entities_ids: [String]
 }
@@ -11159,7 +11266,7 @@ input WorkspaceDuplicateInput {
     name: String!
     description: String
     manifest: String
-    tags: [String]
+    tags: [String!]
 }
 
 input ImportConfigurationInput {
@@ -11629,6 +11736,7 @@ type IngestionRss implements InternalObject & BasicObject {
     updated_at: DateTime
     name: String!
     description: String
+    scheduling_period: String
     uri: String!
     user: Creator
     defaultCreatedBy: Identity
@@ -11660,6 +11768,7 @@ type IngestionRssEdge {
 input IngestionRssAddInput {
     name: String!
     description: String
+    scheduling_period: String
     uri: String!
     current_state_date: DateTime
     ingestion_running: Boolean
@@ -11788,7 +11897,9 @@ type IngestionCsv implements InternalObject & BasicObject {
     updated_at: DateTime
     name: String!
     description: String
+    scheduling_period: String
     uri: String!
+    csv_mapper_type: IngestionCsvMapperType
     csvMapper: CsvMapper!
     authentication_type: IngestionAuthType!
     authentication_value: String
@@ -11810,6 +11921,11 @@ enum IngestionCsvOrdering {
     _score
 }
 
+enum IngestionCsvMapperType {
+    inline
+    id
+}
+
 type IngestionCsvConnection {
     pageInfo: PageInfo!
     edges: [IngestionCsvEdge!]!
@@ -11820,14 +11936,127 @@ type IngestionCsvEdge {
     node: IngestionCsv!
 }
 
+type CSVFeedAddInputFromImport {
+    name: String!
+    description: String!
+    uri: String!
+    authentication_type: String!
+    markings: [String!]!
+    authentication_value: String!
+    csvMapper: CsvMapperAddInputFromImport!
+    csv_mapper_type: IngestionCsvMapperType
+}
+
 input IngestionCsvAddInput {
     name: String!
     description: String
+    scheduling_period: String
     authentication_type: IngestionAuthType!
     authentication_value: String
     current_state_date: DateTime
     uri: String!
-    csv_mapper_id: String!
+    csv_mapper_id: String
+    csv_mapper: String
+    csv_mapper_type: IngestionCsvMapperType
+    ingestion_running: Boolean
+    user_id: String!
+    markings: [String!]
+}
+
+type IngestionHeader {
+    name: String!
+    value: String!
+}
+
+type IngestionQueryAttribute {
+    type: String
+    from: String
+    to: String
+    data_operation: String
+    state_operation: String
+    default: String
+    exposed: String
+}
+
+type IngestionJson implements InternalObject & BasicObject {
+    id: ID!
+    entity_type: String!
+    connector_id: String!
+    standard_id: String!
+    parent_types: [String]!
+    created_at: DateTime
+    updated_at: DateTime
+    name: String!
+    description: String
+    scheduling_period: String
+    uri: String!
+    verb: String!
+    body: String
+    pagination_with_sub_page: Boolean
+    pagination_with_sub_page_attribute_path: String
+    pagination_with_sub_page_query_verb: String
+    headers: [IngestionHeader!]
+    query_attributes: [IngestionQueryAttribute!]
+    jsonMapper: JsonMapper!
+    authentication_type: IngestionAuthType!
+    authentication_value: String
+    user_id: String!
+    user: Creator
+    ingestion_running: Boolean
+    last_execution_date: DateTime
+    markings: [String!]
+}
+
+enum IngestionJsonOrdering {
+    name
+    created_at
+    updated_at
+    uri
+    mapper
+    _score
+}
+
+type IngestionJsonConnection {
+    pageInfo: PageInfo!
+    edges: [IngestionJsonEdge!]!
+}
+
+type IngestionJsonEdge {
+    cursor: String!
+    node: IngestionJson!
+}
+
+input HeaderInput {
+    name: String!
+    value: String!
+}
+
+input QueryAttribute {
+    type: String
+    from: String
+    to: String
+    data_operation: String
+    state_operation: String
+    default: String
+    exposed: String
+}
+
+input IngestionJsonAddInput {
+    name: String!
+    description: String
+    scheduling_period: String
+    authentication_type: IngestionAuthType!
+    authentication_value: String
+    current_state_date: DateTime
+    uri: String!
+    verb: String!
+    body: String
+    pagination_with_sub_page: Boolean
+    pagination_with_sub_page_attribute_path: String
+    pagination_with_sub_page_query_verb: String
+    headers: [HeaderInput!]
+    query_attributes: [QueryAttribute!]
+    json_mapper_id: String!
     ingestion_running: Boolean
     user_id: String!
     markings: [String!]
@@ -11890,6 +12119,7 @@ type DecayChartData {
 type ObservablesValues {
     type: String
     value: String
+    hashes: [Hash!]
 }
 
 type Indicator implements BasicObject & StixObject & StixCoreObject & StixDomainObject {
@@ -12100,6 +12330,7 @@ type Organization implements BasicObject & StixObject & StixCoreObject & StixDom
     x_opencti_aliases: [String]
     x_opencti_reliability: String
     x_opencti_organization_type: String
+    x_opencti_score: Int
     sectors: SectorConnection
     members(first: Int, after: ID, orderBy: UsersOrdering, orderMode: OrderingMode, search: String, filters: FilterGroup): UserConnection
     authorized_authorities: [String]
@@ -12129,6 +12360,7 @@ enum OrganizationsOrdering {
     updated_at
     x_opencti_organization_type
     x_opencti_workflow_id
+    x_opencti_score
     _score
 }
 
@@ -12155,6 +12387,7 @@ input OrganizationAddInput {
     lang: String
     x_opencti_organization_type: String
     x_opencti_reliability: String
+    x_opencti_score: Int
     createdBy: String
     objectMarking: [String]
     objectLabel: [String]
@@ -12194,6 +12427,7 @@ type AttributeColumn {
 }
 
 type AttributeBasedOn {
+    identifier: String
     representations: [String]
 }
 
@@ -12301,6 +12535,21 @@ type CsvMapperSchemaAttributes {
     attributes: [CsvMapperSchemaAttribute!]!
 }
 
+enum JsonMapperOrdering {
+    name
+    _score
+}
+
+type JsonMapperConnection {
+    pageInfo: PageInfo!
+    edges: [JsonMapperEdge!]!
+}
+
+type JsonMapperEdge {
+    cursor: String!
+    node: JsonMapper!
+}
+
 input AttributeColumnConfigurationInput {
     separator: String
     pattern_date: String
@@ -12355,6 +12604,109 @@ input CsvMapperAddInput {
     separator: String!
     representations: String!
     skipLineChar: String
+}
+
+enum JsonMapperRepresentationType {
+    entity
+    relationship
+}
+
+type AttributePath {
+    path: String!
+    independent: Boolean
+    configuration: AttributeColumnConfiguration
+}
+
+type ComplexVariable {
+    path: String!
+    variable: String!
+    independent: Boolean
+}
+
+type ComplexPath {
+    formula: String!
+    variables: [ComplexVariable!]
+    configuration: AttributeColumnConfiguration
+}
+
+type JsonMapperRepresentationAttribute {
+    key: String!
+    mode: String!
+    attr_path: AttributePath
+    complex_path: ComplexPath
+    based_on: AttributeBasedOn
+    default_values: [DefaultValue!]
+}
+
+type JsonMapperRepresentationTarget {
+    entity_type: String!
+    path: String!
+}
+
+type JsonMapperRepresentation {
+    id: ID!
+    type: JsonMapperRepresentationType!
+    target: JsonMapperRepresentationTarget!
+    identifier: String
+    attributes: [JsonMapperRepresentationAttribute!]!
+    from: String
+    to: String
+}
+
+interface JsonAttributeColumnConfiguration {
+    separator: String
+    pattern_date: String
+    timezone: String
+}
+
+type JsonComplexPathVariable {
+    path: String
+    variable: String
+    independent: Boolean
+}
+
+type JsonComplexPathConfiguration {
+    complex: JsonComplexPathConfiguration
+    formula: String
+}
+
+type JsonComplexPath {
+    complex: JsonComplexPathConfiguration
+    configuration: JsonAttributeColumnConfiguration
+}
+
+type JsonMapperVariable {
+    name: String!
+    path: JsonComplexPath
+}
+
+type JsonMapper implements InternalObject & BasicObject {
+    id: ID!
+    entity_type: String!
+    standard_id: String!
+    parent_types: [String!]!
+    name: String!
+    variables: [JsonMapperVariable!]
+    representations: [JsonMapperRepresentation!]!
+    errors: String
+    toConfigurationExport: String!
+}
+
+type JsonMapperTestResult {
+    objects: String!
+    nbRelationships: Int!
+    nbEntities: Int!
+    state: String!
+}
+
+type JsonMapperAddInputFromImport {
+    name: String!
+    representations: [JsonMapperRepresentation!]!
+}
+
+input JsonMapperAddInput {
+    name: String!
+    representations: String!
 }
 
 type PublicDashboard implements InternalObject & BasicObject {
@@ -12663,6 +13015,7 @@ enum DraftWorkspacesOrdering {
     created_at
     creator
     draft_status
+    _score
 }
 
 type DraftWorkspaceConnection {
@@ -12770,4 +13123,137 @@ input DisseminationListSendInput {
     email_body: String!
     email_attachment_ids: [ID!]!
     html_to_body_file_id: ID
+}
+
+type SavedFilter implements InternalObject & BasicObject {
+    id: ID!
+    standard_id: String!
+    entity_type: String!
+    parent_types: [String]!
+    name: String!
+    filters: String!
+    scope: String!
+}
+
+type SavedFilterEdge {
+    cursor: String!
+    node: SavedFilter!
+}
+
+type SavedFilterConnection {
+    pageInfo: PageInfo!
+    edges: [SavedFilterEdge!]
+}
+
+enum SavedFilterOrdering {
+    name
+    _score
+}
+
+input SavedFilterAddInput {
+    name: String!
+    filters: String!
+    scope: String!
+}
+
+enum RequestAccessType {
+    organization_sharing
+}
+
+type RequestAccessMember {
+    id: ID!
+    name: String!
+}
+
+type RequestAccessConfiguration {
+    id: ID!
+    approved_status: Status
+    declined_status: Status
+    approval_admin: [RequestAccessMember]
+}
+
+type RequestAccessWorkflow {
+    approved_workflow_id: String
+    declined_workflow_id: String
+    approval_admin: [ID]
+}
+
+type RequestAccessStatus {
+    id: ID!
+    template_id: String
+    statusTemplate: [StatusTemplate]
+}
+
+input RequestAccessAddInput {
+    request_access_reason: String
+    request_access_entities: [ID!]!
+    request_access_members: [ID!]!
+    request_access_type: RequestAccessType
+}
+
+input RequestAccessConfigureInput {
+    approved_status_id: ID
+    declined_status_id: ID
+    approval_admin: [ID]
+}
+
+type FintelDesign implements BasicObject & InternalObject {
+    id: ID!
+    standard_id: String!
+    entity_type: String!
+    parent_types: [String]!
+    name: String!
+    description: String
+    url: String
+    gradiantFromColor: String
+    gradiantToColor: String
+    textColor: String
+}
+
+input FintelDesignAddInput {
+    name: String!
+    description: String
+    url: String
+    gradiantFromColor: String
+    gradiantToColor: String
+    textColor: String
+}
+
+type FintelDesignEdge {
+    cursor: String!
+    node: FintelDesign
+}
+
+type FintelDesignConnection {
+    pageInfo: PageInfo!
+    edges: [FintelDesignEdge!]!
+}
+
+enum FintelDesignOrdering {
+    name
+    created_at
+}
+
+input AskSendOtpInput {
+    email: String!
+}
+
+input VerifyOtpInput {
+    otp: String!
+    transactionId: String!
+}
+
+input VerifyMfaInput {
+    code: String!
+    transactionId: String!
+}
+
+input ChangePasswordInput {
+    transactionId: String!
+    otp: String!
+    newPassword: String!
+}
+
+type VerifyOtp {
+    mfa_activated: Boolean!
 }

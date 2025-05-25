@@ -40,7 +40,6 @@ pub struct OpenCTI {
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
     pub logs_schedule: u64,
-    pub contracts: Vec<String>,
     pub daemon: Daemon,
 }
 
@@ -53,7 +52,6 @@ pub struct OpenBAS {
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
     pub logs_schedule: u64,
-    pub contracts: Vec<String>,
     pub daemon: Daemon,
 }
 
@@ -95,14 +93,7 @@ impl Settings {
         config_builder
             .add_source(File::with_name("config/default"))
             .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
-            .add_source(
-                Environment::default()
-                    .try_parsing(true)
-                    .separator("__")
-                    .with_list_parse_key("opencti.contracts")
-                    .with_list_parse_key("openbas.contracts")
-                    .list_separator(","),
-            )
+            .add_source(Environment::default().try_parsing(true).separator("__"))
             .build()?
             .try_deserialize()
     }

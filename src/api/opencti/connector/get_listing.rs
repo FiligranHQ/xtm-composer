@@ -13,22 +13,16 @@ pub struct GetConnectorsVariables<'a> {
 }
 
 #[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "Query", variables = "GetConnectorsVariables")]
+#[cynic(graphql_type = "Query")]
 pub struct GetConnectors {
-    #[arguments(managerId: $manager_id)]
-    pub connectors_for_manager: Option<Vec<ManagedConnector>>,
+    pub connectors_for_managers: Option<Vec<ManagedConnector>>,
 }
 // endregion
 
 pub async fn list(api: &ApiOpenCTI) -> Option<Vec<ApiConnector>> {
     use cynic::QueryBuilder;
 
-    let settings = crate::settings();
-    let manager_id = settings.manager.id.clone();
-    let vars = GetConnectorsVariables {
-        manager_id: (&manager_id).into(),
-    };
-    let query = GetConnectors::build(vars);
+    let query = GetConnectors::build({});
     let get_connectors = api.query_fetch(query).await;
     match get_connectors {
         Ok(connectors_response) => {
@@ -41,7 +35,7 @@ pub async fn list(api: &ApiOpenCTI) -> Option<Vec<ApiConnector>> {
                 let connectors = connectors_response
                     .data
                     .unwrap()
-                    .connectors_for_manager
+                    .connectors_for_managers
                     .unwrap()
                     .into_iter()
                     .map(|managed_connector| managed_connector.to_api_connector())

@@ -75,8 +75,8 @@ impl ComposerApi for ApiOpenCTI {
         manager::post_ping::ping(self).await
     }
 
-    async fn register(&self, platform_version: String) {
-        manager::post_register::register(self, platform_version).await
+    async fn register(&self) {
+        manager::post_register::register(self).await
     }
 
     async fn connectors(&self) -> Option<Vec<ApiConnector>> {

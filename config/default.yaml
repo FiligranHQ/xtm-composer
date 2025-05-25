@@ -15,8 +15,6 @@ opencti:
   unsecured_certificate: false
   with_proxy: false
   logs_schedule: 5 # report logs every 5 minutes
-  contracts:
-    - https://raw.githubusercontent.com/OpenCTI-Platform/connectors/refs/tags # /{version}/manifest.json
   daemon:
     selector: kubernetes
     kubernetes:
@@ -35,8 +33,6 @@ openbas:
   unsecured_certificate: false
   with_proxy: false
   logs_schedule: 5 # report logs every 5 minutes
-  contracts:
-    - https://raw.githubusercontent.com/OpenBAS-Platform/openbas/refs/tags # /{version}/manifest.json
   daemon:
     selector: portainer
     kubernetes:

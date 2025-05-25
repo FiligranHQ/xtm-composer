@@ -50,7 +50,7 @@ impl ComposerApi for ApiOpenBAS {
         todo!()
     }
 
-    async fn register(&self, platform_version: String) {
+    async fn register(&self) {
         debug!(
             api_uri = self.api_uri,
             bearer = self.bearer,
