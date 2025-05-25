@@ -1,6 +1,4 @@
-use crate::api::ApiConnector;
 use crate::api::opencti::ApiOpenCTI;
-use crate::api::opencti::connector::ManagedConnector;
 use tracing::error;
 
 // region schema
@@ -16,7 +14,7 @@ pub struct ReportConnectorLogsVariables<'a> {
 #[cynic(graphql_type = "Mutation", variables = "ReportConnectorLogsVariables")]
 pub struct ReportConnectorLogs {
     #[arguments(input: $input)]
-    pub update_connector_logs: Option<ManagedConnector>,
+    pub update_connector_logs: cynic::Id,
 }
 
 #[derive(cynic::InputObject, Debug)]
@@ -26,7 +24,7 @@ pub struct LogsConnectorStatusInput<'a> {
 }
 // endregion
 
-pub async fn logs(id: String, logs: Vec<String>, api: &ApiOpenCTI) -> Option<ApiConnector> {
+pub async fn logs(id: String, logs: Vec<String>, api: &ApiOpenCTI) -> Option<cynic::Id> {
     use cynic::MutationBuilder;
     let str_logs = logs.iter().map(|c| c.as_str()).collect();
     let vars = ReportConnectorLogsVariables {
@@ -46,8 +44,8 @@ pub async fn logs(id: String, logs: Vec<String>, api: &ApiOpenCTI) -> Option<Api
                 error!(error = errors.join(","), "Fail to patch logs");
                 None
             } else {
-                let connector = query_data.update_connector_logs.unwrap();
-                Some(connector.to_api_connector())
+                let connector_id = query_data.update_connector_logs;
+                Some(connector_id)
             }
         }
         Err(e) => {

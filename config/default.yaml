@@ -14,7 +14,7 @@ opencti:
   token: ChangeMe
   unsecured_certificate: false
   with_proxy: false
-  logs_schedule: 5 # report logs every 5 minutes
+  logs_schedule: 10 # report logs every 10 secondes maximum
   daemon:
     selector: kubernetes
     kubernetes:
@@ -32,7 +32,7 @@ openbas:
   token: ChangeMe
   unsecured_certificate: false
   with_proxy: false
-  logs_schedule: 5 # report logs every 5 minutes
+  logs_schedule: 10 # report logs every 10 secondes maximum
   daemon:
     selector: portainer
     kubernetes:

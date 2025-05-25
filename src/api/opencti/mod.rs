@@ -64,7 +64,7 @@ impl ComposerApi for ApiOpenCTI {
     }
 
     fn post_logs_schedule(&self) -> Duration {
-        Duration::from_secs(self.logs_schedule * 60)
+        Duration::from_secs(self.logs_schedule)
     }
 
     async fn version(&self) -> Option<String> {
@@ -87,7 +87,7 @@ impl ComposerApi for ApiOpenCTI {
         connector::post_status::status(id, status, self).await
     }
 
-    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<ApiConnector> {
+    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<cynic::Id> {
         connector::post_logs::logs(id, logs, self).await
     }
 }

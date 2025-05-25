@@ -39,7 +39,7 @@ impl ComposerApi for ApiOpenBAS {
     }
 
     fn post_logs_schedule(&self) -> Duration {
-        Duration::from_secs(self.logs_schedule * 60)
+        Duration::from_secs(self.logs_schedule)
     }
 
     async fn version(&self) -> Option<String> {
@@ -67,7 +67,7 @@ impl ComposerApi for ApiOpenBAS {
         todo!()
     }
 
-    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<ApiConnector> {
+    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<cynic::Id> {
         todo!()
     }
 }

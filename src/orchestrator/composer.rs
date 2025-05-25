@@ -78,6 +78,7 @@ async fn orchestrate_existing(
         let connector_logs = orchestrator.logs(&container, connector).await;
         match connector_logs {
             Some(logs) => {
+                info!(id = connector_id, "Reporting logs");
                 api.patch_logs(connector_id, logs).await;
             }
             None => {

@@ -122,5 +122,5 @@ pub trait ComposerApi {
 
     async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiConnector>;
 
-    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<ApiConnector>;
+    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<cynic::Id>;
 }
