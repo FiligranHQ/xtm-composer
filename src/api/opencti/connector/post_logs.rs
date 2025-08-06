@@ -1,4 +1,5 @@
 use crate::api::opencti::ApiOpenCTI;
+use crate::api::opencti::error_handler::handle_graphql_response;
 use tracing::error;
 
 // region schema
@@ -37,16 +38,11 @@ pub async fn logs(id: String, logs: Vec<String>, api: &ApiOpenCTI) -> Option<cyn
     let mutation_response = api.query_fetch(mutation).await;
     match mutation_response {
         Ok(response) => {
-            let query_data = response.data.unwrap();
-            let query_errors = response.errors.unwrap_or_default();
-            if !query_errors.is_empty() {
-                let errors: Vec<String> = query_errors.iter().map(|err| err.to_string()).collect();
-                error!(error = errors.join(","), "Fail to patch logs");
-                None
-            } else {
-                let connector_id = query_data.update_connector_logs;
-                Some(connector_id)
-            }
+            handle_graphql_response(
+                response,
+                "update_connector_logs",
+                "OpenCTI backend does not support XTM composer log updates. The connector will continue to run but logs won't be sent to OpenCTI."
+            ).map(|data| data.update_connector_logs)
         }
         Err(e) => {
             error!(error = e.to_string(), "Fail to push logs");

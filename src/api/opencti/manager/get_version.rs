@@ -1,3 +1,4 @@
+use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
 use tracing::error;
 
 // region schema
@@ -22,7 +23,19 @@ pub async fn version(api: &ApiOpenCTI) -> Option<String> {
     let query = GetVersion::build({});
     let get_version = api.query_fetch(query).await;
     match get_version {
-        Ok(version_response) => Some(version_response.data.unwrap().about.unwrap().version),
+        Ok(response) => {
+            handle_graphql_response(
+                response,
+                "about",
+                "OpenCTI backend does not support version query. This may indicate the backend doesn't support XTM composer."
+            ).and_then(|data| {
+                extract_optional_field(
+                    data.about,
+                    "about",
+                    "about"
+                ).map(|about| about.version)
+            })
+        }
         Err(e) => {
             error!(
                 error = e.to_string(),

@@ -1,6 +1,7 @@
 use crate::api::ApiConnector;
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
+use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
 use tracing::error;
 
 // region schema
@@ -25,23 +26,23 @@ pub async fn list(api: &ApiOpenCTI) -> Option<Vec<ApiConnector>> {
     let query = GetConnectors::build({});
     let get_connectors = api.query_fetch(query).await;
     match get_connectors {
-        Ok(connectors_response) => {
-            let query_errors = connectors_response.errors.unwrap_or_default();
-            if !query_errors.is_empty() {
-                let errors: Vec<String> = query_errors.iter().map(|err| err.to_string()).collect();
-                error!(error = errors.join(","), "Fail to list connectors");
-                None
-            } else {
-                let connectors = connectors_response
-                    .data
-                    .unwrap()
-                    .connectors_for_managers
-                    .unwrap()
-                    .into_iter()
-                    .map(|managed_connector| managed_connector.to_api_connector())
-                    .collect();
-                Some(connectors)
-            }
+        Ok(response) => {
+            handle_graphql_response(
+                response,
+                "connectors_for_managers",
+                "OpenCTI backend does not support XTM composer connector listing. The composer cannot manage connectors without backend support."
+            ).and_then(|data| {
+                extract_optional_field(
+                    data.connectors_for_managers,
+                    "connectors_for_managers",
+                    "connectors_for_managers"
+                ).map(|connectors| {
+                    connectors
+                        .into_iter()
+                        .map(|managed_connector| managed_connector.to_api_connector())
+                        .collect()
+                })
+            })
         }
         Err(e) => {
             error!(error = e.to_string(), "Fail to fetch connectors");
