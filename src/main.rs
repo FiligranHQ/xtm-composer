@@ -34,6 +34,25 @@ fn settings() -> &'static Settings {
 // Global init logger
 fn init_logger() {
     let setting = Settings::new().unwrap();
+    let logger_config = &setting.manager.logger;
+    
+    // Validate log level
+    let log_level = match Level::from_str(&logger_config.level) {
+        Ok(level) => level,
+        Err(_) => panic!(
+            "Invalid log level: '{}'. Valid values are: trace, debug, info, warn, error", 
+            logger_config.level
+        )
+    };
+    
+    // Validate log format
+    if logger_config.format != "json" && logger_config.format != "pretty" {
+        panic!(
+            "Invalid log format: '{}'. Valid values are: json, pretty", 
+            logger_config.format
+        );
+    }
+    
     let current_exe_patch = env::current_exe().unwrap();
     let parent_path = current_exe_patch.parent().unwrap();
     let condition = RollingConditionBasic::new().daily();
@@ -43,18 +62,30 @@ fn init_logger() {
     let file_appender =
         BasicRollingFileAppender::new(log_file, condition, BASE_DIRECTORY_SIZE).unwrap();
     let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
-    let logger_config = setting.manager.logger;
-    let log_level = Level::from_str(logger_config.level.as_str()).unwrap();
-    let console_layer = Layer::new()
-        .with_writer(std::io::stdout.with_max_level(log_level))
-        .pretty();
-    let file_layer = Layer::new()
-        .with_writer(file_writer.with_max_level(log_level))
-        .json();
-    Registry::default()
-        .with(logger_config.directory.then(|| console_layer))
-        .with(logger_config.console.then(|| file_layer))
-        .init();
+    
+    if logger_config.format == "json" {
+        let console_layer = Layer::new()
+            .with_writer(std::io::stdout.with_max_level(log_level))
+            .json();
+        let file_layer = Layer::new()
+            .with_writer(file_writer.with_max_level(log_level))
+            .json();
+        Registry::default()
+            .with(logger_config.directory.then(|| console_layer))
+            .with(logger_config.console.then(|| file_layer))
+            .init();
+    } else {
+        let console_layer = Layer::new()
+            .with_writer(std::io::stdout.with_max_level(log_level))
+            .pretty();
+        let file_layer = Layer::new()
+            .with_writer(file_writer.with_max_level(log_level))
+            .json();
+        Registry::default()
+            .with(logger_config.directory.then(|| console_layer))
+            .with(logger_config.console.then(|| file_layer))
+            .init();
+    }
 }
 
 // Init opencti

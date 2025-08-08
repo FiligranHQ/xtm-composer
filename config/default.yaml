@@ -1,10 +1,11 @@
 manager:
-  id: # Manager id is mandatory
+  id: default-manager-id # Manager id is mandatory
   name: Filigran connector manager
   execute_schedule: 10 # Check every 10 secs
   ping_alive_schedule: 60 # Ping every 60 seconds
   logger:
     level: info
+    format: json
     directory: true
     console: true
 

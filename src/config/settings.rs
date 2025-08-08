@@ -9,8 +9,14 @@ const ENV_PRODUCTION: &str = "production";
 #[allow(unused)]
 pub struct Logger {
     pub level: String,
+    #[serde(default = "default_log_format")]
+    pub format: String,
     pub directory: bool,
     pub console: bool,
+}
+
+fn default_log_format() -> String {
+    "json".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
