@@ -1,5 +1,6 @@
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::manager::ConnectorManager;
+use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
 use crate::settings;
 use tracing::error;
 
@@ -41,20 +42,17 @@ pub async fn ping(api: &ApiOpenCTI) -> Option<String> {
     let mutation_response = api.query_fetch(mutation).await;
     match mutation_response {
         Ok(response) => {
-            let query_errors = response.errors.unwrap_or_default();
-            if !query_errors.is_empty() {
-                let errors: Vec<String> = query_errors.iter().map(|err| err.to_string()).collect();
-                error!(error = errors.join(","), "Fail to ping api");
-                None
-            } else {
-                let version = response
-                    .data
-                    .unwrap()
-                    .update_connector_manager_status
-                    .unwrap()
-                    .about_version;
-                Some(version)
-            }
+            handle_graphql_response(
+                response,
+                "update_connector_manager_status",
+                "OpenCTI backend does not support XTM composer manager ping. The composer will continue to run but won't be able to report its status to OpenCTI."
+            ).and_then(|data| {
+                extract_optional_field(
+                    data.update_connector_manager_status,
+                    "update_connector_manager_status",
+                    "update_connector_manager_status"
+                ).map(|manager| manager.about_version)
+            })
         }
         Err(err) => {
             error!(error = err.to_string(), "Fail to ping api");

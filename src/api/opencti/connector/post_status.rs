@@ -1,5 +1,6 @@
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
+use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
 use crate::api::{ApiConnector, ConnectorStatus};
 
 use crate::api::opencti::opencti as schema;
@@ -62,13 +63,18 @@ pub async fn status(id: String, status: ConnectorStatus, api: &ApiOpenCTI) -> Op
     let mutation = UpdateConnectorCurrentStatus::build(vars);
     let mutation_response = api.query_fetch(mutation).await;
     match mutation_response {
-        Ok(connector_response) => {
-            let connector = connector_response
-                .data
-                .unwrap()
-                .update_connector_current_status
-                .unwrap();
-            Some(connector.to_api_connector())
+        Ok(response) => {
+            handle_graphql_response(
+                response,
+                "update_connector_current_status",
+                "OpenCTI backend does not support XTM composer status updates. The connector will continue to run but status won't be updated in OpenCTI."
+            ).and_then(|data| {
+                extract_optional_field(
+                    data.update_connector_current_status,
+                    "update_connector_current_status",
+                    "update_connector_current_status"
+                ).map(|connector| connector.to_api_connector())
+            })
         }
         Err(e) => {
             error!(error = e.to_string(), "Fail to modify status");

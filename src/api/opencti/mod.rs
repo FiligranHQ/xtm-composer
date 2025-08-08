@@ -9,6 +9,7 @@ use std::time::Duration;
 
 pub mod connector;
 pub mod manager;
+pub mod error_handler;
 
 const BEARER: &str = "Bearer";
 const AUTHORIZATION_HEADER: &str = "Authorization";
