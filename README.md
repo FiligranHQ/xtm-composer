@@ -40,3 +40,7 @@ If you don't have any orchestration system and you use direct docker-composer, i
 XTM composer is a product designed and developed by the company [Filigran](https://filigran.io).
 
 <a href="https://filigran.io" alt="Filigran"><img src="https://github.com/OpenCTI-Platform/opencti/raw/master/.github/img/logo_filigran.png" width="300" /></a>
+
+## Release
+
+Push a tag with a format X.X.X on master branch: the docker image is build with this tag too.

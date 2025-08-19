@@ -1,14 +1,19 @@
-name: build
+name: release-xtm-composer
 
 on:
   push:
-    branches:
-      - master
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
 
 jobs:
   build:
+    if: github.event.base_ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
+      - name: display information
+        run: |
+          echo "Starting releasing version ${{ github.ref_name }}"
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -22,4 +27,4 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: filigran/${{ github.event.repository.name }}:latest
+          tags: filigran/${{ github.event.repository.name }}:${{ github.ref_name }}
