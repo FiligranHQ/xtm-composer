@@ -1,5 +1,6 @@
 use serde::Serialize;
 use crate::api::{ApiConnector, ApiContractConfig};
+use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
 
 pub mod get_listing;
 pub mod post_status;
@@ -34,6 +35,7 @@ pub struct ManagedConnector {
 impl ManagedConnector {
     pub fn to_api_connector(&self) -> ApiConnector {
         let private_key = crate::settings().manager.credentials_key;
+        let priv_key = RsaPrivateKey::from_pkcs1_pem(private_key);
         let contract_configuration = self
             .manager_contract_configuration
             .clone()
@@ -41,7 +43,7 @@ impl ManagedConnector {
             .into_iter()
             .map(|c|
                 if c.encrypted.unwrap_or_default() {
-                    let dec_data = priv_key.decrypt(&private_key, c.value.unwrap_or_default()).expect("failed to decrypt");
+                    let dec_data = priv_key.decrypt(Pkcs1v15Encrypt, c.value.unwrap_or_default()).expect("failed to decrypt");
                     ApiContractConfig {
                         key: c.key,
                         value: &dec_data,

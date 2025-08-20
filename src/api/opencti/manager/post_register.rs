@@ -5,7 +5,7 @@ use crate::api::opencti::opencti as schema;
 use crate::config::settings::Settings;
 use cynic;
 use tracing::{error, info};
-use rsa::{RsaPublicKey};
+use rsa::{RsaPublicKey, RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
 
 // region schema
 #[derive(cynic::QueryVariables, Debug)]
@@ -34,7 +34,8 @@ pub async fn register(api: &ApiOpenCTI) {
     use cynic::MutationBuilder;
 
     let settings = crate::settings();
-    let pub_key = RsaPublicKey::from(&settings.manager.credentials_key);
+    let priv_key = RsaPrivateKey::from_pkcs1_pem(settings.manager.credentials_key)?;
+    let pub_key = RsaPublicKey::from(&priv_key);
 
     let vars = RegisterConnectorsManageVariables {
         input: RegisterConnectorsManagerInput {
