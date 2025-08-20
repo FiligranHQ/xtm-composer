@@ -3,11 +3,10 @@ name: release-xtm-composer
 on:
   push:
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+"
+      - '*'
 
 jobs:
   build:
-    if: github.event.base_ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - name: display information
