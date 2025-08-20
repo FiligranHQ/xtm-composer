@@ -12,6 +12,7 @@ use crate::api::opencti::opencti as schema;
 pub struct ConnectorContractConfiguration {
     pub key: String,
     pub value: Option<String>,
+    pub encrypted: Option<bool>
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
@@ -32,11 +33,26 @@ pub struct ManagedConnector {
 
 impl ManagedConnector {
     pub fn to_api_connector(&self) -> ApiConnector {
+        let private_key = crate::settings().manager.credentials_key;
         let contract_configuration = self
             .manager_contract_configuration
             .clone()
             .unwrap()
             .into_iter()
+            .map(|c|
+                if c.encrypted.unwrap_or_default() {
+                    let dec_data = priv_key.decrypt(&private_key, c.value.unwrap_or_default()).expect("failed to decrypt");
+                    ApiContractConfig {
+                        key: c.key,
+                        value: &dec_data,
+                    }
+                } else {
+                    ApiContractConfig {
+                        key: c.key,
+                        value: c.value.unwrap_or_default(),
+                    }
+                }
+            )
             .map(|c| ApiContractConfig {
                 key: c.key,
                 value: c.value.unwrap_or_default(),

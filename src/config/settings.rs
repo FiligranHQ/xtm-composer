@@ -27,6 +27,7 @@ pub struct Manager {
     pub logger: Logger,
     pub execute_schedule: u64,
     pub ping_alive_schedule: u64,
+    pub credentials_key: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]

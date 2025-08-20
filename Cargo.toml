@@ -4,6 +4,7 @@ version = "0.0.2"
 edition = "2024"
 
 [dependencies]
+rsa = {version = "0.9.8"}
 bollard = { version = "0.18.1" }
 futures = { version = "0.3.31" }
 url = { version = "2.5.4" }
