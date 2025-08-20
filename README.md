@@ -43,4 +43,7 @@ XTM composer is a product designed and developed by the company [Filigran](https
 
 ## Release
 
-Push a tag with a format X.X.X on master branch: the docker image is build with this tag too.
+1. Change version in cargo.toml (ex:1.0.0)
+2. Push that version on master
+3. Create a git tag with same numbers (ex:1.0.0)
+4. Push the git tag with a format X.X.X on master branch: the docker image is build with this tag too.
