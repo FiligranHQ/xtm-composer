@@ -26,6 +26,7 @@ pub struct RegisterConnectorsManager {
 pub struct RegisterConnectorsManagerInput<'a> {
     pub id: &'a cynic::Id,
     pub name: &'a str,
+    #[cynic(rename = "public_key")]
     pub public_key: &'a str,
 }
 // endregion

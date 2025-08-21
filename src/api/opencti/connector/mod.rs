@@ -43,12 +43,13 @@ impl ManagedConnector {
             .into_iter()
             .map(|c|
                 if c.encrypted.unwrap_or_default() {
-                    let unwrapped_data = c.value.unwrap_or_default().as_bytes();
-                    let dec_data = priv_key.decrypt(Pkcs1v15Encrypt, &unwrapped_data).expect("failed to decrypt");
-                    let dec_data_as_str = str::from_utf8(&dec_data);
+                    let value = c.value.unwrap_or_default();
+                    let value_as_bytes = value.as_bytes();
+                    let dec_data = priv_key.decrypt(Pkcs1v15Encrypt, &value_as_bytes).expect("failed to decrypt");
+                    let dec_data_as_str = str::from_utf8(&dec_data).unwrap().to_string();
                     ApiContractConfig {
                         key: c.key,
-                        value: dec_data_as_str.parse().unwrap(),
+                        value: dec_data_as_str,
                     }
                 } else {
                     ApiContractConfig {
