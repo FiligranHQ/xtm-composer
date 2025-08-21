@@ -34,8 +34,8 @@ pub struct ManagedConnector {
 
 impl ManagedConnector {
     pub fn to_api_connector(&self) -> ApiConnector {
-        let private_key = crate::settings().manager.credentials_key;
-        let priv_key = RsaPrivateKey::from_pkcs1_pem(private_key);
+        let settings = crate::settings();
+        let priv_key = RsaPrivateKey::from_pkcs1_pem(&settings.manager.credentials_key).unwrap();
         let contract_configuration = self
             .manager_contract_configuration
             .clone()
@@ -43,10 +43,12 @@ impl ManagedConnector {
             .into_iter()
             .map(|c|
                 if c.encrypted.unwrap_or_default() {
-                    let dec_data = priv_key.decrypt(Pkcs1v15Encrypt, c.value.unwrap_or_default()).expect("failed to decrypt");
+                    let unwrapped_data = c.value.unwrap_or_default().as_bytes();
+                    let dec_data = priv_key.decrypt(Pkcs1v15Encrypt, &unwrapped_data).expect("failed to decrypt");
+                    let dec_data_as_str = str::from_utf8(&dec_data);
                     ApiContractConfig {
                         key: c.key,
-                        value: &dec_data,
+                        value: dec_data_as_str.parse().unwrap(),
                     }
                 } else {
                     ApiContractConfig {
@@ -55,10 +57,6 @@ impl ManagedConnector {
                     }
                 }
             )
-            .map(|c| ApiContractConfig {
-                key: c.key,
-                value: c.value.unwrap_or_default(),
-            })
             .collect();
         ApiConnector {
             id: self.id.clone().into_inner(),
