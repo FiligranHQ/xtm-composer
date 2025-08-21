@@ -2,7 +2,6 @@ use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::manager::ConnectorManager;
 use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
 use crate::api::opencti::opencti as schema;
-use crate::config::settings::Settings;
 use cynic;
 use tracing::{error, info};
 use rsa::{RsaPublicKey, RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
@@ -27,6 +26,7 @@ pub struct RegisterConnectorsManager {
 pub struct RegisterConnectorsManagerInput<'a> {
     pub id: &'a cynic::Id,
     pub name: &'a str,
+    pub public_key: &'a str,
 }
 // endregion
 
