@@ -23,3 +23,10 @@ jobs:
         with:
           push: true
           tags: filigran/${{ github.event.repository.name }}:latest
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Redeploy on customer-dev
+        run: |
+          kubectl --server=https://api.staging.eu-west.filigran.io --token=${{ secrets.K8S_TOKEN_DEV }} -n customer-dev rollout restart deployment -l app=xtm-composer
