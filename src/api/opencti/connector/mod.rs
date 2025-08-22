@@ -7,6 +7,7 @@ pub mod post_status;
 pub mod post_logs;
 
 use cynic;
+use base64::{Engine as _,engine::{self, general_purpose}};
 use crate::api::opencti::opencti as schema;
 
 #[derive(cynic::QueryFragment, Debug, Clone, Serialize)]
@@ -44,8 +45,8 @@ impl ManagedConnector {
             .map(|c|
                 if c.encrypted.unwrap_or_default() {
                     let value = c.value.unwrap_or_default();
-                    let value_as_bytes = value.as_bytes();
-                    let dec_data = priv_key.decrypt(Pkcs1v15Encrypt, &value_as_bytes).expect("failed to decrypt");
+                    let encrypted_bytes = general_purpose::STANDARD.decode(value).expect("failed to decode base64r");
+                    let dec_data = priv_key.decrypt(Pkcs1v15Encrypt, &encrypted_bytes).expect("failed to decrypt");
                     let dec_data_as_str = str::from_utf8(&dec_data).unwrap().to_string();
                     ApiContractConfig {
                         key: c.key,
