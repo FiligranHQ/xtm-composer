@@ -18,6 +18,7 @@ use tracing_subscriber::fmt::Layer;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Registry, layer::SubscriberExt};
+use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -89,9 +90,32 @@ fn init_logger() {
 }
 
 // Init opencti
+pub fn verify_opencti_crendentials_key() {
+    let setting = settings();
+    let crendentials_key = &setting.manager.credentials_key;
+
+    // Ensure that the key looks correct
+    if !crendentials_key.starts_with("-----BEGIN RSA PRIVATE KEY-----") || !crendentials_key.ends_with("-----END RSA PRIVATE KEY-----") {
+        panic!(
+            "Invalid private key format"
+        );
+    }
+
+    // Attempt to create an RsaPrivateKey from PEM data
+    match RsaPrivateKey::from_pkcs1_pem(crendentials_key) {
+        Ok(key) => {
+            info!("Successfully created RsaPrivateKey");
+        },
+        Err(e) => {
+            panic!("Failed to decode private key: {}", e);
+        },
+    };
+}
+
 fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     let setting = settings();
     if setting.opencti.enable {
+        verify_opencti_crendentials_key();
         let opencti_alive = opencti_alive();
         orchestrations.push(opencti_alive);
         let opencti_orchestration = opencti_orchestration();
