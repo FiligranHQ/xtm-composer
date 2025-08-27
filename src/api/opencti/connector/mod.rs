@@ -35,7 +35,6 @@ pub struct ManagedConnector {
 
 impl ManagedConnector {
     pub fn to_api_connector(&self, private_key: &RsaPrivateKey) -> ApiConnector {
-        let settings = crate::settings();
         let contract_configuration = self
             .manager_contract_configuration
             .clone()
