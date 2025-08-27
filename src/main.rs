@@ -90,7 +90,7 @@ fn init_logger() {
 }
 
 // Init opencti
-pub fn verify_opencti_crendentials_key() {
+pub fn verify_opencti_credentials_key() {
     let setting = settings();
     let crendentials_key = &setting.manager.credentials_key;
 
@@ -115,7 +115,7 @@ pub fn verify_opencti_crendentials_key() {
 fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     let setting = settings();
     if setting.opencti.enable {
-        verify_opencti_crendentials_key();
+        verify_opencti_credentials_key();
         let opencti_alive = opencti_alive();
         orchestrations.push(opencti_alive);
         let opencti_orchestration = opencti_orchestration();
