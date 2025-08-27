@@ -36,11 +36,27 @@ pub struct ManagedConnector {
 
 impl ManagedConnector {
 
-    pub fn parse_encrypted_field(&self,  private_key: &RsaPrivateKey, encrypted_value: String) -> Result<String, Self::Error> {
-        let encrypted_bytes = general_purpose::STANDARD.decode(encrypted_value).expect("failed to decode base64r");
-        let dec_data = private_key.decrypt(Pkcs1v15Encrypt, &encrypted_bytes).expect("failed to decrypt");
-        let dec_data_as_str = str::from_utf8(&dec_data).unwrap().to_string();
-        Ok(dec_data_as_str)
+    pub fn parse_encrypted_field(&self,  private_key: &RsaPrivateKey, encrypted_value: String) -> String {
+        let encrypted_bytes_result = general_purpose::STANDARD.decode(encrypted_value);
+        match encrypted_bytes_result {
+            Ok(encrypted_bytes) => {
+                let decoded_data_result = private_key.decrypt(Pkcs1v15Encrypt, &encrypted_bytes);
+                match decoded_data_result {
+                    Ok(decoded_data) => {
+                        let dec_data_as_str = str::from_utf8(&decoded_data).unwrap().to_string();
+                        dec_data_as_str
+                    }
+                    Err(err) => {
+                        warn!("Incorrect encrypted data decrypt");
+                        String::from("")
+                    }
+                }
+            }
+            Err(err) => {
+                warn!("Incorrect value bas64 decode");
+                String::from("")
+            }
+        }
     }
 
     pub fn to_api_connector(&self, private_key: &RsaPrivateKey) -> ApiConnector {
@@ -53,20 +69,9 @@ impl ManagedConnector {
                 if c.encrypted.unwrap_or_default() {
                     let value = c.value.unwrap_or_default();
                     let decoded_value = self.parse_encrypted_field(private_key, value);
-                    match decoded_value {
-                        Ok(value) => {
-                            ApiContractConfig {
-                                key: c.key,
-                                value,
-                            }
-                        }
-                        Err(err) => {
-                            warn!(err, "Incorrect value decryption");
-                            ApiContractConfig {
-                                key: c.key,
-                                value: "".parse().unwrap(),
-                            }
-                        }
+                    ApiContractConfig {
+                        key: c.key,
+                        value: decoded_value,
                     }
                 } else {
                     ApiContractConfig {
