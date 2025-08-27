@@ -8,7 +8,7 @@ pub mod post_logs;
 
 use cynic;
 use base64::{Engine as _,engine::{self, general_purpose}};
-use crate::api::opencti::opencti as schema;
+use crate::api::opencti::{opencti as schema, ApiOpenCTI};
 
 #[derive(cynic::QueryFragment, Debug, Clone, Serialize)]
 pub struct ConnectorContractConfiguration {
@@ -34,9 +34,8 @@ pub struct ManagedConnector {
 }
 
 impl ManagedConnector {
-    pub fn to_api_connector(&self) -> ApiConnector {
+    pub fn to_api_connector(&self, private_key: &RsaPrivateKey) -> ApiConnector {
         let settings = crate::settings();
-        let priv_key = RsaPrivateKey::from_pkcs1_pem(&settings.manager.credentials_key).unwrap();
         let contract_configuration = self
             .manager_contract_configuration
             .clone()
@@ -46,7 +45,7 @@ impl ManagedConnector {
                 if c.encrypted.unwrap_or_default() {
                     let value = c.value.unwrap_or_default();
                     let encrypted_bytes = general_purpose::STANDARD.decode(value).expect("failed to decode base64r");
-                    let dec_data = priv_key.decrypt(Pkcs1v15Encrypt, &encrypted_bytes).expect("failed to decrypt");
+                    let dec_data = private_key.decrypt(Pkcs1v15Encrypt, &encrypted_bytes).expect("failed to decrypt");
                     let dec_data_as_str = str::from_utf8(&dec_data).unwrap().to_string();
                     ApiContractConfig {
                         key: c.key,
