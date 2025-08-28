@@ -35,6 +35,7 @@ pub struct Daemon {
     pub selector: String,
     pub portainer: Option<Portainer>,
     pub kubernetes: Option<Kubernetes>,
+    pub docker: Option<Docker>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -78,6 +79,27 @@ pub struct Portainer {
 pub struct Kubernetes {
     pub base_deployment: Option<Deployment>,
     pub base_deployment_json: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct Docker {
+    pub network_mode: Option<String>,
+    pub extra_hosts: Option<Vec<String>>,
+    pub dns: Option<Vec<String>>,
+    pub dns_search: Option<Vec<String>>,
+    pub privileged: Option<bool>,
+    pub cap_add: Option<Vec<String>>,
+    pub cap_drop: Option<Vec<String>>,
+    pub security_opt: Option<Vec<String>>,
+    pub userns_mode: Option<String>,
+    pub pid_mode: Option<String>,
+    pub ipc_mode: Option<String>,
+    pub uts_mode: Option<String>,
+    pub runtime: Option<String>,
+    pub shm_size: Option<i64>,
+    pub sysctls: Option<std::collections::HashMap<String, String>>,
+    pub ulimits: Option<Vec<std::collections::HashMap<String, serde_json::Value>>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

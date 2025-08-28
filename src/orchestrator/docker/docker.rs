@@ -7,8 +7,8 @@ use bollard::container::{
     Config, CreateContainerOptions, InspectContainerOptions, ListContainersOptions, LogsOptions,
     RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
 };
+use bollard::models::HostConfig;
 use bollard::image::CreateImageOptions;
-use bollard::models::ContainerConfig;
 use futures::TryStreamExt;
 use futures::future;
 use std::collections::HashMap;
@@ -184,10 +184,91 @@ impl Orchestrator for DockerOrchestrator {
                     .map(|config| format!("{}={}", config.key, config.value))
                     .collect::<Vec<String>>();
                 let labels = self.labels(connector);
-                let connector_config = ContainerConfig {
+                
+                // Build host config with Docker options
+                let mut host_config = HostConfig::default();
+                
+                // Get settings and check for Docker options
+                let settings = crate::settings();
+                let docker_options = settings.opencti.daemon.docker.as_ref();
+                
+                if let Some(docker_opts) = docker_options {
+                    // Apply Docker options to host config
+                    if let Some(network_mode) = &docker_opts.network_mode {
+                        host_config.network_mode = Some(network_mode.clone());
+                    }
+                    if let Some(extra_hosts) = &docker_opts.extra_hosts {
+                        host_config.extra_hosts = Some(extra_hosts.clone());
+                    }
+                    if let Some(dns) = &docker_opts.dns {
+                        host_config.dns = Some(dns.clone());
+                    }
+                    if let Some(dns_search) = &docker_opts.dns_search {
+                        host_config.dns_search = Some(dns_search.clone());
+                    }
+                    if let Some(privileged) = docker_opts.privileged {
+                        host_config.privileged = Some(privileged);
+                    }
+                    if let Some(cap_add) = &docker_opts.cap_add {
+                        host_config.cap_add = Some(cap_add.clone());
+                    }
+                    if let Some(cap_drop) = &docker_opts.cap_drop {
+                        host_config.cap_drop = Some(cap_drop.clone());
+                    }
+                    if let Some(security_opt) = &docker_opts.security_opt {
+                        host_config.security_opt = Some(security_opt.clone());
+                    }
+                    if let Some(userns_mode) = &docker_opts.userns_mode {
+                        host_config.userns_mode = Some(userns_mode.clone());
+                    }
+                    if let Some(pid_mode) = &docker_opts.pid_mode {
+                        host_config.pid_mode = Some(pid_mode.clone());
+                    }
+                    if let Some(ipc_mode) = &docker_opts.ipc_mode {
+                        host_config.ipc_mode = Some(ipc_mode.clone());
+                    }
+                    if let Some(uts_mode) = &docker_opts.uts_mode {
+                        host_config.uts_mode = Some(uts_mode.clone());
+                    }
+                    if let Some(runtime) = &docker_opts.runtime {
+                        host_config.runtime = Some(runtime.clone());
+                    }
+                    if let Some(shm_size) = docker_opts.shm_size {
+                        host_config.shm_size = Some(shm_size);
+                    }
+                    if let Some(sysctls) = &docker_opts.sysctls {
+                        host_config.sysctls = Some(sysctls.clone());
+                    }
+                    if let Some(ulimits) = &docker_opts.ulimits {
+                        // Convert ulimits from HashMap to bollard's expected format
+                        let ulimits_vec: Vec<bollard::models::ResourcesUlimits> = ulimits.iter()
+                            .filter_map(|ulimit_map| {
+                                if let (Some(name), Some(soft), Some(hard)) = (
+                                    ulimit_map.get("name").and_then(|v| v.as_str()),
+                                    ulimit_map.get("soft").and_then(|v| v.as_i64()),
+                                    ulimit_map.get("hard").and_then(|v| v.as_i64()),
+                                ) {
+                                    Some(bollard::models::ResourcesUlimits {
+                                        name: Some(name.to_string()),
+                                        soft: Some(soft),
+                                        hard: Some(hard),
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        if !ulimits_vec.is_empty() {
+                            host_config.ulimits = Some(ulimits_vec);
+                        }
+                    }
+                }
+                
+                let config = Config {
                     image: Some(connector.image.clone()),
                     env: Some(container_env_variables),
                     labels: Some(labels),
+                    host_config: Some(host_config),
                     ..Default::default()
                 };
 
@@ -198,7 +279,7 @@ impl Orchestrator for DockerOrchestrator {
                             name: connector.container_name(),
                             platform: None,
                         }),
-                        Config::from(connector_config),
+                        config,
                     )
                     .await;
                 match create_response {
