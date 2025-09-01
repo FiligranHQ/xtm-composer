@@ -103,7 +103,7 @@ pub fn verify_opencti_credentials_key() {
 
     // Attempt to create an RsaPrivateKey from PEM data
     match RsaPrivateKey::from_pkcs1_pem(crendentials_key) {
-        Ok(key) => {
+        Ok(..) => {
             info!("Successfully created RsaPrivateKey");
         },
         Err(e) => {

@@ -1,6 +1,6 @@
 use serde::Serialize;
-use crate::api::{ApiConnector, ApiContractConfig, ConnectorStatus};
-use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
+use crate::api::{ApiConnector, ApiContractConfig};
+use rsa::{Pkcs1v15Encrypt, RsaPrivateKey};
 use tracing::{warn};
 
 pub mod get_listing;
@@ -46,13 +46,13 @@ impl ManagedConnector {
                         let dec_data_as_str = str::from_utf8(&decoded_data).unwrap().to_string();
                         dec_data_as_str
                     }
-                    Err(err) => {
+                    Err(..) => {
                         warn!("Incorrect encrypted data decrypt");
                         String::from("")
                     }
                 }
             }
-            Err(err) => {
+            Err(..) => {
                 warn!("Incorrect value bas64 decode");
                 String::from("")
             }
