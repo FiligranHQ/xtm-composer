@@ -6,6 +6,7 @@ use cynic::http::CynicReqwestError;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
+use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
 
 pub mod connector;
 pub mod manager;
@@ -22,6 +23,7 @@ pub struct ApiOpenCTI {
     bearer: String,
     daemon: Daemon,
     logs_schedule: u64,
+    private_key: RsaPrivateKey,
 }
 
 impl ApiOpenCTI {
@@ -31,11 +33,13 @@ impl ApiOpenCTI {
         let api_uri = format!("{}/graphql", &settings.opencti.url);
         let daemon = settings.opencti.daemon.clone();
         let logs_schedule = settings.opencti.logs_schedule;
+        let private_key = RsaPrivateKey::from_pkcs1_pem(&settings.manager.credentials_key).unwrap();
         Self {
             api_uri,
             bearer,
             daemon,
             logs_schedule,
+            private_key
         }
     }
 

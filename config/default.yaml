@@ -3,6 +3,10 @@ manager:
   name: Filigran connector manager
   execute_schedule: 10 # Check every 10 secs
   ping_alive_schedule: 60 # Ping every 60 seconds
+  credentials_key: |-
+    -----BEGIN RSA PRIVATE KEY-----
+    YOUR 4096 BIT RSA KEY HERE
+    -----END RSA PRIVATE KEY-----
   logger:
     level: info
     format: json

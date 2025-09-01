@@ -4,6 +4,7 @@ use crate::api::opencti::error_handler::{handle_graphql_response, extract_option
 use crate::api::opencti::opencti as schema;
 use cynic;
 use tracing::{error, info};
+use rsa::{RsaPublicKey, RsaPrivateKey, pkcs1::DecodeRsaPrivateKey, pkcs1::EncodeRsaPublicKey};
 
 // region schema
 #[derive(cynic::QueryVariables, Debug)]
@@ -25,6 +26,8 @@ pub struct RegisterConnectorsManager {
 pub struct RegisterConnectorsManagerInput<'a> {
     pub id: &'a cynic::Id,
     pub name: &'a str,
+    #[cynic(rename = "public_key")]
+    pub public_key: &'a str,
 }
 // endregion
 
@@ -32,10 +35,15 @@ pub async fn register(api: &ApiOpenCTI) {
     use cynic::MutationBuilder;
 
     let settings = crate::settings();
+    let priv_key = RsaPrivateKey::from_pkcs1_pem(&settings.manager.credentials_key).unwrap();
+    let pub_key = RsaPublicKey::from(&priv_key);
+    let public_key = RsaPublicKey::to_pkcs1_pem(&pub_key, Default::default()).unwrap();
+
     let vars = RegisterConnectorsManageVariables {
         input: RegisterConnectorsManagerInput {
             id: &cynic::Id::new(&settings.manager.id),
             name: &settings.manager.name,
+            public_key: &public_key,
         },
     };
     let mutation = RegisterConnectorsManager::build(vars);

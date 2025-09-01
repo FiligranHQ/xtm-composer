@@ -39,7 +39,7 @@ pub async fn list(api: &ApiOpenCTI) -> Option<Vec<ApiConnector>> {
                 ).map(|connectors| {
                     connectors
                         .into_iter()
-                        .map(|managed_connector| managed_connector.to_api_connector())
+                        .map(|managed_connector| managed_connector.to_api_connector(&api.private_key))
                         .collect()
                 })
             })

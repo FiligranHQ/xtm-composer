@@ -73,7 +73,7 @@ pub async fn status(id: String, status: ConnectorStatus, api: &ApiOpenCTI) -> Op
                     data.update_connector_current_status,
                     "update_connector_current_status",
                     "update_connector_current_status"
-                ).map(|connector| connector.to_api_connector())
+                ).map(|connector| connector.to_api_connector(&api.private_key))
             })
         }
         Err(e) => {
