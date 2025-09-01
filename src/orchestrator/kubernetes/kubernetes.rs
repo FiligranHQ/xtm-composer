@@ -74,6 +74,8 @@ impl KubeOrchestrator {
             state: compute_state.to_string(),
             envs: annotations_as_env,
             labels: KubeOrchestrator::convert_to_map(&deployment.labels()),
+            restart_count: 0, // Will be updated from pod status
+            started_at: None, // Will be updated from pod status
         }
     }
 
@@ -166,7 +168,28 @@ impl Orchestrator for KubeOrchestrator {
             .get(connector.container_name().as_str())
             .await;
         match get_deployment {
-            Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
+            Ok(deployment) => {
+                let mut container = KubeOrchestrator::from_deployment(deployment);
+                
+                // Get pod information to enrich with restart count and started_at
+                if let Some(pod) = self.get_deployment_pod(connector.id.clone()).await {
+                    if let Some(status) = pod.status {
+                        if let Some(container_statuses) = status.container_statuses {
+                            if let Some(first_container) = container_statuses.first() {
+                                container.restart_count = first_container.restart_count as u32;
+                                
+                                if let Some(state) = &first_container.state {
+                                    if let Some(running) = &state.running {
+                                        container.started_at = running.started_at.as_ref().map(|t| t.0.to_rfc3339());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                Some(container)
+            },
             Err(err) => {
                 debug!(error = err.to_string(), "Cant find deployment");
                 None

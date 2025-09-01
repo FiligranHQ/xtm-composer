@@ -7,6 +7,7 @@ use std::str;
 pub mod get_listing;
 pub mod post_status;
 pub mod post_logs;
+pub mod post_health;
 
 use cynic;
 use base64::{Engine as _, engine::general_purpose};

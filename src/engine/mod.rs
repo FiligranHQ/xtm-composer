@@ -39,9 +39,10 @@ async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
         _ = signals::handle_stop_signals() => {}
         _ = async {
             let mut tick = Instant::now();
+            let mut health_tick = Instant::now();
             loop {
                 interval.tick().await; // Wait for period
-                composer::orchestrate(&mut tick, &orchestrator, &api).await;
+                composer::orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
             }
         } => {
             // This branch will never be reached due to the infinite loop.
