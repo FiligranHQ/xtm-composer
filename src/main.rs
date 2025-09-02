@@ -94,13 +94,6 @@ pub fn verify_opencti_credentials_key() {
     let setting = settings();
     let crendentials_key = &setting.manager.credentials_key;
 
-    // Ensure that the key looks correct
-    if !crendentials_key.starts_with("-----BEGIN PRIVATE KEY-----") || !crendentials_key.ends_with("-----END PRIVATE KEY-----") {
-        panic!(
-            "Invalid private key format"
-        );
-    }
-
     // Attempt to create an RsaPrivateKey from PEM data
     match RsaPrivateKey::from_pkcs8_pem(crendentials_key) {
         Ok(..) => {
