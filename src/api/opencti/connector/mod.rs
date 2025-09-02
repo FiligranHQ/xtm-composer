@@ -9,8 +9,8 @@ pub mod post_status;
 pub mod post_logs;
 
 use cynic;
-use base64::{Engine as _,engine::{self, general_purpose}};
-use crate::api::opencti::{opencti as schema, ApiOpenCTI};
+use base64::{Engine as _, engine::general_purpose};
+use crate::api::opencti::opencti as schema;
 
 #[derive(cynic::QueryFragment, Debug, Clone, Serialize)]
 pub struct ConnectorContractConfiguration {

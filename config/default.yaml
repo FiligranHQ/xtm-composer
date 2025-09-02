@@ -3,10 +3,19 @@ manager:
   name: Filigran connector manager
   execute_schedule: 10 # Check every 10 secs
   ping_alive_schedule: 60 # Ping every 60 seconds
-  credentials_key: |-
-    -----BEGIN RSA PRIVATE KEY-----
-    YOUR 4096 BIT RSA KEY HERE
-    -----END RSA PRIVATE KEY-----
+  
+  # RSA Private Key Configuration (one of the following is required):
+  # Option 1: Direct key content (use environment variable MANAGER__CREDENTIALS_KEY in production)
+  # credentials_key: |-
+  #   -----BEGIN RSA PRIVATE KEY-----
+  #   YOUR 4096 BIT RSA KEY HERE
+  #   -----END RSA PRIVATE KEY-----
+  
+  # Option 2: Path to key file (recommended, use environment variable MANAGER__CREDENTIALS_KEY_FILEPATH)
+  # credentials_key_filepath: /path/to/private_key.pem
+  
+  # Note: If both are set, filepath takes priority with a warning
+  
   logger:
     level: info
     format: json
@@ -50,4 +59,3 @@ openbas:
       env_type: docker
       stack: opencti-dev
       network_mode: opencti-dev_default
-
