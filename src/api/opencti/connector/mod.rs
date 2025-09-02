@@ -1,6 +1,6 @@
 use serde::Serialize;
 use crate::api::{ApiConnector, ApiContractConfig};
-use rsa::{Pkcs1v15Encrypt, RsaPrivateKey};
+use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
 use tracing::{warn};
 
 pub mod get_listing;
