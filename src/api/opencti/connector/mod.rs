@@ -38,6 +38,7 @@ pub struct ManagedConnector {
 impl ManagedConnector {
 
     pub fn parse_encrypted_field(&self,  private_key: &RsaPrivateKey, encrypted_value: String) -> String {
+        println!("Coded data: {}", encrypted_value);
         let encrypted_bytes_result = general_purpose::STANDARD.decode(encrypted_value);
         match encrypted_bytes_result {
             Ok(encrypted_bytes) => {
@@ -45,6 +46,7 @@ impl ManagedConnector {
                 match decoded_data_result {
                     Ok(decoded_data) => {
                         let dec_data_as_str = str::from_utf8(&decoded_data).unwrap().to_string();
+                        println!("Decoded data: {}", dec_data_as_str);
                         dec_data_as_str
                     }
                     Err(..) => {

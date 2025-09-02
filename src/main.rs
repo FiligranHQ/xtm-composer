@@ -18,7 +18,7 @@ use tracing_subscriber::fmt::Layer;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Registry, layer::SubscriberExt};
-use rsa::{RsaPrivateKey, pkcs1::DecodeRsaPrivateKey};
+use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -36,24 +36,24 @@ fn settings() -> &'static Settings {
 fn init_logger() {
     let setting = Settings::new().unwrap();
     let logger_config = &setting.manager.logger;
-    
+
     // Validate log level
     let log_level = match Level::from_str(&logger_config.level) {
         Ok(level) => level,
         Err(_) => panic!(
-            "Invalid log level: '{}'. Valid values are: trace, debug, info, warn, error", 
+            "Invalid log level: '{}'. Valid values are: trace, debug, info, warn, error",
             logger_config.level
         )
     };
-    
+
     // Validate log format
     if logger_config.format != "json" && logger_config.format != "pretty" {
         panic!(
-            "Invalid log format: '{}'. Valid values are: json, pretty", 
+            "Invalid log format: '{}'. Valid values are: json, pretty",
             logger_config.format
         );
     }
-    
+
     let current_exe_patch = env::current_exe().unwrap();
     let parent_path = current_exe_patch.parent().unwrap();
     let condition = RollingConditionBasic::new().daily();
@@ -63,7 +63,7 @@ fn init_logger() {
     let file_appender =
         BasicRollingFileAppender::new(log_file, condition, BASE_DIRECTORY_SIZE).unwrap();
     let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
-    
+
     if logger_config.format == "json" {
         let console_layer = Layer::new()
             .with_writer(std::io::stdout.with_max_level(log_level))
@@ -95,14 +95,14 @@ pub fn verify_opencti_credentials_key() {
     let crendentials_key = &setting.manager.credentials_key;
 
     // Ensure that the key looks correct
-    if !crendentials_key.starts_with("-----BEGIN RSA PRIVATE KEY-----") || !crendentials_key.ends_with("-----END RSA PRIVATE KEY-----") {
+    if !crendentials_key.starts_with("-----BEGIN PRIVATE KEY-----") || !crendentials_key.ends_with("-----END PRIVATE KEY-----") {
         panic!(
             "Invalid private key format"
         );
     }
 
     // Attempt to create an RsaPrivateKey from PEM data
-    match RsaPrivateKey::from_pkcs1_pem(crendentials_key) {
+    match RsaPrivateKey::from_pkcs8_pem(crendentials_key) {
         Ok(..) => {
             info!("Successfully created RsaPrivateKey");
         },
