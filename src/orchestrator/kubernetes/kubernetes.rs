@@ -5,7 +5,7 @@ use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
-use k8s_openapi::api::core::v1::{Container, EnvVar, Pod, PodSpec, PodTemplateSpec};
+use k8s_openapi::api::core::v1::{Container, ContainerStatus, EnvVar, Pod, PodSpec, PodTemplateSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use kube::api::{DeleteParams, LogParams, Patch, PatchParams};
 use kube::{
@@ -158,43 +158,55 @@ impl KubeOrchestrator {
         base_deployment.merge_from(target_deployment);
         base_deployment
     }
+
+    // Enrich container with pod information
+    fn enrich_container_from_pod(&self, container: &mut OrchestratorContainer, pod: Pod) {
+        let container_status = pod.status
+            .and_then(|status| status.container_statuses)
+            .and_then(|statuses| statuses.first().cloned());
+        
+        if let Some(status) = container_status {
+            container.restart_count = status.restart_count as u32;
+            
+            if let Some(started_at) = self.extract_started_at(&status) {
+                container.started_at = Some(started_at);
+            }
+        }
+    }
+    
+    // Extract started_at timestamp from container status
+    fn extract_started_at(&self, container_status: &ContainerStatus) -> Option<String> {
+        container_status.state
+            .as_ref()
+            .and_then(|state| state.running.as_ref())
+            .and_then(|running| running.started_at.as_ref())
+            .map(|timestamp| timestamp.0.to_rfc3339())
+    }
 }
 
 #[async_trait]
 impl Orchestrator for KubeOrchestrator {
     async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        let get_deployment = self
+        let deployment = match self
             .deployments
             .get(connector.container_name().as_str())
-            .await;
-        match get_deployment {
-            Ok(deployment) => {
-                let mut container = KubeOrchestrator::from_deployment(deployment);
-                
-                // Get pod information to enrich with restart count and started_at
-                if let Some(pod) = self.get_deployment_pod(connector.id.clone()).await {
-                    if let Some(status) = pod.status {
-                        if let Some(container_statuses) = status.container_statuses {
-                            if let Some(first_container) = container_statuses.first() {
-                                container.restart_count = first_container.restart_count as u32;
-                                
-                                if let Some(state) = &first_container.state {
-                                    if let Some(running) = &state.running {
-                                        container.started_at = running.started_at.as_ref().map(|t| t.0.to_rfc3339());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                Some(container)
-            },
+            .await
+        {
+            Ok(dep) => dep,
             Err(err) => {
                 debug!(error = err.to_string(), "Cant find deployment");
-                None
+                return None;
             }
+        };
+        
+        let mut container = KubeOrchestrator::from_deployment(deployment);
+        
+        // Enrich container with pod information
+        if let Some(pod) = self.get_deployment_pod(connector.id.clone()).await {
+            self.enrich_container_from_pod(&mut container, pod);
         }
+        
+        Some(container)
     }
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
