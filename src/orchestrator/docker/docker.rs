@@ -45,15 +45,23 @@ impl Orchestrator for DockerOrchestrator {
             .inspect_container(container_name.as_str(), opts)
             .await;
         match container {
-            Ok(docker_container) => Some(OrchestratorContainer {
-                id: docker_container.id.unwrap(),
-                name: DockerOrchestrator::normalize_name(docker_container.name),
-                state: docker_container.state.unwrap().status.unwrap().to_string(),
-                envs: DockerOrchestrator::convert_labels(
-                    docker_container.config.clone()?.env.unwrap(),
-                ),
-                labels: docker_container.config.clone()?.labels.unwrap(),
-            }),
+            Ok(docker_container) => {
+                let state = docker_container.state.unwrap();
+                let restart_count = docker_container.restart_count.unwrap_or(0) as u32;
+                let started_at = state.started_at;
+                
+                Some(OrchestratorContainer {
+                    id: docker_container.id.unwrap(),
+                    name: DockerOrchestrator::normalize_name(docker_container.name),
+                    state: state.status.unwrap().to_string(),
+                    envs: DockerOrchestrator::convert_labels(
+                        docker_container.config.clone()?.env.unwrap(),
+                    ),
+                    labels: docker_container.config.clone()?.labels.unwrap(),
+                    restart_count,
+                    started_at,
+                })
+            },
             Err(_) => {
                 debug!(name = container_name, "Could not find docker container");
                 None
@@ -87,6 +95,8 @@ impl Orchestrator for DockerOrchestrator {
                         state: docker_container.state.unwrap(),
                         envs: HashMap::new(),
                         labels: docker_container.labels.unwrap(),
+                        restart_count: 0, // Not available in list, will be updated by get()
+                        started_at: None, // Not available in list, will be updated by get()
                     }
                 })
                 .collect(),

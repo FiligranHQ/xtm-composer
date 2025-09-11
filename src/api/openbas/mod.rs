@@ -70,4 +70,8 @@ impl ComposerApi for ApiOpenBAS {
     async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<cynic::Id> {
         todo!()
     }
+
+    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<cynic::Id> {
+        todo!()
+    }
 }

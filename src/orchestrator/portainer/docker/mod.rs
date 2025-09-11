@@ -37,6 +37,7 @@ pub struct PortainerDeployResponse {
 #[serde(rename_all(deserialize = "PascalCase"))]
 pub struct PortainerGetResponseState {
     pub status: String,
+    pub started_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -53,4 +54,5 @@ pub struct PortainerGetResponse {
     pub name: String,
     pub config: PortainerGetResponseConfig,
     pub state: PortainerGetResponseState,
+    pub restart_count: Option<i64>,
 }

@@ -1,5 +1,6 @@
 use crate::api::{ApiConnector, ConnectorStatus};
 use async_trait::async_trait;
+use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -16,6 +17,8 @@ pub struct OrchestratorContainer {
     pub state: String,
     pub labels: HashMap<String, String>,
     pub envs: HashMap<String, String>,
+    pub restart_count: u32,
+    pub started_at: Option<String>,
 }
 
 impl OrchestratorContainer {
@@ -29,6 +32,18 @@ impl OrchestratorContainer {
 
     pub fn extract_opencti_hash(&self) -> &String {
         self.envs.get("OPENCTI_CONFIG_HASH").unwrap()
+    }
+
+    pub fn is_in_reboot_loop(&self) -> bool {
+        if self.restart_count > 3 {
+            if let Some(started_at_str) = &self.started_at {
+                if let Ok(started_at) = DateTime::parse_from_rfc3339(started_at_str) {
+                    let uptime = Utc::now() - started_at.with_timezone(&Utc);
+                    return uptime < Duration::minutes(5);
+                }
+            }
+        }
+        false
     }
 }
 

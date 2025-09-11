@@ -2,7 +2,7 @@ use crate::api::{ApiConnector, ComposerApi, ConnectorStatus, RequestedStatus};
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 async fn orchestrate_missing(
@@ -27,6 +27,7 @@ async fn orchestrate_missing(
 
 async fn orchestrate_existing(
     tick: &mut Instant,
+    health_tick: &mut Instant,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
     connector: &ApiConnector,
@@ -38,10 +39,54 @@ async fn orchestrate_existing(
     let connector_status = ConnectorStatus::from_str(current_status_fetch.as_str()).unwrap();
     let requested_status_fetch = connector.requested_status.clone();
     let container_status = orchestrator.state_converter(&container);
+    // Check for reboot loop and send health metrics
+    let is_in_reboot_loop = container.is_in_reboot_loop();
+    let final_status = if is_in_reboot_loop {
+        warn!(
+            id = connector_id,
+            restart_count = container.restart_count,
+            "Reboot loop detected"
+        );
+        // For now, we still report it as Started but with a warning log
+        // In the future, we could add a new status like ConnectorStatus::Critical
+        container_status
+    } else {
+        container_status
+    };
+    
     // Update the connector status if needed
-    let container_status_not_aligned = container_status != connector_status;
+    let container_status_not_aligned = final_status != connector_status;
+    
+    // Detect if connector just started
+    let just_started = container_status_not_aligned && 
+                       final_status == ConnectorStatus::Started && 
+                       connector_status == ConnectorStatus::Stopped;
+    
+    // Send health metrics if:
+    // - Connector just started (immediate reporting)
+    // - OR connector is running and 30 seconds have elapsed
+    let now = Instant::now();
+    let should_send_health = just_started || 
+        (final_status == ConnectorStatus::Started && 
+         now.duration_since(health_tick.clone()) >= Duration::from_secs(30));
+    
+    if should_send_health {
+        if let Some(started_at) = &container.started_at {
+            info!(id = connector_id, "Reporting health metrics");
+            api.patch_health(
+                connector_id.clone(),
+                container.restart_count,
+                started_at.clone(),
+                is_in_reboot_loop,
+            ).await;
+        }
+        // Reset timer only for running connectors
+        if final_status == ConnectorStatus::Started {
+            *health_tick = now;
+        }
+    }
     if container_status_not_aligned {
-        api.patch_status(connector.id.clone(), container_status)
+        api.patch_status(connector.id.clone(), final_status)
             .await;
         info!(id = connector_id, "Patch status");
     }
@@ -91,6 +136,7 @@ async fn orchestrate_existing(
 
 pub async fn orchestrate(
     tick: &mut Instant,
+    health_tick: &mut Instant,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
 ) {
@@ -105,7 +151,7 @@ pub async fn orchestrate(
             let container_get = orchestrator.get(connector).await;
             match container_get {
                 Some(container) => {
-                    orchestrate_existing(tick, orchestrator, api, connector, container).await
+                    orchestrate_existing(tick, health_tick, orchestrator, api, connector, container).await
                 }
                 None => orchestrate_missing(orchestrator, api, connector).await,
             }

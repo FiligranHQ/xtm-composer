@@ -77,9 +77,11 @@ impl Orchestrator for PortainerDockerOrchestrator {
             Some(OrchestratorContainer {
                 id: response_data.id,
                 name: response_data.name,
-                state: response_data.state.status,
+                state: response_data.state.status.clone(),
                 labels: response_data.config.labels,
                 envs: container_envs,
+                restart_count: response_data.restart_count.unwrap_or(0) as u32,
+                started_at: response_data.state.started_at,
             })
         } else {
             None
@@ -111,6 +113,8 @@ impl Orchestrator for PortainerDockerOrchestrator {
                             state: summary.state.unwrap(),
                             envs: HashMap::new(),
                             labels: summary.labels.unwrap(),
+                            restart_count: 0, // Not available in list, will be updated by get()
+                            started_at: None, // Not available in list, will be updated by get()
                         }
                     })
                     .collect();
