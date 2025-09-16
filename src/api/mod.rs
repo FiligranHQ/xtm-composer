@@ -2,8 +2,10 @@ use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::Duration;
+use tracing::info;
 
 pub mod openbas;
 pub mod opencti;
@@ -18,12 +20,14 @@ pub struct ContractsManifest {
 pub struct EnvVariable {
     pub key: String,
     pub value: String,
+    pub is_sensitive: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct ApiContractConfig {
     pub key: String,
     pub value: String,
+    pub is_sensitive: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -92,17 +96,62 @@ impl ApiConnector {
             .map(|config| EnvVariable {
                 key: config.key.clone(),
                 value: config.value.clone(),
+                is_sensitive: config.is_sensitive,
             })
             .collect::<Vec<EnvVariable>>();
         envs.push(EnvVariable {
             key: "OPENCTI_URL".into(),
             value: settings.opencti.url.clone(),
+            is_sensitive: false,
         });
         envs.push(EnvVariable {
             key: "OPENCTI_CONFIG_HASH".into(),
             value: self.contract_hash.clone(),
+            is_sensitive: false,
         });
         envs
+    }
+
+    /// Display environment variables with sensitive values masked (if configured)
+    pub fn display_env_variables(&self) {
+        let settings = crate::settings();
+        
+        // Check if display is enabled in configuration
+        let should_display = settings.manager.debug
+            .as_ref()
+            .map_or(false, |debug| debug.show_env_vars);
+        
+        if !should_display {
+            return;
+        }
+        
+        // Check if we should show sensitive values
+        let show_sensitive = settings.manager.debug
+            .as_ref()
+            .map_or(false, |debug| debug.show_sensitive_env_vars);
+        
+        let envs = self.container_envs();
+        
+        // Build environment variables map with masked sensitive values
+        let env_vars: HashMap<String, String> = envs
+            .into_iter()
+            .map(|env| {
+                let value = if env.is_sensitive && !show_sensitive {
+                    "***REDACTED***".to_string()
+                } else {
+                    env.value
+                };
+                (env.key, value)
+            })
+            .collect();
+        
+        // Log with structured fields
+        info!(
+            connector_name = %self.name,
+            container_name = %self.container_name(),
+            env_vars = ?env_vars,
+            "Starting connector"
+        );
     }
 }
 

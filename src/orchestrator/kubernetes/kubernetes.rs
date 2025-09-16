@@ -221,6 +221,7 @@ impl Orchestrator for KubeOrchestrator {
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+        connector.display_env_variables();
         self.set_deployment_scale(connector, 1).await;
     }
 

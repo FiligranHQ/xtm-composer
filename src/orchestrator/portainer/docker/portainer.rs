@@ -135,7 +135,8 @@ impl Orchestrator for PortainerDockerOrchestrator {
             .collect()
     }
 
-    async fn start(&self, container: &OrchestratorContainer, _connector: &ApiConnector) -> () {
+    async fn start(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+        connector.display_env_variables();
         let start_container_uri = format!("{}/{}/start", self.container_uri, container.id);
         self.client.post(start_container_uri).send().await.unwrap();
     }
