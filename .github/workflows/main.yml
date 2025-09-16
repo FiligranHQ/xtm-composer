@@ -18,7 +18,7 @@ jobs:
           - runner: ubuntu-latest
             platform: linux/amd64
           - runner: ubuntu-24.04-arm
-            arch: linux/arm64
+            platform: linux/arm64
 
     steps:
       - name: Prepare
