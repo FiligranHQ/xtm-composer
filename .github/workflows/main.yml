@@ -25,7 +25,7 @@ jobs:
           tags: filigran/${{ github.event.repository.name }}:latest
 
       - name: Setup kubectl
-        uses: azure/setup-kubectl@v3
+        uses: azure/setup-kubectl@v4
 
       - name: Redeploy on customer-dev
         run: |
