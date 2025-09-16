@@ -39,7 +39,6 @@ pub struct ManagedConnector {
 impl ManagedConnector {
 
     pub fn parse_encrypted_field(&self,  private_key: &RsaPrivateKey, encrypted_value: String) -> String {
-        println!("Coded data: {}", encrypted_value);
         let encrypted_bytes_result = general_purpose::STANDARD.decode(encrypted_value);
         match encrypted_bytes_result {
             Ok(encrypted_bytes) => {
@@ -47,7 +46,6 @@ impl ManagedConnector {
                 match decoded_data_result {
                     Ok(decoded_data) => {
                         let dec_data_as_str = str::from_utf8(&decoded_data).unwrap().to_string();
-                        println!("Decoded data: {}", dec_data_as_str);
                         dec_data_as_str
                     }
                     Err(..) => {
@@ -69,21 +67,24 @@ impl ManagedConnector {
             .clone()
             .unwrap()
             .into_iter()
-            .map(|c|
-                if c.encrypted.unwrap_or_default() {
+            .map(|c| {
+                let is_sensitive = c.encrypted.unwrap_or_default();
+                if is_sensitive {
                     let value = c.value.unwrap_or_default();
                     let decoded_value = self.parse_encrypted_field(private_key, value);
                     ApiContractConfig {
                         key: c.key,
                         value: decoded_value,
+                        is_sensitive: true,
                     }
                 } else {
                     ApiContractConfig {
                         key: c.key,
                         value: c.value.unwrap_or_default(),
+                        is_sensitive: false,
                     }
                 }
-            )
+            })
             .collect();
         ApiConnector {
             id: self.id.clone().into_inner(),

@@ -21,6 +21,15 @@ fn default_log_format() -> String {
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
+pub struct Debug {
+    #[serde(default)]
+    pub show_env_vars: bool,
+    #[serde(default)]
+    pub show_sensitive_env_vars: bool,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
 pub struct Manager {
     pub id: String,
     pub name: String,
@@ -29,6 +38,7 @@ pub struct Manager {
     pub ping_alive_schedule: u64,
     pub credentials_key: Option<String>,
     pub credentials_key_filepath: Option<String>,
+    pub debug: Option<Debug>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

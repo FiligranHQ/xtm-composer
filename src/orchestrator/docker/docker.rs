@@ -108,6 +108,7 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+        connector.display_env_variables();
         let container_name = connector.container_name();
         let _ = self
             .docker
