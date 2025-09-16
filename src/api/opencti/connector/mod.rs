@@ -94,6 +94,7 @@ impl ManagedConnector {
                             ApiContractConfig {
                                 key: c.key,
                                 value: String::from(""),
+                                is_sensitive: true,
                             }
                         }
                     }
