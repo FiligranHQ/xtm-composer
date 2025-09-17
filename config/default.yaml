@@ -32,6 +32,11 @@ opencti:
   daemon:
     selector: kubernetes
     kubernetes:
+      # Image pull policy for K8s containers created by xtmcomposer
+      # Valid values: Always, IfNotPresent, Never  
+      # Default: IfNotPresent
+      # Environment variable: OPENCTI__DAEMON__KUBERNETES__IMAGE_PULL_POLICY
+      image_pull_policy: IfNotPresent
       base_deployment:
     portainer:
       api: https://host.docker.internal:9443
@@ -50,6 +55,11 @@ openbas:
   daemon:
     selector: portainer
     kubernetes:
+      # Image pull policy for K8s containers created by xtmcomposer
+      # Valid values: Always, IfNotPresent, Never  
+      # Default: IfNotPresent
+      # Environment variable: OPENBAS__DAEMON__KUBERNETES__IMAGE_PULL_POLICY
+      image_pull_policy: IfNotPresent
       base_deployment:
     portainer:
       api: https://localhost:9443

@@ -13,7 +13,7 @@ use kube::{
     api::{Api, ListParams, PostParams, ResourceExt},
 };
 use std::collections::{BTreeMap, HashMap};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 impl KubeOrchestrator {
     pub async fn new(config: Kubernetes) -> Self {
@@ -24,6 +24,28 @@ impl KubeOrchestrator {
             pods,
             deployments,
             config,
+        }
+    }
+
+    // Validate and return image pull policy
+    fn get_image_pull_policy(&self) -> String {
+        const VALID_POLICIES: [&str; 3] = ["Always", "IfNotPresent", "Never"];
+        const DEFAULT_POLICY: &str = "IfNotPresent";
+        
+        match &self.config.image_pull_policy {
+            Some(policy) if VALID_POLICIES.contains(&policy.as_str()) => {
+                policy.clone()
+            }
+            Some(invalid_policy) => {
+                warn!(
+                    "Invalid image_pull_policy '{}'. Valid values: {:?}. Using default: {}",
+                    invalid_policy, VALID_POLICIES, DEFAULT_POLICY
+                );
+                DEFAULT_POLICY.to_string()
+            }
+            None => {
+                DEFAULT_POLICY.to_string()
+            }
         }
     }
 
@@ -104,7 +126,8 @@ impl KubeOrchestrator {
     ) -> Deployment {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(connector);
-        let is_starting = connector.requested_status.clone().eq("starting");
+        let is_starting = &connector.requested_status == "starting";
+        
         let target_deployment = Deployment {
             metadata: ObjectMeta {
                 name: Some(connector.container_name()),
@@ -132,7 +155,7 @@ impl KubeOrchestrator {
                             name: connector.container_name(),
                             image: Some(connector.image.clone()),
                             env: Some(pod_env),
-                            image_pull_policy: Some("IfNotPresent".into()),
+                            image_pull_policy: Some(self.get_image_pull_policy()),
                             ..Default::default()
                         }],
                         ..Default::default()
