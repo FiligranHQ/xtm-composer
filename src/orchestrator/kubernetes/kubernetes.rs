@@ -126,8 +126,7 @@ impl KubeOrchestrator {
     ) -> Deployment {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(connector);
-        let is_starting = connector.requested_status.clone().eq("starting");
-        let image_pull_policy = self.get_image_pull_policy();
+        let is_starting = &connector.requested_status == "starting";
         
         let target_deployment = Deployment {
             metadata: ObjectMeta {
@@ -156,7 +155,7 @@ impl KubeOrchestrator {
                             name: connector.container_name(),
                             image: Some(connector.image.clone()),
                             env: Some(pod_env),
-                            image_pull_policy: Some(image_pull_policy),
+                            image_pull_policy: Some(self.get_image_pull_policy()),
                             ..Default::default()
                         }],
                         ..Default::default()
