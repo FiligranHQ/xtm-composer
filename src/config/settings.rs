@@ -91,6 +91,7 @@ pub struct Portainer {
 pub struct Kubernetes {
     pub base_deployment: Option<Deployment>,
     pub base_deployment_json: Option<String>,
+    pub image_pull_policy: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
