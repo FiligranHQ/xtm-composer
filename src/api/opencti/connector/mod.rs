@@ -22,10 +22,6 @@ pub struct ConnectorContractConfiguration {
     pub key: String,
     pub value: Option<String>,
     pub encrypted: Option<bool>,
-    #[cynic(rename = "encryptionKey")]
-    pub encryption_key: Option<String>,
-    #[cynic(rename = "encryptionIv")]
-    pub encryption_iv: Option<String>
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
@@ -46,26 +42,32 @@ pub struct ManagedConnector {
 
 impl ManagedConnector {
 
-    pub fn parse_aes_encrypted_value(&self,  private_key: &RsaPrivateKey, encrypted_value: String, encrypted_aes_key: String, encrypted_aes_iv: String) -> Result<String, Box<dyn std::error::Error>> {
-        let aes_key_encrypted_bytes = general_purpose::STANDARD.decode(encrypted_aes_key)?;
-        let aes_key_decrypted_bytes = private_key.decrypt(Pkcs1v15Encrypt, &aes_key_encrypted_bytes)?;
+    pub fn parse_aes_encrypted_value(&self,  private_key: &RsaPrivateKey, encrypted_value: String) -> Result<String, Box<dyn std::error::Error>> {
+        let encrypted_bytes = general_purpose::STANDARD.decode(encrypted_value)?;
 
-        let aes_iv_encrypted_bytes = general_purpose::STANDARD.decode(encrypted_aes_iv)?;
-        let aes_iv_decrypted_bytes = private_key.decrypt(Pkcs1v15Encrypt, &aes_iv_encrypted_bytes)?;
+        let version = encrypted_bytes[0];
+        if version != 1 {
+            warn!(version, "Encryption version not handled");
+            Ok(String::from(""))
+        } else {
+            let aes_key_iv_encrypted_bytes = &encrypted_bytes[1..=512];
+            let aes_key_iv_decrypted_bytes = private_key.decrypt(Pkcs1v15Encrypt, &aes_key_iv_encrypted_bytes)?;
+            let aes_key_bytes = &aes_key_iv_decrypted_bytes[0..32];
+            let aes_iv_bytes = &aes_key_iv_decrypted_bytes[32..44];
+            let encrypted_value_bytes = &encrypted_bytes[513..];
 
-        let encrypted_value_bytes = general_purpose::STANDARD.decode(encrypted_value)?;
-
-        let cipher = Aes256Gcm::new_from_slice(&aes_key_decrypted_bytes)?;
-        let nonce = Nonce::from_slice(&aes_iv_decrypted_bytes);
-        let plaintext_result = cipher.decrypt(&nonce, encrypted_value_bytes.as_ref());
-        match plaintext_result {
-            Ok(plaintext) => {
-                let decoded_value = str::from_utf8(&plaintext).unwrap().to_string();
-                Ok(decoded_value)
-            },
-            Err(e) => {
-                warn!(error = e.to_string(), "Fail to decode value");
-                Ok(String::from(""))
+            let cipher = Aes256Gcm::new_from_slice(&aes_key_bytes)?;
+            let nonce = Nonce::from_slice(&aes_iv_bytes);
+            let plaintext_result = cipher.decrypt(&nonce, encrypted_value_bytes.as_ref());
+            match plaintext_result {
+                Ok(plaintext) => {
+                    let decoded_value = str::from_utf8(&plaintext).unwrap().to_string();
+                    Ok(decoded_value)
+                },
+                Err(e) => {
+                    warn!(error = e.to_string(), "Fail to decode value");
+                    Ok(String::from(""))
+                }
             }
         }
     }
@@ -80,9 +82,7 @@ impl ManagedConnector {
                 let is_sensitive = c.encrypted.unwrap_or_default();
                 if is_sensitive {
                     let encrypted_value = c.value.unwrap_or_default();
-                    let encrypted_key = c.encryption_key.unwrap_or_default();
-                    let encrypted_iv = c.encryption_iv.unwrap_or_default();
-                    let decoded_value_result = self.parse_aes_encrypted_value(private_key, encrypted_value, encrypted_key, encrypted_iv);
+                    let decoded_value_result = self.parse_aes_encrypted_value(private_key, encrypted_value);
                     match decoded_value_result {
                         Ok(decoded_value) => ApiContractConfig {
                             key: c.key,
