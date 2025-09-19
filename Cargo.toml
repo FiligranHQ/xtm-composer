@@ -27,3 +27,8 @@ aes-gcm = "0.10.3"
 
 [build-dependencies]
 cynic-codegen = { version = "3" }
+
+[lints.clippy]
+module_inception = "allow"
+needless_update = "allow"
+borrowed_box = "allow"

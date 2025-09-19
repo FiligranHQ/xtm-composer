@@ -1,0 +1,14 @@
+# Clippy linting configuration for xtm-composer
+# Simple and practical rules
+
+# Cognitive complexity threshold for functions
+cognitive-complexity-threshold = 30
+
+# Allow more arguments for complex API calls
+too-many-arguments-threshold = 8
+
+# Allow more lines in functions (orchestration logic can be long)
+too-many-lines-threshold = 150
+
+# Minimum supported Rust version
+msrv = "1.70.0"

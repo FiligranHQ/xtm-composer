@@ -1,0 +1,15 @@
+# Rust formatting configuration for xtm-composer
+# Keep it simple and consistent with existing code patterns
+
+edition = "2021"
+max_width = 120
+tab_spaces = 4
+newline_style = "Unix"
+
+# Import organization (stable features only)
+reorder_imports = true
+reorder_modules = true
+
+# Keep existing code style
+use_field_init_shorthand = true
+use_try_shorthand = true

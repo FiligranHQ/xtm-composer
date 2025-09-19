@@ -3,14 +3,14 @@ use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use cynic::Operation;
 use cynic::http::CynicReqwestError;
+use rsa::RsaPrivateKey;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
-use rsa::RsaPrivateKey;
 
 pub mod connector;
-pub mod manager;
 pub mod error_handler;
+pub mod manager;
 
 const BEARER: &str = "Bearer";
 const AUTHORIZATION_HEADER: &str = "Authorization";
@@ -40,7 +40,7 @@ impl ApiOpenCTI {
             bearer,
             daemon,
             logs_schedule,
-            private_key
+            private_key,
         }
     }
 
@@ -97,7 +97,13 @@ impl ComposerApi for ApiOpenCTI {
         connector::post_logs::logs(id, logs, self).await
     }
 
-    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<cynic::Id> {
+    async fn patch_health(
+        &self,
+        id: String,
+        restart_count: u32,
+        started_at: String,
+        is_in_reboot_loop: bool,
+    ) -> Option<cynic::Id> {
         connector::post_health::health(id, restart_count, started_at, is_in_reboot_loop, self).await
     }
 }

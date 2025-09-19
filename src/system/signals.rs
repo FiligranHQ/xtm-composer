@@ -1,7 +1,7 @@
 use tracing::info;
 
 #[cfg(unix)]
-use tokio::signal::unix::{signal as unix_signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal as unix_signal};
 
 #[cfg(unix)]
 pub async fn handle_stop_signals() -> Option<()> {
@@ -19,9 +19,7 @@ pub async fn handle_stop_signals() -> Option<()> {
 pub async fn handle_stop_signals() -> Option<()> {
     use tokio::signal;
     let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
     };
     tokio::select! {
         _ = ctrl_c => {

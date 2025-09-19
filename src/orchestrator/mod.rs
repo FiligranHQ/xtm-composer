@@ -71,11 +71,7 @@ pub trait Orchestrator {
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer>;
 
-    async fn logs(
-        &self,
-        container: &OrchestratorContainer,
-        connector: &ApiConnector,
-    ) -> Option<Vec<String>>;
+    async fn logs(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> Option<Vec<String>>;
 
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus;
 }
