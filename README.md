@@ -1,9 +1,21 @@
-# XTM composer
+# XTM Composer
 
 The following repository is used to store the platform XTM composer.
-The composer allows OpenCTI / OpenBAS users to manager their connectors/collectors/injectors directly from the platform
+The composer allows OpenCTI / OpenBAS users to manage their connectors/collectors/injectors directly from the platform.
 For performance and low level access, the agent is written in Rust. Please start your journey
 with https://doc.rust-lang.org/book.
+
+## Documentation
+
+- [Installation Guide](docs/installation.md) - System requirements and installation methods
+- [Quick Start](docs/quick-start.md) - Get up and running quickly
+- [Configuration Reference](docs/configuration.md) - Complete configuration documentation
+- [Development Guide](docs/development.md) - Setup for development and contribution
+
+## Module Status
+
+- **OpenCTI**: ✅ Fully implemented and production-ready
+- **OpenBAS**: 🚧 Coming Soon
 
 ## Orchestration
 
