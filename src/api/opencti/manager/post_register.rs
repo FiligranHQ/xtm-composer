@@ -1,10 +1,10 @@
 use crate::api::opencti::ApiOpenCTI;
+use crate::api::opencti::error_handler::{extract_optional_field, handle_graphql_response};
 use crate::api::opencti::manager::ConnectorManager;
-use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
 use crate::api::opencti::opencti as schema;
 use cynic;
-use tracing::{error, info};
 use rsa::{RsaPublicKey, pkcs1::EncodeRsaPublicKey};
+use tracing::{error, info};
 
 // region schema
 #[derive(cynic::QueryVariables, Debug)]
@@ -13,10 +13,7 @@ pub struct RegisterConnectorsManageVariables<'a> {
 }
 
 #[derive(cynic::QueryFragment, Debug)]
-#[cynic(
-    graphql_type = "Mutation",
-    variables = "RegisterConnectorsManageVariables"
-)]
+#[cynic(graphql_type = "Mutation", variables = "RegisterConnectorsManageVariables")]
 pub struct RegisterConnectorsManager {
     #[arguments(input: $input)]
     pub register_connectors_manager: Option<ConnectorManager>,
@@ -54,12 +51,12 @@ pub async fn register(api: &ApiOpenCTI) {
             if let Some(data) = handle_graphql_response(
                 response,
                 "register_connectors_manager",
-                "OpenCTI backend does not support XTM composer manager registration. The composer will continue to run but won't be registered in OpenCTI."
+                "OpenCTI backend does not support XTM composer manager registration. The composer will continue to run but won't be registered in OpenCTI.",
             ) {
                 if let Some(manager) = extract_optional_field(
                     data.register_connectors_manager,
                     "register_connectors_manager",
-                    "register_connectors_manager"
+                    "register_connectors_manager",
                 ) {
                     info!(manager_id = manager.id.into_inner(), "Manager registered");
                 }

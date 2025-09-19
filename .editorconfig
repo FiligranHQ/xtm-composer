@@ -1,0 +1,68 @@
+# EditorConfig for xtm-composer
+# https://editorconfig.org
+
+# Root configuration - this is the top-most .editorconfig file
+root = true
+
+# Default settings for all files
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Rust files - Based on rustfmt.toml and VS Code settings
+[*.rs]
+indent_size = 4
+max_line_length = 120
+
+# TOML files (Cargo.toml, rustfmt.toml, clippy.toml)
+[*.toml]
+indent_size = 2
+max_line_length = 120
+
+# YAML configuration files
+[*.{yml,yaml}]
+indent_size = 2
+max_line_length = 120
+
+# JSON files
+[*.json]
+indent_size = 2
+max_line_length = 120
+
+# Markdown documentation
+[*.md]
+indent_size = 2
+max_line_length = 80
+trim_trailing_whitespace = false  # Preserve trailing spaces for line breaks
+
+# Shell scripts
+[*.sh]
+indent_size = 2
+max_line_length = 120
+
+# Dockerfile
+[Dockerfile*]
+indent_size = 2
+max_line_length = 120
+
+# Makefile (if any)
+[Makefile]
+indent_style = tab
+indent_size = 4
+
+# XML files (for IntelliJ run configurations)
+[*.xml]
+indent_size = 2
+max_line_length = 120
+
+# Git files
+[.git*]
+indent_size = 2
+
+# License and text files
+[{LICENSE,*.txt}]
+insert_final_newline = false

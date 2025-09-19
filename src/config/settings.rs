@@ -133,7 +133,7 @@ impl Settings {
         let config_builder = Config::builder();
         config_builder
             .add_source(File::with_name("config/default"))
-            .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
+            .add_source(File::with_name(&format!("config/{run_mode}")).required(false))
             .add_source(Environment::default().try_parsing(true).separator("__"))
             .build()?
             .try_deserialize()

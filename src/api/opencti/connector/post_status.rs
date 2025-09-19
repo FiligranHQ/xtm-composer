@@ -1,6 +1,6 @@
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
-use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
+use crate::api::opencti::error_handler::{extract_optional_field, handle_graphql_response};
 use crate::api::{ApiConnector, ConnectorStatus};
 
 use crate::api::opencti::opencti as schema;
@@ -14,10 +14,7 @@ pub struct UpdateConnectorCurrentStatusVariables<'a> {
 }
 
 #[derive(cynic::QueryFragment, Debug)]
-#[cynic(
-    graphql_type = "Mutation",
-    variables = "UpdateConnectorCurrentStatusVariables"
-)]
+#[cynic(graphql_type = "Mutation", variables = "UpdateConnectorCurrentStatusVariables")]
 pub struct UpdateConnectorCurrentStatus {
     #[arguments(input: $input)]
     pub update_connector_current_status: Option<ManagedConnector>,

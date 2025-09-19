@@ -36,7 +36,7 @@ pub async fn health(
     api: &ApiOpenCTI,
 ) -> Option<cynic::Id> {
     use cynic::MutationBuilder;
-    
+
     let vars = UpdateConnectorHealthVariables {
         input: HealthConnectorStatusInput {
             id: &cynic::Id::new(id),

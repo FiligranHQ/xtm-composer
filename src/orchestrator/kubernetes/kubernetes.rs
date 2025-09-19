@@ -31,11 +31,9 @@ impl KubeOrchestrator {
     fn get_image_pull_policy(&self) -> String {
         const VALID_POLICIES: [&str; 3] = ["Always", "IfNotPresent", "Never"];
         const DEFAULT_POLICY: &str = "IfNotPresent";
-        
+
         match &self.config.image_pull_policy {
-            Some(policy) if VALID_POLICIES.contains(&policy.as_str()) => {
-                policy.clone()
-            }
+            Some(policy) if VALID_POLICIES.contains(&policy.as_str()) => policy.clone(),
             Some(invalid_policy) => {
                 warn!(
                     "Invalid image_pull_policy '{}'. Valid values: {:?}. Using default: {}",
@@ -43,9 +41,7 @@ impl KubeOrchestrator {
                 );
                 DEFAULT_POLICY.to_string()
             }
-            None => {
-                DEFAULT_POLICY.to_string()
-            }
+            None => DEFAULT_POLICY.to_string(),
         }
     }
 
@@ -95,14 +91,14 @@ impl KubeOrchestrator {
             name: dep.metadata.name.unwrap(),
             state: compute_state.to_string(),
             envs: annotations_as_env,
-            labels: KubeOrchestrator::convert_to_map(&deployment.labels()),
+            labels: KubeOrchestrator::convert_to_map(deployment.labels()),
             restart_count: 0, // Will be updated from pod status
             started_at: None, // Will be updated from pod status
         }
     }
 
     async fn get_deployment_pod(&self, connector_id: String) -> Option<Pod> {
-        let lp = &ListParams::default().labels(&format!("opencti-connector-id={}", connector_id));
+        let lp = &ListParams::default().labels(&format!("opencti-connector-id={connector_id}"));
         let deployment_pods_response = self.pods.list(lp).await;
         match deployment_pods_response {
             Ok(pods) => {
@@ -119,15 +115,11 @@ impl KubeOrchestrator {
         }
     }
 
-    pub fn build_configuration(
-        &self,
-        connector: &ApiConnector,
-        labels: HashMap<String, String>,
-    ) -> Deployment {
+    pub fn build_configuration(&self, connector: &ApiConnector, labels: HashMap<String, String>) -> Deployment {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(connector);
         let is_starting = &connector.requested_status == "starting";
-        
+
         let target_deployment = Deployment {
             metadata: ObjectMeta {
                 name: Some(connector.container_name()),
@@ -175,31 +167,31 @@ impl KubeOrchestrator {
                 base_deploy = Some(serde_json::from_str(json_deploy.unwrap().as_str()).unwrap());
             }
         }
-        let mut base_deployment = base_deploy.unwrap_or(Deployment {
-            ..Default::default()
-        });
+        let mut base_deployment = base_deploy.unwrap_or(Deployment { ..Default::default() });
         base_deployment.merge_from(target_deployment);
         base_deployment
     }
 
     // Enrich container with pod information
     fn enrich_container_from_pod(&self, container: &mut OrchestratorContainer, pod: Pod) {
-        let container_status = pod.status
+        let container_status = pod
+            .status
             .and_then(|status| status.container_statuses)
             .and_then(|statuses| statuses.first().cloned());
-        
+
         if let Some(status) = container_status {
             container.restart_count = status.restart_count as u32;
-            
+
             if let Some(started_at) = self.extract_started_at(&status) {
                 container.started_at = Some(started_at);
             }
         }
     }
-    
+
     // Extract started_at timestamp from container status
     fn extract_started_at(&self, container_status: &ContainerStatus) -> Option<String> {
-        container_status.state
+        container_status
+            .state
             .as_ref()
             .and_then(|state| state.running.as_ref())
             .and_then(|running| running.started_at.as_ref())
@@ -210,36 +202,31 @@ impl KubeOrchestrator {
 #[async_trait]
 impl Orchestrator for KubeOrchestrator {
     async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        let deployment = match self
-            .deployments
-            .get(connector.container_name().as_str())
-            .await
-        {
+        let deployment = match self.deployments.get(connector.container_name().as_str()).await {
             Ok(dep) => dep,
             Err(err) => {
                 debug!(error = err.to_string(), "Cant find deployment");
                 return None;
             }
         };
-        
+
         let mut container = KubeOrchestrator::from_deployment(deployment);
-        
+
         // Enrich container with pod information
         if let Some(pod) = self.get_deployment_pod(connector.id.clone()).await {
             self.enrich_container_from_pod(&mut container, pod);
         }
-        
+
         Some(container)
     }
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
         let settings = crate::settings();
-        let lp = &ListParams::default()
-            .labels(&format!("opencti-manager={}", settings.manager.id.clone()));
+        let lp = &ListParams::default().labels(&format!("opencti-manager={}", settings.manager.id.clone()));
         let get_deployments = self.deployments.list(lp).await.unwrap();
         get_deployments
             .into_iter()
-            .map(|deployment| KubeOrchestrator::from_deployment(deployment))
+            .map(KubeOrchestrator::from_deployment)
             .collect()
     }
 
@@ -253,17 +240,11 @@ impl Orchestrator for KubeOrchestrator {
     }
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
-        let lp = &ListParams::default().labels(&format!(
-            "opencti-connector-id={}",
-            container.extract_opencti_id()
-        ));
+        let lp = &ListParams::default().labels(&format!("opencti-connector-id={}", container.extract_opencti_id()));
         let dp = &DeleteParams::default();
         let delete_response = self.deployments.delete_collection(dp, lp).await;
         match delete_response {
-            Ok(_) => info!(
-                id = container.extract_opencti_id(),
-                "Deployment successfully deleted"
-            ),
+            Ok(_) => info!(id = container.extract_opencti_id(), "Deployment successfully deleted"),
             Err(err) => error!(error = err.to_string(), "Fail removing the deployments"),
         }
     }
@@ -310,11 +291,7 @@ impl Orchestrator for KubeOrchestrator {
         }
     }
 
-    async fn logs(
-        &self,
-        _container: &OrchestratorContainer,
-        connector: &ApiConnector,
-    ) -> Option<Vec<String>> {
+    async fn logs(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> Option<Vec<String>> {
         let deployment_pod = self.get_deployment_pod(connector.id.clone()).await;
         match deployment_pod {
             Some(pod) => {

@@ -1,7 +1,7 @@
 use crate::api::ApiConnector;
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
-use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
+use crate::api::opencti::error_handler::{extract_optional_field, handle_graphql_response};
 use tracing::error;
 
 // region schema
@@ -23,7 +23,7 @@ pub struct GetConnectors {
 pub async fn list(api: &ApiOpenCTI) -> Option<Vec<ApiConnector>> {
     use cynic::QueryBuilder;
 
-    let query = GetConnectors::build({});
+    let query = GetConnectors::build(());
     let get_connectors = api.query_fetch(query).await;
     match get_connectors {
         Ok(response) => {

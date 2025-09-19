@@ -8,5 +8,5 @@ pub mod kubernetes;
 pub struct KubeOrchestrator {
     pods: Api<Pod>,
     deployments: Api<Deployment>,
-    config: Kubernetes
+    config: Kubernetes,
 }

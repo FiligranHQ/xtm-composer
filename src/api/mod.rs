@@ -115,23 +115,27 @@ impl ApiConnector {
     /// Display environment variables with sensitive values masked (if configured)
     pub fn display_env_variables(&self) {
         let settings = crate::settings();
-        
+
         // Check if display is enabled in configuration
-        let should_display = settings.manager.debug
+        let should_display = settings
+            .manager
+            .debug
             .as_ref()
-            .map_or(false, |debug| debug.show_env_vars);
-        
+            .is_some_and(|debug| debug.show_env_vars);
+
         if !should_display {
             return;
         }
-        
+
         // Check if we should show sensitive values
-        let show_sensitive = settings.manager.debug
+        let show_sensitive = settings
+            .manager
+            .debug
             .as_ref()
-            .map_or(false, |debug| debug.show_sensitive_env_vars);
-        
+            .is_some_and(|debug| debug.show_sensitive_env_vars);
+
         let envs = self.container_envs();
-        
+
         // Build environment variables map with masked sensitive values
         let env_vars: HashMap<String, String> = envs
             .into_iter()
@@ -144,7 +148,7 @@ impl ApiConnector {
                 (env.key, value)
             })
             .collect();
-        
+
         // Log with structured fields
         info!(
             connector_name = %self.name,
@@ -173,5 +177,11 @@ pub trait ComposerApi {
 
     async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<cynic::Id>;
 
-    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<cynic::Id>;
+    async fn patch_health(
+        &self,
+        id: String,
+        restart_count: u32,
+        started_at: String,
+        is_in_reboot_loop: bool,
+    ) -> Option<cynic::Id>;
 }

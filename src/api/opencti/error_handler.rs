@@ -24,22 +24,14 @@ pub fn handle_graphql_response<T>(
     match response.data {
         Some(data) => Some(data),
         None => {
-            error!(
-                operation = operation_name,
-                "{}",
-                unsupported_message
-            );
+            error!(operation = operation_name, "{}", unsupported_message);
             None
         }
     }
 }
 
 /// Helper to extract a nested optional field with error handling
-pub fn extract_optional_field<T>(
-    field: Option<T>,
-    field_name: &str,
-    operation_name: &str,
-) -> Option<T> {
+pub fn extract_optional_field<T>(field: Option<T>, field_name: &str, operation_name: &str) -> Option<T> {
     match field {
         Some(value) => Some(value),
         None => {

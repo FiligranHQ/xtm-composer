@@ -53,23 +53,23 @@ async fn orchestrate_existing(
     } else {
         container_status
     };
-    
+
     // Update the connector status if needed
     let container_status_not_aligned = final_status != connector_status;
-    
+
     // Detect if connector just started
-    let just_started = container_status_not_aligned && 
-                       final_status == ConnectorStatus::Started && 
-                       connector_status == ConnectorStatus::Stopped;
-    
+    let just_started = container_status_not_aligned
+        && final_status == ConnectorStatus::Started
+        && connector_status == ConnectorStatus::Stopped;
+
     // Send health metrics if:
     // - Connector just started (immediate reporting)
     // - OR connector is running and 30 seconds have elapsed
     let now = Instant::now();
-    let should_send_health = just_started || 
-        (final_status == ConnectorStatus::Started && 
-         now.duration_since(health_tick.clone()) >= Duration::from_secs(30));
-    
+    let should_send_health = just_started
+        || (final_status == ConnectorStatus::Started
+            && now.duration_since(*health_tick) >= Duration::from_secs(30));
+
     if should_send_health {
         if let Some(started_at) = &container.started_at {
             info!(id = connector_id, "Reporting health metrics");
@@ -78,7 +78,8 @@ async fn orchestrate_existing(
                 container.restart_count,
                 started_at.clone(),
                 is_in_reboot_loop,
-            ).await;
+            )
+            .await;
         }
         // Reset timer only for running connectors
         if final_status == ConnectorStatus::Started {
@@ -86,8 +87,7 @@ async fn orchestrate_existing(
         }
     }
     if container_status_not_aligned {
-        api.patch_status(connector.id.clone(), final_status)
-            .await;
+        api.patch_status(connector.id.clone(), final_status).await;
         info!(id = connector_id, "Patch status");
     }
     // In case of platform upgrade, we need to align all deployed connectors
@@ -95,11 +95,7 @@ async fn orchestrate_existing(
     let current_container_hash = container.extract_opencti_hash();
     if !requested_connector_hash.eq(current_container_hash) {
         // Versions are not aligned
-        info!(
-            id = connector_id,
-            hash = requested_connector_hash,
-            "Refreshing"
-        );
+        info!(id = connector_id, hash = requested_connector_hash, "Refreshing");
         orchestrator.refresh(connector).await;
     }
     // Align existing and requested status
@@ -119,7 +115,7 @@ async fn orchestrate_existing(
     }
     // Get latest logs and update opencti every 5 minutes
     let now = Instant::now();
-    if now.duration_since(tick.clone()) >= api.post_logs_schedule() {
+    if now.duration_since(*tick) >= api.post_logs_schedule() {
         let connector_logs = orchestrator.logs(&container, connector).await;
         match connector_logs {
             Some(logs) => {
@@ -157,10 +153,8 @@ pub async fn orchestrate(
             }
         }
         // Iter on each existing container to clean the containers
-        let connectors_by_id: HashMap<String, ApiConnector> = connectors
-            .iter()
-            .map(|n| (n.id.clone(), n.clone()))
-            .collect();
+        let connectors_by_id: HashMap<String, ApiConnector> =
+            connectors.iter().map(|n| (n.id.clone(), n.clone())).collect();
         let existing_containers = orchestrator.list().await;
         for container in existing_containers {
             let connector_id = container.extract_opencti_id();
