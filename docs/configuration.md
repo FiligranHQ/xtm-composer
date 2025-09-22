@@ -174,7 +174,7 @@ Settings for OpenCTI platform integration.
 - **Type**: integer
 - **Default**: `10`
 
-### 5. OpenBAS Configuration (Coming Soon)
+### 5. OpenAEV Configuration (Coming Soon)
 
 Settings for OpenBAS platform integration. **Note: OpenBAS module is not yet implemented.**
 
