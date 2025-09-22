@@ -7,6 +7,7 @@ with https://doc.rust-lang.org/book.
 
 ## Documentation
 
+- [Architecture Design](docs/architecure.md) - Detailed technical architecure documentation
 - [Installation Guide](docs/installation.md) - System requirements and installation methods
 - [Quick Start](docs/quick-start.md) - Get up and running quickly
 - [Configuration Reference](docs/configuration.md) - Complete configuration documentation
