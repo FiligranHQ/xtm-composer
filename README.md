@@ -1,7 +1,7 @@
 # XTM Composer
 
 The following repository is used to store the platform XTM composer.
-The composer allows OpenCTI / OpenBAS users to manage their connectors/collectors/injectors directly from the platform.
+The composer allows [OpenCTI](https://github.com/OpenCTI-Platform/opencti) and [OpenAEV](https://github.com/OpenAEV-Platform/openaev) users to manage their connectors/collectors/injectors directly from the platform.
 For performance and low level access, the agent is written in Rust. Please start your journey
 with https://doc.rust-lang.org/book.
 
@@ -16,7 +16,8 @@ with https://doc.rust-lang.org/book.
 ## Module Status
 
 - **OpenCTI**: ✅ Fully implemented and production-ready
-- **OpenBAS**: 🚧 Coming Soon
+  - Compatible version starts at 6.8.0
+- **OpenAEV**: 🚧 Coming Soon
 
 ## Orchestration
 
@@ -59,4 +60,4 @@ XTM composer is a product designed and developed by the company [Filigran](https
 1. Change version in cargo.toml (ex:1.0.0)
 2. Push that version on master
 3. Create a git tag with same numbers (ex:1.0.0)
-4. Push the git tag with a format X.X.X on master branch: the docker image is build with this tag too.
+4. Push a git tag in the format X.X.X to the master branch. The Docker image will be built with the same tag.

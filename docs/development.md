@@ -243,10 +243,10 @@ impl ConnectorManager {
 ```bash
 # Clone OpenCTI
 git clone https://github.com/OpenCTI-Platform/opencti.git
-cd opencti/docker
+cd opencti/opencti-platform/opencti-dev
 
 # Start OpenCTI stack
-docker-compose up -d
+docker compose up -d
 
 # OpenCTI will be available at http://localhost:4000
 # Default credentials: admin@opencti.io / admin

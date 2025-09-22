@@ -9,9 +9,9 @@ Do not hesitate to shoot us an [email](mailto:contact@opencti.io) or join us on 
 
 ## Why contribute?
 
-XTM Composer is an open source orchestration manager designed to streamline the deployment and management of OpenCTI connectors and other components. It provides a unified interface for managing complex deployments across different orchestration platforms (Docker, Kubernetes, Portainer).
+XTM Composer is an open source orchestration manager designed to streamline the deployment and management of [OpenCTI connectors](https://github.com/OpenCTI-Platform/connectors) and other components. It provides a unified interface for managing complex deployments across different orchestration platforms (Docker, Kubernetes, Portainer).
 
-Whether you are an organisation or an individual working with OpenCTI, contributing to the XTM Composer project may represent a great opportunity for you:
+Whether you are an organisation or an individual working with [OpenCTI](https://github.com/OpenCTI-Platform/opencti), contributing to the XTM Composer project may represent a great opportunity for you:
 
 * You can help grow the OpenCTI ecosystem by improving the tools that make deployment and management easier and more efficient.
 
@@ -30,7 +30,7 @@ Our goals for future releases include:
 
 * **Better observability**: Improving monitoring, logging, and debugging capabilities for managed components.
 
-* **OpenBAS integration**: Adding support for OpenBAS platform alongside OpenCTI.
+* **OpenAEV integration**: Adding support for [OpenAEV platform](https://github.com/OpenAEV-Platform/openaev) alongside OpenCTI.
 
 
 ## Code of Conduct
@@ -46,7 +46,7 @@ For general suggestions or questions about the project or the documentation, you
 
 * **Testing and reporting issues**: Just using XTM Composer and opening issues if everything is not working as expected will be a huge step forward. To report a bug, please use our [bug reporting template](https://github.com/OpenCTI-Platform/xtm-composer/issues/new?template=bug_report.md). To suggest a new feature, please use the [feature request template](https://github.com/OpenCTI-Platform/xtm-composer/issues/new?template=feature_request.md).
 
-* **Documentation improvements**: Don't hesitate to flag us an issue with the documentation if you find it incomplete or not clear enough. You can do that either by opening a [bug report](https://github.com/OpenCTI-Platform/xtm-composer/issues/new?template=bug_report.md) or by sending us a message on our [Slack channel](https://community.filigran.io).
+* **Documentation improvements**: Feel free to flag us an issue with the documentation if you find it incomplete or not clear enough. You can do that either by opening a [bug report](https://github.com/OpenCTI-Platform/xtm-composer/issues/new?template=bug_report.md) or by sending us a message on our [Slack channel](https://community.filigran.io).
 
 * **Issue triage**: You can look through opened issues and help triage them (ask for more information, suggest workarounds, suggest labels, flag issues, etc.)
 
