@@ -7,11 +7,12 @@ with https://doc.rust-lang.org/book.
 
 ## Documentation
 
-- [Architecture Design](https://github.com/OpenCTI-Platform/docs/blob/docs/deployment/integration-manager/architecture.md) - Detailed technical architecure documentation
-- [Installation Guide](https://github.com/OpenCTI-Platform/docs/blob/docs/deployment/integration-manager/installation.md) - System requirements and installation methods
-- [Quick Start](https://github.com/OpenCTI-Platform/docs/blob/issue/deployment/integration-manager/quick-start.md) - Get up and running quickly
-- [Configuration Reference](https://github.com/OpenCTI-Platform/docs/blob/docs/deployment/integration-manager/configuration.md) - Complete configuration documentation
-- [Development Guide](https://github.com/OpenCTI-Platform/docs/blob/docs/deployment/integration-manager/development.md) - Setup for development and contribution
+
+- [Architecture Design](https://docs.opencti.io/latest/deployment/integration-manager/architecture/) - Detailed technical architecure documentation
+- [Installation Guide](https://docs.opencti.io/latest/deployment/integration-manager/installation/) - System requirements and installation methods
+- [Quick Start](https://docs.opencti.io/latest/deployment/integration-manager/quick-start/) - Get up and running quickly
+- [Configuration Reference](https://docs.opencti.io/latest/deployment/integration-manager/configuration/) - Complete configuration documentation
+- [Development Guide](https://docs.opencti.io/latest/development/integration-manager/) - Setup for development and contribution
 
 ## Module Status
 
