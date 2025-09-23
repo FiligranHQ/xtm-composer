@@ -67,8 +67,43 @@ kubectl create configmap xtm-composer-config \
   -n xtm-composer
 ```
 
+4. Create service account
+XTM Composer use a service account to have authorization to start new pods and deployments on the cluster. 
+
+```bash
+cat <<EOF | kubectl apply -n xtm-composer -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: xtm-composer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: xtm-composer
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "watch", "list", "create", "update", "patch", "delete", "deletecollection"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: xtm-composer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: xtm-composer
+subjects:
+- kind: ServiceAccount
+  name: xtm-composer
+EOF
 4. Deploy XTM Composer:
-```yaml
+```bash
+cat <<EOF | kubectl apply -n xtm-composer -f -
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -106,6 +141,8 @@ spec:
       - name: keys
         secret:
           secretName: xtm-composer-keys
+     serviceAccountName: xtm-composer
+EOF
 ```
 
 ### Binary Installation
