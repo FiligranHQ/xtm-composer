@@ -21,6 +21,9 @@
 
 ## Installation Methods
 
+Create a configuration file based on your environment or add extra environment variables in the following steps.
+See [Configuration Reference](configuration.md) for more information on required configuration. 
+
 ### Docker Installation
 
 ```bash
@@ -43,6 +46,8 @@ docker run -d \
 ```
 
 ### Kubernetes Installation
+
+Note: The Kubernetes installation method described here assumes that OpenCTI is already deployed on a Kubernetes cluster.
 
 1. Create namespace:
 ```bash
@@ -67,9 +72,9 @@ kubectl create configmap xtm-composer-config \
   -n xtm-composer
 ```
 
-4. Create service account
-XTM Composer use a service account to have authorization to start new pods and deployments on the cluster. 
-
+4. Create service account:
+ 
+XTM Composer use a service account to have authorization to start new pods and deployments on the cluster.
 ```bash
 cat <<EOF | kubectl apply -n xtm-composer -f -
 apiVersion: v1
@@ -101,7 +106,9 @@ subjects:
 - kind: ServiceAccount
   name: xtm-composer
 EOF
-4. Deploy XTM Composer:
+````
+
+5.Deploy XTM Composer:
 ```bash
 cat <<EOF | kubectl apply -n xtm-composer -f -
 apiVersion: apps/v1
