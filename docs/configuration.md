@@ -176,7 +176,7 @@ Settings for OpenCTI platform integration.
 
 ### 5. OpenAEV Configuration (Coming Soon)
 
-Settings for OpenBAS platform integration. **Note: OpenBAS module is not yet implemented.**
+Settings for OpenAEV platform integration. **Note: OpenAEV module is not yet implemented.**
 
 #### openbas.enable
 - **YAML Path**: `openbas.enable`

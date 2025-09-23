@@ -4,7 +4,7 @@ Thank you for reading this documentation and considering making your contributio
 
 In order to help you understand the project, where we are heading and how you can contribute, below are several resources and answers.
 
-Do not hesitate to shoot us an [email](mailto:contact@opencti.io) or join us on our [Slack channel](https://community.filigran.io).
+Do not hesitate to shoot us an [email](mailto:contact@opencti.io) or join us on our [Slack channel](https://community.filigran.io). You can also refer to the [OpenCTI discussion channels](https://github.com/OpenCTI-Platform/opencti#discussion) for more ways to get in touch.
 
 
 ## Why contribute?
@@ -46,7 +46,7 @@ For general suggestions or questions about the project or the documentation, you
 
 * **Testing and reporting issues**: Just using XTM Composer and opening issues if everything is not working as expected will be a huge step forward. To report a bug, please use our [bug reporting template](https://github.com/OpenCTI-Platform/xtm-composer/issues/new?template=bug_report.md). To suggest a new feature, please use the [feature request template](https://github.com/OpenCTI-Platform/xtm-composer/issues/new?template=feature_request.md).
 
-* **Documentation improvements**: Feel free to flag us an issue with the documentation if you find it incomplete or not clear enough. You can do that either by opening a [bug report](https://github.com/OpenCTI-Platform/xtm-composer/issues/new?template=bug_report.md) or by sending us a message on our [Slack channel](https://community.filigran.io).
+* **Documentation improvements**: Feel free to flag us an issue with the documentation if you find it incomplete or not clear enough. You can do that either by opening a [feature request](https://github.com/OpenCTI-Platform/xtm-composer/issues/new?template=feature_request.md) for improvements, or a [bug report](https://github.com/OpenCTI-Platform/xtm-composer/issues/new?template=bug_report.md) if the documentation is incorrect or misleading. You can also send us a message on our [Slack channel](https://community.filigran.io).
 
 * **Issue triage**: You can look through opened issues and help triage them (ask for more information, suggest workarounds, suggest labels, flag issues, etc.)
 

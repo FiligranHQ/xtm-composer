@@ -159,7 +159,7 @@ xtm-composer/
 
 ```bash
 # Create feature branch
-git checkout -b feature/your-feature-name
+git switch -c feature/your-feature-name
 
 # Make changes and test
 cargo build
@@ -173,7 +173,7 @@ cargo clippy -- -D warnings
 
 # Commit changes
 git add .
-git commit -m "feat: add your feature description"
+git commit -m "[composer] Add your feature description (#issue)"
 ```
 
 ### 2. Building
