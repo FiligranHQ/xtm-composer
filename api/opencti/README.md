@@ -46,6 +46,32 @@ type AppInfo {
 }
 ```
 
+### Get Catalogs
+
+```graphql
+query getCatalogs {
+  catalogs {
+    id
+    name
+    description
+    contracts
+  }
+}
+```
+
+**Type Definition:**
+```graphql
+type Catalog {
+  id: ID!
+  name: String!
+  description: String
+  contracts: [String]
+}
+```
+
+**Description:**
+Returns the list of available catalogs and their connector contracts in OpenCTI.
+
 ### List Connectors for Managers
 
 ```graphql
