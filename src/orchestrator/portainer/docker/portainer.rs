@@ -2,8 +2,8 @@ use crate::api::{ApiConnector, ConnectorStatus};
 use crate::config::settings::Portainer;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::portainer::docker::{
-    PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
-    PortainerDockerOrchestrator, PortainerGetResponse,
+    PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse, PortainerDockerOrchestrator,
+    PortainerGetResponse,
 };
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
@@ -29,10 +29,7 @@ impl PortainerDockerOrchestrator {
             config.api, config.env_id, config.api_version
         );
         let mut headers = HeaderMap::new();
-        headers.insert(
-            X_API_KEY,
-            HeaderValue::from_bytes(config.api_key.as_bytes()).unwrap(),
-        );
+        headers.insert(X_API_KEY, HeaderValue::from_bytes(config.api_key.as_bytes()).unwrap());
         let client = Client::builder()
             .default_headers(headers)
             .danger_accept_invalid_certs(true)
@@ -55,10 +52,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
         let response_result: Result<Option<PortainerGetResponse>, _> = match response {
             Ok(data) => data.json().await,
             Err(err) => {
-                error!(
-                    error = err.to_string(),
-                    "Portainer error fetching containers"
-                );
+                error!(error = err.to_string(), "Portainer error fetching containers");
                 Ok(None)
             }
         };
@@ -94,10 +88,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
         label_filters.push(format!("opencti-manager={}", settings.manager.id.clone()));
         let filter: HashMap<String, Vec<String>> = HashMap::from([("label".into(), label_filters)]);
         let serialized_filter = serde_json::to_string(&filter).unwrap();
-        let list_uri = format!(
-            "{}/json?all=true&filters={}",
-            self.container_uri, serialized_filter
-        );
+        let list_uri = format!("{}/json?all=true&filters={}", self.container_uri, serialized_filter);
         let response = self.client.get(list_uri.clone()).send().await;
         let response_result: Result<Vec<OrchestratorContainer>, _> = match response {
             Ok(data) => {
@@ -105,8 +96,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
                 let containers = response
                     .into_iter()
                     .map(|summary| {
-                        let container_name: Option<String> =
-                            summary.names.unwrap().first().cloned();
+                        let container_name: Option<String> = summary.names.unwrap().first().cloned();
                         OrchestratorContainer {
                             id: summary.id.unwrap(),
                             name: DockerOrchestrator::normalize_name(container_name),
@@ -121,10 +111,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
                 Ok::<Vec<OrchestratorContainer>, Error>(containers)
             }
             Err(err) => {
-                error!(
-                    error = err.to_string(),
-                    "Portainer error fetching containers"
-                );
+                error!(error = err.to_string(), "Portainer error fetching containers");
                 Ok(Vec::new())
             }
         };
@@ -148,8 +135,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
         let container_name = container.name.as_str();
-        let delete_container_uri =
-            format!("{}/{}?v=0&force=true", self.container_uri, container.id);
+        let delete_container_uri = format!("{}/{}?v=0&force=true", self.container_uri, container.id);
         let remove_response = self.client.delete(delete_container_uri).send().await;
         match remove_response {
             Ok(_) => {
@@ -177,11 +163,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         // region First operation, pull the image
-        let create_image_uri = format!(
-            "{}/create?fromImage={}",
-            self.image_uri,
-            connector.image.clone()
-        );
+        let create_image_uri = format!("{}/create?fromImage={}", self.image_uri, connector.image.clone());
         let mut create_response = self.client.post(create_image_uri).send().await.unwrap();
         while let Some(_chunk) = create_response.chunk().await.unwrap() {} // Iter chunk to fetch all
         // endregion
@@ -207,12 +189,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
                 network_mode: portainer_config.network_mode,
             },
         };
-        let deploy_response = self
-            .client
-            .post(deploy_container_uri)
-            .json(&json_body)
-            .send()
-            .await;
+        let deploy_response = self.client.post(deploy_container_uri).json(&json_body).send().await;
         match deploy_response {
             Ok(response) => {
                 let deploy_data: PortainerDeployResponse = response.json().await.unwrap();
@@ -226,11 +203,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
         }
     }
 
-    async fn logs(
-        &self,
-        container: &OrchestratorContainer,
-        _connector: &ApiConnector,
-    ) -> Option<Vec<String>> {
+    async fn logs(&self, container: &OrchestratorContainer, _connector: &ApiConnector) -> Option<Vec<String>> {
         let logs_container_uri = format!(
             "{}/{}/logs?stderr=1&stdout=1&tail=100",
             self.container_uri, container.id

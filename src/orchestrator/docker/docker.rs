@@ -7,8 +7,8 @@ use bollard::container::{
     Config, CreateContainerOptions, InspectContainerOptions, ListContainersOptions, LogsOptions,
     RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
 };
-use bollard::models::HostConfig;
 use bollard::image::CreateImageOptions;
+use bollard::models::HostConfig;
 use futures::TryStreamExt;
 use futures::future;
 use std::collections::HashMap;
@@ -40,28 +40,23 @@ impl Orchestrator for DockerOrchestrator {
     async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let container_name = connector.container_name();
         let opts = Some(InspectContainerOptions::default());
-        let container = self
-            .docker
-            .inspect_container(container_name.as_str(), opts)
-            .await;
+        let container = self.docker.inspect_container(container_name.as_str(), opts).await;
         match container {
             Ok(docker_container) => {
                 let state = docker_container.state.unwrap();
                 let restart_count = docker_container.restart_count.unwrap_or(0) as u32;
                 let started_at = state.started_at;
-                
+
                 Some(OrchestratorContainer {
                     id: docker_container.id.unwrap(),
                     name: DockerOrchestrator::normalize_name(docker_container.name),
                     state: state.status.unwrap().to_string(),
-                    envs: DockerOrchestrator::convert_labels(
-                        docker_container.config.clone()?.env.unwrap(),
-                    ),
+                    envs: DockerOrchestrator::convert_labels(docker_container.config.clone()?.env.unwrap()),
                     labels: docker_container.config.clone()?.labels.unwrap(),
                     restart_count,
                     started_at,
                 })
-            },
+            }
             Err(_) => {
                 debug!(name = container_name, "Could not find docker container");
                 None
@@ -87,8 +82,7 @@ impl Orchestrator for DockerOrchestrator {
             Ok(containers) => containers
                 .into_iter()
                 .map(|docker_container| {
-                    let container_name: Option<String> =
-                        docker_container.names.unwrap().first().cloned();
+                    let container_name: Option<String> = docker_container.names.unwrap().first().cloned();
                     OrchestratorContainer {
                         id: docker_container.id.unwrap(),
                         name: DockerOrchestrator::normalize_name(container_name),
@@ -112,10 +106,7 @@ impl Orchestrator for DockerOrchestrator {
         let container_name = connector.container_name();
         let _ = self
             .docker
-            .start_container(
-                container_name.as_str(),
-                None::<StartContainerOptions<String>>,
-            )
+            .start_container(container_name.as_str(), None::<StartContainerOptions<String>>)
             .await;
     }
 
@@ -195,14 +186,14 @@ impl Orchestrator for DockerOrchestrator {
                     .map(|config| format!("{}={}", config.key, config.value))
                     .collect::<Vec<String>>();
                 let labels = self.labels(connector);
-                
+
                 // Build host config with Docker options
                 let mut host_config = HostConfig::default();
-                
+
                 // Get settings and check for Docker options
                 let settings = crate::settings();
                 let docker_options = settings.opencti.daemon.docker.as_ref();
-                
+
                 if let Some(docker_opts) = docker_options {
                     // Apply Docker options to host config
                     if let Some(network_mode) = &docker_opts.network_mode {
@@ -252,7 +243,8 @@ impl Orchestrator for DockerOrchestrator {
                     }
                     if let Some(ulimits) = &docker_opts.ulimits {
                         // Convert ulimits from HashMap to bollard's expected format
-                        let ulimits_vec: Vec<bollard::models::ResourcesUlimits> = ulimits.iter()
+                        let ulimits_vec: Vec<bollard::models::ResourcesUlimits> = ulimits
+                            .iter()
                             .filter_map(|ulimit_map| {
                                 if let (Some(name), Some(soft), Some(hard)) = (
                                     ulimit_map.get("name").and_then(|v| v.as_str()),
@@ -274,7 +266,7 @@ impl Orchestrator for DockerOrchestrator {
                         }
                     }
                 }
-                
+
                 let config = Config {
                     image: Some(connector.image.clone()),
                     env: Some(container_env_variables),
@@ -317,11 +309,7 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
-    async fn logs(
-        &self,
-        _container: &OrchestratorContainer,
-        connector: &ApiConnector,
-    ) -> Option<Vec<String>> {
+    async fn logs(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> Option<Vec<String>> {
         let opts = Some(LogsOptions::<String> {
             follow: false,
             stdout: true,
