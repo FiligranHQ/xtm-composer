@@ -1,8 +1,8 @@
-use tokio::task::JoinHandle;
-use tracing::info;
 use crate::api::ComposerApi;
 use crate::api::opencti::ApiOpenCTI;
 use crate::engine::{alive, orchestration};
+use tokio::task::JoinHandle;
+use tracing::info;
 
 pub fn opencti_alive() -> JoinHandle<()> {
     info!("Starting OpenCTI Composer ping alive");

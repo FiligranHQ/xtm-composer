@@ -9,6 +9,7 @@ use crate::engine::openbas::{openbas_alive, openbas_orchestration};
 use crate::engine::opencti::{opencti_alive, opencti_orchestration};
 use futures::future::join_all;
 use rolling_file::{BasicRollingFileAppender, RollingConditionBasic};
+use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
 use std::str::FromStr;
 use std::sync::OnceLock;
 use std::{env, fs};
@@ -18,7 +19,6 @@ use tracing_subscriber::fmt::Layer;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Registry, layer::SubscriberExt};
-use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -35,7 +35,7 @@ fn settings() -> &'static Settings {
 // Singleton RSA private key for all application
 pub fn private_key() -> &'static RsaPrivateKey {
     static KEY: OnceLock<RsaPrivateKey> = OnceLock::new();
-    KEY.get_or_init(|| load_and_verify_credentials_key())
+    KEY.get_or_init(load_and_verify_credentials_key)
 }
 
 // Global init logger
@@ -49,7 +49,7 @@ fn init_logger() {
         Err(_) => panic!(
             "Invalid log level: '{}'. Valid values are: trace, debug, info, warn, error",
             logger_config.level
-        )
+        ),
     };
 
     // Validate log format
@@ -66,31 +66,26 @@ fn init_logger() {
     let log_path = parent_path.join(BASE_DIRECTORY_LOG);
     fs::create_dir(log_path.clone()).unwrap_or_default();
     let log_file = log_path.join(PREFIX_LOG_NAME);
-    let file_appender =
-        BasicRollingFileAppender::new(log_file, condition, BASE_DIRECTORY_SIZE).unwrap();
+    let file_appender = BasicRollingFileAppender::new(log_file, condition, BASE_DIRECTORY_SIZE).unwrap();
     let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
 
     if logger_config.format == "json" {
         let console_layer = Layer::new()
             .with_writer(std::io::stdout.with_max_level(log_level))
             .json();
-        let file_layer = Layer::new()
-            .with_writer(file_writer.with_max_level(log_level))
-            .json();
+        let file_layer = Layer::new().with_writer(file_writer.with_max_level(log_level)).json();
         Registry::default()
-            .with(logger_config.directory.then(|| console_layer))
-            .with(logger_config.console.then(|| file_layer))
+            .with(logger_config.directory.then_some(console_layer))
+            .with(logger_config.console.then_some(file_layer))
             .init();
     } else {
         let console_layer = Layer::new()
             .with_writer(std::io::stdout.with_max_level(log_level))
             .pretty();
-        let file_layer = Layer::new()
-            .with_writer(file_writer.with_max_level(log_level))
-            .json();
+        let file_layer = Layer::new().with_writer(file_writer.with_max_level(log_level)).json();
         Registry::default()
-            .with(logger_config.directory.then(|| console_layer))
-            .with(logger_config.console.then(|| file_layer))
+            .with(logger_config.directory.then_some(console_layer))
+            .with(logger_config.console.then_some(file_layer))
             .init();
     }
 }
@@ -98,18 +93,18 @@ fn init_logger() {
 // Load and verify RSA private key from configuration
 pub fn load_and_verify_credentials_key() -> RsaPrivateKey {
     let setting = settings();
-    
+
     // Priority: file > environment variable
     let key_content = if let Some(filepath) = &setting.manager.credentials_key_filepath {
         // Warning if both are set
         if setting.manager.credentials_key.is_some() {
             warn!("Both credentials_key and credentials_key_filepath are set. Using filepath (priority).");
         }
-        
+
         // Read key from file
         match fs::read_to_string(filepath) {
             Ok(content) => content,
-            Err(e) => panic!("Failed to read credentials key file '{}': {}", filepath, e)
+            Err(e) => panic!("Failed to read credentials key file '{filepath}': {e}"),
         }
     } else if let Some(key) = &setting.manager.credentials_key {
         // Use environment variable or config value
@@ -119,22 +114,24 @@ pub fn load_and_verify_credentials_key() -> RsaPrivateKey {
             "No credentials key provided! Set either 'manager.credentials_key' or 'manager.credentials_key_filepath' in configuration."
         );
     };
-    
+
     // Validate key format (trim to handle trailing whitespace)
     // Check for presence of RSA PRIVATE KEY markers for PKCS#8 format
     let trimmed_content = key_content.trim();
     if !trimmed_content.contains("BEGIN PRIVATE KEY") || !trimmed_content.contains("END PRIVATE KEY") {
-        panic!("Invalid private key format. Expected PKCS#8 PEM format with 'BEGIN PRIVATE KEY' and 'END PRIVATE KEY' markers.");
+        panic!(
+            "Invalid private key format. Expected PKCS#8 PEM format with 'BEGIN PRIVATE KEY' and 'END PRIVATE KEY' markers."
+        );
     }
-    
+
     // Parse and validate RSA private key using PKCS#8 format
     match RsaPrivateKey::from_pkcs8_pem(&key_content) {
         Ok(key) => {
             info!("Successfully loaded RSA private key (PKCS#8 format)");
             key
-        },
+        }
         Err(e) => {
-            panic!("Failed to decode RSA private key: {}", e);
+            panic!("Failed to decode RSA private key: {e}");
         }
     }
 }

@@ -51,11 +51,7 @@ impl ComposerApi for ApiOpenBAS {
     }
 
     async fn register(&self) {
-        debug!(
-            api_uri = self.api_uri,
-            bearer = self.bearer,
-            "OpenBAS register"
-        );
+        debug!(api_uri = self.api_uri, bearer = self.bearer, "OpenBAS register");
         todo!()
     }
 
@@ -71,7 +67,13 @@ impl ComposerApi for ApiOpenBAS {
         todo!()
     }
 
-    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<cynic::Id> {
+    async fn patch_health(
+        &self,
+        id: String,
+        restart_count: u32,
+        started_at: String,
+        is_in_reboot_loop: bool,
+    ) -> Option<cynic::Id> {
         todo!()
     }
 }

@@ -1,4 +1,4 @@
-use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
+use crate::api::opencti::error_handler::{extract_optional_field, handle_graphql_response};
 use tracing::error;
 
 // region schema
@@ -20,7 +20,7 @@ pub struct AppInfo {
 pub async fn version(api: &ApiOpenCTI) -> Option<String> {
     use cynic::QueryBuilder;
 
-    let query = GetVersion::build({});
+    let query = GetVersion::build(());
     let get_version = api.query_fetch(query).await;
     match get_version {
         Ok(response) => {
