@@ -96,6 +96,15 @@ pub struct Kubernetes {
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
+pub struct DockerRegistry {
+    pub server: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
 pub struct Docker {
     pub network_mode: Option<String>,
     pub extra_hosts: Option<Vec<String>>,
@@ -113,6 +122,7 @@ pub struct Docker {
     pub shm_size: Option<i64>,
     pub sysctls: Option<std::collections::HashMap<String, String>>,
     pub ulimits: Option<Vec<std::collections::HashMap<String, serde_json::Value>>>,
+    pub registry: Option<DockerRegistry>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

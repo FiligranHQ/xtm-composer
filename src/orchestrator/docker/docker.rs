@@ -3,6 +3,7 @@ use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use bollard::Docker;
+use bollard::auth::DockerCredentials;
 use bollard::container::{
     Config, CreateContainerOptions, InspectContainerOptions, ListContainersOptions, LogsOptions,
     RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
@@ -165,24 +166,108 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        // We need to pull the image first
+        // Get settings and check for Docker options
+        let settings = crate::settings();
+        let docker_options = settings.opencti.daemon.docker.as_ref();
+        
+        // Get registry server URL if configured
+        let registry_server = docker_options
+            .and_then(|opts| opts.registry.as_ref())
+            .and_then(|reg| reg.server.as_ref());
+        
+        // Build authentication credentials if configured
+        let has_auth = docker_options
+            .and_then(|opts| opts.registry.as_ref())
+            .is_some();
+        
+        let auth = docker_options
+            .and_then(|opts| opts.registry.as_ref())
+            .map(|registry| DockerCredentials {
+                username: registry.username.clone(),
+                password: registry.password.clone(),
+                auth: None,
+                email: registry.email.clone(),
+                serveraddress: registry.server.clone(),
+                identitytoken: None,
+                registrytoken: None,
+            });
+
+        // Construct the full image name with registry if configured
+        let image_name = if let Some(registry) = registry_server {
+            // Check if the image already has a registry prefix
+            // (contains a dot before the first slash, like registry.com/image)
+            let needs_prefix = if let Some(first_slash_pos) = connector.image.find('/') {
+                // Check if there's a dot before the first slash (indicating a registry)
+                !connector.image[..first_slash_pos].contains('.')
+            } else {
+                // No slash at all, it's just an image name
+                true
+            };
+            
+            if needs_prefix {
+                // Add the registry prefix
+                let full_image = format!("{}/{}", registry.trim_end_matches('/'), connector.image);
+                info!("Prefixing image with registry: {} -> {}", connector.image, full_image);
+                full_image
+            } else {
+                // Image already has a registry prefix
+                info!("Image already has registry prefix: {}", connector.image);
+                connector.image.clone()
+            }
+        } else {
+            connector.image.clone()
+        };
+
+        // Log the pull attempt
+        if let Some(registry) = registry_server {
+            info!("Starting pull of {} from custom registry: {}", image_name, registry);
+            if has_auth {
+                debug!("Using authentication for registry: {}", registry);
+            }
+        } else {
+            info!("Starting pull of {} from Docker Hub", image_name);
+        }
+
+        // Pull the image with optional authentication
         let deploy_response = self
             .docker
             .create_image(
                 Some(CreateImageOptions {
-                    from_image: connector.image.as_str(),
+                    from_image: image_name.as_str(),
                     ..Default::default()
                 }),
                 None,
-                None,
+                auth,
             )
             .try_for_each(|info| {
-                info!(
-                    "{} {:?} {:?} pulling...",
-                    connector.image,
-                    info.status.as_deref(),
-                    info.progress.as_deref()
-                );
+                // Log with registry information
+                if let Some(registry) = registry_server {
+                    if let Some(status) = info.status.as_deref() {
+                        if let Some(progress) = info.progress.as_deref() {
+                            info!("Pulling {} from {} - Status: {} Progress: {}", 
+                                image_name, registry, status, progress);
+                        } else {
+                            info!("Pulling {} from {} - Status: {}", 
+                                image_name, registry, status);
+                        }
+                    }
+                } else {
+                    if let Some(status) = info.status.as_deref() {
+                        if let Some(progress) = info.progress.as_deref() {
+                            info!("Pulling {} from Docker Hub - Status: {} Progress: {}", 
+                                image_name, status, progress);
+                        } else {
+                            info!("Pulling {} from Docker Hub - Status: {}", 
+                                image_name, status);
+                        }
+                    }
+                }
+                
+                // Log any error messages
+                if let Some(error) = info.error.as_deref() {
+                    error!("Pull error for {}: {}", image_name, error);
+                }
+                
                 future::ok(())
             })
             .await;
@@ -198,10 +283,6 @@ impl Orchestrator for DockerOrchestrator {
                 
                 // Build host config with Docker options
                 let mut host_config = HostConfig::default();
-                
-                // Get settings and check for Docker options
-                let settings = crate::settings();
-                let docker_options = settings.opencti.daemon.docker.as_ref();
                 
                 if let Some(docker_opts) = docker_options {
                     // Apply Docker options to host config
@@ -310,8 +391,29 @@ impl Orchestrator for DockerOrchestrator {
                 // Return the created container
                 created
             }
-            Err(_) => {
-                error!(image = connector.image, "Error fetching container image");
+            Err(err) => {
+                // Detailed error logging
+                if let Some(registry) = registry_server {
+                    error!(
+                        "Failed to pull image '{}' (resolved as '{}') from registry '{}'. Error: {:?}", 
+                        connector.image,
+                        image_name, 
+                        registry,
+                        err
+                    );
+                    // Provide helpful hints
+                    error!("Possible causes: 1) Registry URL is incorrect, 2) Authentication failed, 3) Image doesn't exist on registry");
+                    if !has_auth {
+                        error!("Note: No authentication configured for registry. Check docker.registry configuration.");
+                    }
+                } else {
+                    error!(
+                        "Failed to pull image '{}' from Docker Hub. Error: {:?}", 
+                        image_name,
+                        err
+                    );
+                    error!("Possible causes: 1) Image doesn't exist, 2) Network issues, 3) Docker Hub rate limiting");
+                }
                 None
             }
         }
