@@ -13,7 +13,7 @@ use bollard::image::CreateImageOptions;
 use futures::TryStreamExt;
 use futures::future;
 use std::collections::HashMap;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 impl DockerOrchestrator {
     pub fn new() -> Self {
@@ -63,8 +63,12 @@ impl Orchestrator for DockerOrchestrator {
                     started_at,
                 })
             },
-            Err(_) => {
-                debug!(name = container_name, "Could not find docker container");
+            Err(e) => {
+                debug!(
+                    name = container_name,
+                    error = %e,
+                    "Container not found (this may be expected for new deployments)"
+                );
                 None
             }
         }
@@ -102,7 +106,11 @@ impl Orchestrator for DockerOrchestrator {
                 })
                 .collect(),
             Err(err) => {
-                error!(error = err.to_string(), "Error fetching containers");
+                error!(
+                    error = %err,
+                    manager_id = %settings.manager.id,
+                    "Failed to list managed containers"
+                );
                 Vec::new()
             }
         }
@@ -111,26 +119,54 @@ impl Orchestrator for DockerOrchestrator {
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
         connector.display_env_variables();
         let container_name = connector.container_name();
-        let _ = self
+        
+        match self
             .docker
             .start_container(
                 container_name.as_str(),
                 None::<StartContainerOptions<String>>,
             )
-            .await;
+            .await
+        {
+            Ok(_) => {
+                debug!(name = container_name, "Container started");
+            }
+            Err(e) => {
+                error!(
+                    name = container_name,
+                    error = %e,
+                    "Failed to start container"
+                );
+            }
+        }
     }
 
     async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
         let container_name = connector.container_name();
-        let _ = self
+        
+        match self
             .docker
             .stop_container(container_name.as_str(), None::<StopContainerOptions>)
-            .await;
+            .await
+        {
+            Ok(_) => {
+                debug!(name = container_name, "Container stopped");
+            }
+            Err(e) => {
+                error!(
+                    name = container_name,
+                    error = %e,
+                    "Failed to stop container"
+                );
+            }
+        }
     }
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
         let container_name = container.name.as_str();
-        let remove_response = self
+        let container_id = &container.id;
+        
+        match self
             .docker
             .remove_container(
                 container_name,
@@ -140,16 +176,21 @@ impl Orchestrator for DockerOrchestrator {
                     link: false,
                 }),
             )
-            .await;
-        match remove_response {
+            .await
+        {
             Ok(_) => {
-                info!(name = container_name, "Removed container");
+                debug!(
+                    name = container_name,
+                    id = container_id,
+                    "Container removed"
+                );
             }
-            Err(err) => {
+            Err(e) => {
                 error!(
                     name = container_name,
-                    error = err.to_string(),
-                    "Could not remove container"
+                    id = container_id,
+                    error = %e,
+                    "Failed to remove container"
                 );
             }
         }
@@ -207,11 +248,11 @@ impl Orchestrator for DockerOrchestrator {
             if needs_prefix {
                 // Add the registry prefix
                 let full_image = format!("{}/{}", registry.trim_end_matches('/'), connector.image);
-                info!("Prefixing image with registry: {} -> {}", connector.image, full_image);
+                debug!("Prefixing image with registry: {} -> {}", connector.image, full_image);
                 full_image
             } else {
                 // Image already has a registry prefix
-                info!("Image already has registry prefix: {}", connector.image);
+                debug!("Image already has registry prefix: {}", connector.image);
                 connector.image.clone()
             }
         } else {
@@ -219,10 +260,10 @@ impl Orchestrator for DockerOrchestrator {
         };
 
         // Log the pull attempt
-        if let Some(registry) = registry_server {
-            info!("Starting pull of {} from custom registry: {}", image_name, registry);
+        if registry_server.is_some() {
+            info!("Starting pull of {}", image_name);
             if has_auth {
-                debug!("Using authentication for registry: {}", registry);
+                debug!("Using authentication for registry pull");
             }
         } else {
             info!("Starting pull of {} from Docker Hub", image_name);
@@ -240,32 +281,31 @@ impl Orchestrator for DockerOrchestrator {
                 auth,
             )
             .try_for_each(|info| {
-                // Log with registry information
-                if let Some(registry) = registry_server {
-                    if let Some(status) = info.status.as_deref() {
-                        if let Some(progress) = info.progress.as_deref() {
-                            info!("Pulling {} from {} - Status: {} Progress: {}", 
-                                image_name, registry, status, progress);
-                        } else {
-                            info!("Pulling {} from {} - Status: {}", 
-                                image_name, registry, status);
-                        }
-                    }
-                } else {
-                    if let Some(status) = info.status.as_deref() {
-                        if let Some(progress) = info.progress.as_deref() {
-                            info!("Pulling {} from Docker Hub - Status: {} Progress: {}", 
-                                image_name, status, progress);
-                        } else {
-                            info!("Pulling {} from Docker Hub - Status: {}", 
-                                image_name, status);
-                        }
+                // Log pull progress at trace level to reduce verbosity
+                if let Some(status) = info.status.as_deref() {
+                    if let Some(progress) = info.progress.as_deref() {
+                        trace!(
+                            image = image_name,
+                            status = status,
+                            progress = progress,
+                            "Image pull progress"
+                        );
+                    } else {
+                        trace!(
+                            image = image_name,
+                            status = status,
+                            "Image pull status"
+                        );
                     }
                 }
                 
-                // Log any error messages
+                // Log any error messages at error level
                 if let Some(error) = info.error.as_deref() {
-                    error!("Pull error for {}: {}", image_name, error);
+                    error!(
+                        image = image_name,
+                        error = error,
+                        "Error during image pull"
+                    );
                 }
                 
                 future::ok(())
@@ -273,6 +313,11 @@ impl Orchestrator for DockerOrchestrator {
             .await;
         match deploy_response {
             Ok(_) => {
+                info!(
+                    image = image_name,
+                    "Image pulled successfully"
+                );
+                
                 // Create the container
                 let container_env_variables = connector
                     .container_envs()
@@ -364,32 +409,54 @@ impl Orchestrator for DockerOrchestrator {
                     ..Default::default()
                 };
 
-                let create_response = self
+                let container_name = connector.container_name();
+                match self
                     .docker
                     .create_container::<String, String>(
                         Some(CreateContainerOptions {
-                            name: connector.container_name(),
+                            name: container_name.clone(),
                             platform: None,
                         }),
                         config,
                     )
-                    .await;
-                match create_response {
-                    Ok(_) => {}
-                    Err(err) => {
-                        error!(error = err.to_string(), "Error creating container");
+                    .await
+                {
+                    Ok(_) => {
+                        info!(
+                            name = container_name,
+                            image = image_name,
+                            "Container created successfully"
+                        );
+                        
+                        // Get the created container
+                        let created = self.get(connector).await;
+                        
+                        // Start the container if needed
+                        let is_starting = connector.requested_status.clone().eq("starting");
+                        if is_starting && created.is_some() {
+                            self.start(&created.clone().unwrap(), connector).await;
+                        }
+                        
+                        created
+                    }
+                    Err(e) => {
+                        error!(
+                            name = container_name,
+                            image = image_name,
+                            error = %e,
+                            "Failed to create container"
+                        );
+                        
+                        // Provide helpful error context
+                        if e.to_string().contains("Conflict") {
+                            error!("Container with name '{}' already exists. Consider removing it first.", container_name);
+                        } else if e.to_string().contains("No such image") {
+                            error!("Image '{}' was pulled but cannot be found. This may indicate a Docker daemon issue.", image_name);
+                        }
+                        
+                        None
                     }
                 }
-
-                // Get the created connector
-                let created = self.get(connector).await;
-                // Start the container if needed
-                let is_starting = connector.requested_status.clone().eq("starting");
-                if is_starting {
-                    self.start(&created.clone().unwrap(), connector).await;
-                }
-                // Return the created container
-                created
             }
             Err(err) => {
                 // Detailed error logging
