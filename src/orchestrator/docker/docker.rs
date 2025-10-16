@@ -3,6 +3,7 @@ use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use bollard::Docker;
+use bollard::auth::DockerCredentials;
 use bollard::container::{
     Config, CreateContainerOptions, InspectContainerOptions, ListContainersOptions, LogsOptions,
     RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
@@ -12,7 +13,7 @@ use bollard::image::CreateImageOptions;
 use futures::TryStreamExt;
 use futures::future;
 use std::collections::HashMap;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, trace};
 
 impl DockerOrchestrator {
     pub fn new() -> Self {
@@ -62,8 +63,12 @@ impl Orchestrator for DockerOrchestrator {
                     started_at,
                 })
             },
-            Err(_) => {
-                debug!(name = container_name, "Could not find docker container");
+            Err(e) => {
+                debug!(
+                    name = container_name,
+                    error = %e,
+                    "Container not found (this may be expected for new deployments)"
+                );
                 None
             }
         }
@@ -101,7 +106,11 @@ impl Orchestrator for DockerOrchestrator {
                 })
                 .collect(),
             Err(err) => {
-                error!(error = err.to_string(), "Error fetching containers");
+                error!(
+                    error = %err,
+                    manager_id = %settings.manager.id,
+                    "Failed to list managed containers"
+                );
                 Vec::new()
             }
         }
@@ -110,26 +119,54 @@ impl Orchestrator for DockerOrchestrator {
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
         connector.display_env_variables();
         let container_name = connector.container_name();
-        let _ = self
+        
+        match self
             .docker
             .start_container(
                 container_name.as_str(),
                 None::<StartContainerOptions<String>>,
             )
-            .await;
+            .await
+        {
+            Ok(_) => {
+                debug!(name = container_name, "Container started");
+            }
+            Err(e) => {
+                error!(
+                    name = container_name,
+                    error = %e,
+                    "Failed to start container"
+                );
+            }
+        }
     }
 
     async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
         let container_name = connector.container_name();
-        let _ = self
+        
+        match self
             .docker
             .stop_container(container_name.as_str(), None::<StopContainerOptions>)
-            .await;
+            .await
+        {
+            Ok(_) => {
+                debug!(name = container_name, "Container stopped");
+            }
+            Err(e) => {
+                error!(
+                    name = container_name,
+                    error = %e,
+                    "Failed to stop container"
+                );
+            }
+        }
     }
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
         let container_name = container.name.as_str();
-        let remove_response = self
+        let container_id = &container.id;
+        
+        match self
             .docker
             .remove_container(
                 container_name,
@@ -139,16 +176,21 @@ impl Orchestrator for DockerOrchestrator {
                     link: false,
                 }),
             )
-            .await;
-        match remove_response {
+            .await
+        {
             Ok(_) => {
-                info!(name = container_name, "Removed container");
+                debug!(
+                    name = container_name,
+                    id = container_id,
+                    "Container removed"
+                );
             }
-            Err(err) => {
+            Err(e) => {
                 error!(
                     name = container_name,
-                    error = err.to_string(),
-                    "Could not remove container"
+                    id = container_id,
+                    error = %e,
+                    "Failed to remove container"
                 );
             }
         }
@@ -165,29 +207,117 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        // We need to pull the image first
+        // Get settings and check for Docker options
+        let settings = crate::settings();
+        let docker_options = settings.opencti.daemon.docker.as_ref();
+        
+        // Get registry server URL if configured
+        let registry_server = docker_options
+            .and_then(|opts| opts.registry.as_ref())
+            .and_then(|reg| reg.server.as_ref());
+        
+        // Build authentication credentials if configured
+        let has_auth = docker_options
+            .and_then(|opts| opts.registry.as_ref())
+            .is_some();
+        
+        let auth = docker_options
+            .and_then(|opts| opts.registry.as_ref())
+            .map(|registry| DockerCredentials {
+                username: registry.username.clone(),
+                password: registry.password.clone(),
+                auth: None,
+                email: registry.email.clone(),
+                serveraddress: registry.server.clone(),
+                identitytoken: None,
+                registrytoken: None,
+            });
+
+        // Construct the full image name with registry if configured
+        let image_name = if let Some(registry) = registry_server {
+            // Check if the image already has a registry prefix
+            // (contains a dot before the first slash, like registry.com/image)
+            let needs_prefix = if let Some(first_slash_pos) = connector.image.find('/') {
+                // Check if there's a dot before the first slash (indicating a registry)
+                !connector.image[..first_slash_pos].contains('.')
+            } else {
+                // No slash at all, it's just an image name
+                true
+            };
+            
+            if needs_prefix {
+                // Add the registry prefix
+                let full_image = format!("{}/{}", registry.trim_end_matches('/'), connector.image);
+                debug!("Prefixing image with registry: {} -> {}", connector.image, full_image);
+                full_image
+            } else {
+                // Image already has a registry prefix
+                debug!("Image already has registry prefix: {}", connector.image);
+                connector.image.clone()
+            }
+        } else {
+            connector.image.clone()
+        };
+
+        // Log the pull attempt
+        if registry_server.is_some() {
+            info!("Starting pull of {}", image_name);
+            if has_auth {
+                debug!("Using authentication for registry pull");
+            }
+        } else {
+            info!("Starting pull of {} from Docker Hub", image_name);
+        }
+
+        // Pull the image with optional authentication
         let deploy_response = self
             .docker
             .create_image(
                 Some(CreateImageOptions {
-                    from_image: connector.image.as_str(),
+                    from_image: image_name.as_str(),
                     ..Default::default()
                 }),
                 None,
-                None,
+                auth,
             )
             .try_for_each(|info| {
-                info!(
-                    "{} {:?} {:?} pulling...",
-                    connector.image,
-                    info.status.as_deref(),
-                    info.progress.as_deref()
-                );
+                // Log pull progress at trace level to reduce verbosity
+                if let Some(status) = info.status.as_deref() {
+                    if let Some(progress) = info.progress.as_deref() {
+                        trace!(
+                            image = image_name,
+                            status = status,
+                            progress = progress,
+                            "Image pull progress"
+                        );
+                    } else {
+                        trace!(
+                            image = image_name,
+                            status = status,
+                            "Image pull status"
+                        );
+                    }
+                }
+                
+                // Log any error messages at error level
+                if let Some(error) = info.error.as_deref() {
+                    error!(
+                        image = image_name,
+                        error = error,
+                        "Error during image pull"
+                    );
+                }
+                
                 future::ok(())
             })
             .await;
         match deploy_response {
             Ok(_) => {
+                info!(
+                    image = image_name,
+                    "Image pulled successfully"
+                );
+                
                 // Create the container
                 let container_env_variables = connector
                     .container_envs()
@@ -198,10 +328,6 @@ impl Orchestrator for DockerOrchestrator {
                 
                 // Build host config with Docker options
                 let mut host_config = HostConfig::default();
-                
-                // Get settings and check for Docker options
-                let settings = crate::settings();
-                let docker_options = settings.opencti.daemon.docker.as_ref();
                 
                 if let Some(docker_opts) = docker_options {
                     // Apply Docker options to host config
@@ -276,42 +402,85 @@ impl Orchestrator for DockerOrchestrator {
                 }
                 
                 let config = Config {
-                    image: Some(connector.image.clone()),
+                    image: Some(image_name.clone()),
                     env: Some(container_env_variables),
                     labels: Some(labels),
                     host_config: Some(host_config),
                     ..Default::default()
                 };
 
-                let create_response = self
+                let container_name = connector.container_name();
+                match self
                     .docker
                     .create_container::<String, String>(
                         Some(CreateContainerOptions {
-                            name: connector.container_name(),
+                            name: container_name.clone(),
                             platform: None,
                         }),
                         config,
                     )
-                    .await;
-                match create_response {
-                    Ok(_) => {}
-                    Err(err) => {
-                        error!(error = err.to_string(), "Error creating container");
+                    .await
+                {
+                    Ok(_) => {
+                        info!(
+                            name = container_name,
+                            image = image_name,
+                            "Container created successfully"
+                        );
+                        
+                        // Get the created container
+                        let created = self.get(connector).await;
+                        
+                        // Start the container if needed
+                        let is_starting = connector.requested_status.clone().eq("starting");
+                        if is_starting && created.is_some() {
+                            self.start(&created.clone().unwrap(), connector).await;
+                        }
+                        
+                        created
+                    }
+                    Err(e) => {
+                        error!(
+                            name = container_name,
+                            image = image_name,
+                            error = %e,
+                            "Failed to create container"
+                        );
+                        
+                        // Provide helpful error context
+                        if e.to_string().contains("Conflict") {
+                            error!("Container with name '{}' already exists. Consider removing it first.", container_name);
+                        } else if e.to_string().contains("No such image") {
+                            error!("Image '{}' was pulled but cannot be found. This may indicate a Docker daemon issue.", image_name);
+                        }
+                        
+                        None
                     }
                 }
-
-                // Get the created connector
-                let created = self.get(connector).await;
-                // Start the container if needed
-                let is_starting = connector.requested_status.clone().eq("starting");
-                if is_starting {
-                    self.start(&created.clone().unwrap(), connector).await;
-                }
-                // Return the created container
-                created
             }
-            Err(_) => {
-                error!(image = connector.image, "Error fetching container image");
+            Err(err) => {
+                // Detailed error logging
+                if let Some(registry) = registry_server {
+                    error!(
+                        "Failed to pull image '{}' (resolved as '{}') from registry '{}'. Error: {:?}", 
+                        connector.image,
+                        image_name, 
+                        registry,
+                        err
+                    );
+                    // Provide helpful hints
+                    error!("Possible causes: 1) Registry URL is incorrect, 2) Authentication failed, 3) Image doesn't exist on registry");
+                    if !has_auth {
+                        error!("Note: No authentication configured for registry. Check docker.registry configuration.");
+                    }
+                } else {
+                    error!(
+                        "Failed to pull image '{}' from Docker Hub. Error: {:?}", 
+                        image_name,
+                        err
+                    );
+                    error!("Possible causes: 1) Image doesn't exist, 2) Network issues, 3) Docker Hub rate limiting");
+                }
                 None
             }
         }

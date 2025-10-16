@@ -17,6 +17,7 @@ async fn orchestrate_missing(
     match deploy_action {
         // Update the connector status
         Some(_) => {
+            info!(id = id, "Container deployed successfully");
             api.patch_status(id, ConnectorStatus::Stopped).await;
         }
         None => {
@@ -108,10 +109,12 @@ async fn orchestrate_existing(
         (RequestedStatus::Stopping, ConnectorStatus::Started) => {
             info!(id = connector_id, "Stopping");
             orchestrator.stop(&container, connector).await;
+            info!(id = connector_id, "Container stopped successfully");
         }
         (RequestedStatus::Starting, ConnectorStatus::Stopped) => {
             info!(id = connector_id, "Starting");
             orchestrator.start(&container, connector).await;
+            info!(id = connector_id, "Container started successfully");
         }
         _ => {
             info!(id = connector_id, "Nothing to execute");
@@ -165,7 +168,9 @@ pub async fn orchestrate(
         for container in existing_containers {
             let connector_id = container.extract_opencti_id();
             if !connectors_by_id.contains_key(&connector_id) {
+                info!(id = connector_id, name = container.name, "Removing orphaned container");
                 orchestrator.remove(&container).await;
+                info!(id = connector_id, name = container.name, "Container removed successfully");
             }
         }
     }
