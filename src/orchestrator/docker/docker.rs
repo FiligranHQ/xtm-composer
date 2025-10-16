@@ -357,7 +357,7 @@ impl Orchestrator for DockerOrchestrator {
                 }
                 
                 let config = Config {
-                    image: Some(connector.image.clone()),
+                    image: Some(image_name.clone()),
                     env: Some(container_env_variables),
                     labels: Some(labels),
                     host_config: Some(host_config),
