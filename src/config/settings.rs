@@ -2,6 +2,8 @@ use config::{Config, ConfigError, Environment, File};
 use k8s_openapi::api::apps::v1::Deployment;
 use serde::Deserialize;
 use std::env;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 const ENV_PRODUCTION: &str = "production";
 
@@ -121,6 +123,25 @@ pub struct Settings {
     pub manager: Manager,
     pub opencti: OpenCTI,
     pub openbas: OpenBAS,
+    #[serde(skip)]
+    pub proxy_cache: Arc<RwLock<ProxyCache>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyCache {
+    pub configuration: Option<crate::api::opencti::connector::get_proxy_config::ProxyConfiguration>,
+    pub last_fetched: Option<Instant>,
+    pub ttl: Duration,
+}
+
+impl Default for ProxyCache {
+    fn default() -> Self {
+        ProxyCache {
+            configuration: None,
+            last_fetched: None,
+            ttl: Duration::from_secs(600), // Default 10 minutes TTL
+        }
+    }
 }
 
 impl Settings {
@@ -131,11 +152,45 @@ impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
         let run_mode = Self::mode();
         let config_builder = Config::builder();
-        config_builder
+        let mut settings: Settings = config_builder
             .add_source(File::with_name("config/default"))
             .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
             .add_source(Environment::default().try_parsing(true).separator("__"))
             .build()?
-            .try_deserialize()
+            .try_deserialize()?;
+        
+        // Initialize the proxy cache with configurable TTL
+        let cache_ttl = env::var("OPENCTI__PROXY_CACHE_TTL")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(600); // Default 10 minutes
+        
+        settings.proxy_cache = Arc::new(RwLock::new(ProxyCache {
+            configuration: None,
+            last_fetched: None,
+            ttl: Duration::from_secs(cache_ttl),
+        }));
+        
+        Ok(settings)
+    }
+    
+    pub fn is_proxy_cache_valid(&self) -> bool {
+        let cache = self.proxy_cache.read().unwrap();
+        if let Some(last_fetched) = cache.last_fetched {
+            last_fetched.elapsed() < cache.ttl
+        } else {
+            false
+        }
+    }
+    
+    pub fn update_proxy_cache(&self, config: crate::api::opencti::connector::get_proxy_config::ProxyConfiguration) {
+        let mut cache = self.proxy_cache.write().unwrap();
+        cache.configuration = Some(config);
+        cache.last_fetched = Some(Instant::now());
+    }
+    
+    pub fn get_cached_proxy_config(&self) -> Option<crate::api::opencti::connector::get_proxy_config::ProxyConfiguration> {
+        let cache = self.proxy_cache.read().unwrap();
+        cache.configuration.clone()
     }
 }

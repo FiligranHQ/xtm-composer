@@ -8361,6 +8361,7 @@ type Query {
     savedFilters(first: Int, after: ID, orderBy: SavedFilterOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): SavedFilterConnection
     fintelDesign(id: String!): FintelDesign
     fintelDesigns(first: Int, after: ID, orderBy: FintelDesignOrdering, orderMode: OrderingMode, filters: FilterGroup, search: String): FintelDesignConnection
+    connectorProxyConfiguration: ProxyConfiguration
 }
 
 type Subscription {
@@ -13272,4 +13273,33 @@ input ChangePasswordInput {
 
 type VerifyOtp {
     mfa_activated: Boolean!
+}
+# Proxy Configuration Types
+type ProxyConfiguration {
+  http_proxy: ProxyUrlConfig
+  https_proxy: HttpsProxyConfig
+  no_proxy: [String!]!
+  exclusion_patterns: ExclusionPatterns!
+}
+
+type ProxyUrlConfig {
+  url: String!
+  enabled: Boolean!
+}
+
+type HttpsProxyConfig {
+  url: String!
+  ca_certificates: [String!]!
+  reject_unauthorized: Boolean!
+  enabled: Boolean!
+}
+
+type ExclusionPatterns {
+  hostnames: [String!]!
+  ip_ranges: [String!]!
+  wildcards: [String!]!
+}
+
+extend type Query {
+  connectorProxyConfiguration: ProxyConfiguration
 }

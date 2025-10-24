@@ -108,7 +108,7 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
-        connector.display_env_variables();
+        connector.display_env_variables().await;
         let container_name = connector.container_name();
         let _ = self
             .docker
@@ -191,6 +191,7 @@ impl Orchestrator for DockerOrchestrator {
                 // Create the container
                 let container_env_variables = connector
                     .container_envs()
+                    .await
                     .into_iter()
                     .map(|config| format!("{}={}", config.key, config.value))
                     .collect::<Vec<String>>();

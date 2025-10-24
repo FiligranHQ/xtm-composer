@@ -88,7 +88,7 @@ impl ApiConnector {
             .to_lowercase()
     }
 
-    pub fn container_envs(&self) -> Vec<EnvVariable> {
+    pub async fn container_envs(&self) -> Vec<EnvVariable> {
         let settings = crate::settings();
         let mut envs = self
             .contract_configuration
@@ -109,11 +109,100 @@ impl ApiConnector {
             value: self.contract_hash.clone(),
             is_sensitive: false,
         });
+        
+        // Inject proxy configuration if available from OpenCTI
+        // Check cache first
+        let proxy_config = if settings.is_proxy_cache_valid() {
+            settings.get_cached_proxy_config()
+        } else {
+            // Fetch new configuration from OpenCTI
+            let api = crate::api::opencti::ApiOpenCTI::new();
+            if let Some(config) = crate::api::opencti::connector::get_proxy_config::get_proxy_configuration(&api).await {
+                settings.update_proxy_cache(config.clone());
+                Some(config)
+            } else {
+                None
+            }
+        };
+        
+        if let Some(proxy_config) = proxy_config {
+                // HTTP Proxy
+                if let Some(http_proxy) = &proxy_config.http_proxy {
+                    if http_proxy.enabled {
+                        envs.push(EnvVariable {
+                            key: "HTTP_PROXY".to_string(),
+                            value: http_proxy.url.clone(),
+                            is_sensitive: false,
+                        });
+                        envs.push(EnvVariable {
+                            key: "http_proxy".to_string(),
+                            value: http_proxy.url.clone(),
+                            is_sensitive: false,
+                        });
+                    }
+                }
+                
+                // HTTPS Proxy
+                if let Some(https_proxy) = &proxy_config.https_proxy {
+                    if https_proxy.enabled {
+                        envs.push(EnvVariable {
+                            key: "HTTPS_PROXY".to_string(),
+                            value: https_proxy.url.clone(),
+                            is_sensitive: false,
+                        });
+                        envs.push(EnvVariable {
+                            key: "https_proxy".to_string(),
+                            value: https_proxy.url.clone(),
+                            is_sensitive: false,
+                        });
+                        
+                        // Handle CA certificates (plain text content)
+                        if !https_proxy.ca_certificates.is_empty() {
+                            let ca_content = https_proxy.ca_certificates.join("\n");
+                            envs.push(EnvVariable {
+                                key: "SSL_CERT_FILE".to_string(),
+                                value: ca_content.clone(),
+                                is_sensitive: false,
+                            });
+                            envs.push(EnvVariable {
+                                key: "REQUESTS_CA_BUNDLE".to_string(),
+                                value: ca_content,
+                                is_sensitive: false,
+                            });
+                        }
+                        
+                        // Reject unauthorized
+                        if !https_proxy.reject_unauthorized {
+                            envs.push(EnvVariable {
+                                key: "NODE_TLS_REJECT_UNAUTHORIZED".to_string(),
+                                value: "0".to_string(),
+                                is_sensitive: false,
+                            });
+                        }
+                    }
+                }
+                
+                // NO_PROXY configuration
+                if !proxy_config.no_proxy.is_empty() {
+                    let no_proxy = proxy_config.no_proxy.join(",");
+                    envs.push(EnvVariable {
+                        key: "NO_PROXY".to_string(),
+                        value: no_proxy.clone(),
+                        is_sensitive: false,
+                    });
+                    envs.push(EnvVariable {
+                        key: "no_proxy".to_string(),
+                        value: no_proxy,
+                        is_sensitive: false,
+                    });
+            }
+        }
+        
         envs
     }
 
     /// Display environment variables with sensitive values masked (if configured)
-    pub fn display_env_variables(&self) {
+    pub async fn display_env_variables(&self) {
         let settings = crate::settings();
         
         // Check if display is enabled in configuration
@@ -130,7 +219,7 @@ impl ApiConnector {
             .as_ref()
             .map_or(false, |debug| debug.show_sensitive_env_vars);
         
-        let envs = self.container_envs();
+        let envs = self.container_envs().await;
         
         // Build environment variables map with masked sensitive values
         let env_vars: HashMap<String, String> = envs

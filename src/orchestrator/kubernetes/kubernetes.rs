@@ -49,8 +49,8 @@ impl KubeOrchestrator {
         }
     }
 
-    pub fn container_envs(&self, connector: &ApiConnector) -> Vec<EnvVar> {
-        let env_vars = connector.container_envs();
+    pub async fn container_envs(&self, connector: &ApiConnector) -> Vec<EnvVar> {
+        let env_vars = connector.container_envs().await;
         env_vars
             .iter()
             .map(|config| EnvVar {
@@ -119,13 +119,13 @@ impl KubeOrchestrator {
         }
     }
 
-    pub fn build_configuration(
+    pub async fn build_configuration(
         &self,
         connector: &ApiConnector,
         labels: HashMap<String, String>,
     ) -> Deployment {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
-        let pod_env = self.container_envs(connector);
+        let pod_env = self.container_envs(connector).await;
         let is_starting = &connector.requested_status == "starting";
         
         let target_deployment = Deployment {
@@ -244,7 +244,7 @@ impl Orchestrator for KubeOrchestrator {
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
-        connector.display_env_variables();
+        connector.display_env_variables().await;
         self.set_deployment_scale(connector, 1).await;
     }
 
@@ -270,7 +270,7 @@ impl Orchestrator for KubeOrchestrator {
 
     async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let labels = self.labels(connector);
-        let deployment_patch = self.build_configuration(connector, labels);
+        let deployment_patch = self.build_configuration(connector, labels).await;
         let patch = Patch::Merge(&deployment_patch);
         let name = connector.container_name();
         let deployment_result = self
@@ -292,7 +292,7 @@ impl Orchestrator for KubeOrchestrator {
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let labels = self.labels(connector);
-        let deployment_creation = self.build_configuration(connector, labels);
+        let deployment_creation = self.build_configuration(connector, labels).await;
         match self
             .deployments
             .create(&PostParams::default(), &deployment_creation)

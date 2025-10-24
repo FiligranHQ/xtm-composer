@@ -136,7 +136,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
     }
 
     async fn start(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> () {
-        connector.display_env_variables();
+        connector.display_env_variables().await;
         let start_container_uri = format!("{}/{}/start", self.container_uri, container.id);
         self.client.post(start_container_uri).send().await.unwrap();
     }
@@ -194,7 +194,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
             let stack_label = portainer_config.stack.unwrap();
             image_labels.insert("com.docker.compose.project".to_string(), stack_label);
         }
-        let env_vars = connector.container_envs();
+        let env_vars = connector.container_envs().await;
         let container_envs = env_vars
             .iter()
             .map(|config| format!("{}={}", config.key, config.value))
