@@ -173,6 +173,9 @@ async fn main() {
     // Log the start
     let env = Settings::mode();
     info!(version = VERSION, env, "Starting XTM composer");
+    // Start registry cache cleanup task
+    orchestrator::start_registry_cache_cleanup();
+    info!("Started registry authentication cache cleanup task");
     // Start orchestration threads
     let mut orchestrations = Vec::new();
     opencti_orchestrate(&mut orchestrations);

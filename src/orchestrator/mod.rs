@@ -3,11 +3,27 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
+use tokio::time::{interval, Duration as TokioDuration};
+use tracing::debug;
 
 pub mod composer;
 pub mod docker;
 pub mod kubernetes;
 pub mod portainer;
+pub mod registry_cache;
+pub mod registry_resolver;
+
+/// Start periodic registry cache cleanup
+pub fn start_registry_cache_cleanup() {
+    tokio::spawn(async {
+        let mut interval = interval(TokioDuration::from_secs(10 * 60)); // Every 10 minutes
+        loop {
+            interval.tick().await;
+            debug!("Running registry cache cleanup");
+            registry_cache::REGISTRY_AUTH_CACHE.cleanup_expired().await;
+        }
+    });
+}
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all(deserialize = "PascalCase"))]

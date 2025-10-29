@@ -5,8 +5,10 @@ use crate::orchestrator::portainer::docker::{
     PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
     PortainerDockerOrchestrator, PortainerGetResponse,
 };
+use crate::orchestrator::registry_resolver::RegistryResolver;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
+use base64::Engine as _;
 use bollard::models::ContainerSummary;
 use header::HeaderValue;
 use k8s_openapi::serde_json;
@@ -14,7 +16,7 @@ use reqwest::header::HeaderMap;
 use reqwest::{Client, header};
 use std::collections::HashMap;
 use std::fmt::Error;
-use tracing::{debug, error, info};
+use tracing::{error, info, warn};
 
 const X_API_KEY: &str = "X-API-KEY";
 
@@ -176,22 +178,110 @@ impl Orchestrator for PortainerDockerOrchestrator {
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        // region First operation, pull the image
+        // Get registry configuration from daemon level
+        let settings = crate::settings();
+        let registry_config = settings.opencti.daemon.registry.clone();
+        let registry_resolver = RegistryResolver::new(registry_config);
+
+        // Resolve image name with registry prefix if needed
+        let resolved_image = match registry_resolver.resolve_image(&connector.image) {
+            Ok(resolved) => {
+                info!(
+                    original_image = connector.image,
+                    resolved_image = resolved.full_name,
+                    needs_auth = resolved.needs_auth,
+                    "Image resolved for Portainer deployment"
+                );
+                resolved
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to resolve image for Portainer deployment");
+                return None;
+            }
+        };
+
+        // region First operation, pull the image with authentication if needed
         let create_image_uri = format!(
             "{}/create?fromImage={}",
             self.image_uri,
-            connector.image.clone()
+            resolved_image.full_name
         );
-        let mut create_response = self.client.post(create_image_uri).send().await.unwrap();
-        while let Some(_chunk) = create_response.chunk().await.unwrap() {} // Iter chunk to fetch all
+
+        // Add authentication headers if registry credentials are available
+        let mut pull_headers = HeaderMap::new();
+        if resolved_image.needs_auth {
+            if let Some(registry_server) = &resolved_image.registry_server {
+                match registry_resolver.get_credentials(registry_server).await {
+                    Ok(credentials) => {
+                        // Build Docker auth config for Portainer
+                        let auth_config = serde_json::json!({
+                            "username": credentials.username,
+                            "password": credentials.password,
+                            "auth": "",
+                            "serveraddress": credentials.serveraddress
+                        });
+                        
+                        let auth_string = base64::engine::general_purpose::STANDARD
+                            .encode(auth_config.to_string());
+                        
+                        pull_headers.insert(
+                            "X-Registry-Auth",
+                            HeaderValue::from_str(&auth_string)
+                                .map_err(|e| error!(error = %e, "Failed to create auth header"))
+                                .unwrap_or_else(|_| HeaderValue::from_static(""))
+                        );
+                        
+                        info!(registry = registry_server, "Added registry authentication for Portainer image pull");
+                    }
+                    Err(e) => {
+                        warn!(
+                            registry = registry_server,
+                            error = %e,
+                            "Failed to get registry credentials, attempting pull without authentication"
+                        );
+                    }
+                }
+            }
+        }
+
+        let pull_request = if pull_headers.is_empty() {
+            self.client.post(&create_image_uri)
+        } else {
+            self.client.post(&create_image_uri).headers(pull_headers)
+        };
+
+        let mut create_response = match pull_request.send().await {
+            Ok(response) => response,
+            Err(e) => {
+                error!(error = %e, image = resolved_image.full_name, "Failed to pull image via Portainer");
+                return None;
+            }
+        };
+        
+        // Process pull response chunks
+        loop {
+            match create_response.chunk().await {
+                Ok(Some(_chunk)) => {
+                    // Successfully processed chunk, continue
+                }
+                Ok(None) => {
+                    // No more chunks, image pull completed
+                    break;
+                }
+                Err(e) => {
+                    error!(error = %e, "Error processing image pull chunk");
+                    return None;
+                }
+            }
+        }
         // endregion
-        // region Deploy the container after success
+
+        // region Deploy the container after successful image pull
         let image_name: String = connector.container_name();
         let deploy_container_uri = format!("{}/create?name={}", self.container_uri, image_name);
         let mut image_labels = self.labels(connector);
         let portainer_config = self.config.clone();
-        if portainer_config.stack.is_some() {
-            let stack_label = portainer_config.stack.unwrap();
+        if let Some(stack_label) = portainer_config.stack {
             image_labels.insert("com.docker.compose.project".to_string(), stack_label);
         }
         let env_vars = connector.container_envs();
@@ -199,9 +289,10 @@ impl Orchestrator for PortainerDockerOrchestrator {
             .iter()
             .map(|config| format!("{}={}", config.key, config.value))
             .collect();
+        let image_name_for_deploy = resolved_image.full_name.clone();
         let json_body = PortainerDeployPayload {
             env: container_envs,
-            image: connector.image.clone(),
+            image: image_name_for_deploy.clone(), // Use resolved image name
             labels: image_labels,
             host_config: PortainerDeployHostConfig {
                 network_mode: portainer_config.network_mode,
@@ -216,7 +307,11 @@ impl Orchestrator for PortainerDockerOrchestrator {
         match deploy_response {
             Ok(response) => {
                 let deploy_data: PortainerDeployResponse = response.json().await.unwrap();
-                debug!(id = deploy_data.id, "Portainer container deployed");
+                info!(
+                    id = deploy_data.id,
+                    image = image_name_for_deploy,
+                    "Portainer container deployed with registry support"
+                );
                 self.get(connector).await
             }
             Err(err) => {
@@ -224,6 +319,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
                 None
             }
         }
+        // endregion
     }
 
     async fn logs(

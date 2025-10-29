@@ -45,6 +45,7 @@ pub struct Manager {
 #[allow(unused)]
 pub struct Daemon {
     pub selector: String,
+    pub registry: Option<Registry>,
     pub portainer: Option<Portainer>,
     pub kubernetes: Option<Kubernetes>,
     pub docker: Option<Docker>,
@@ -96,12 +97,31 @@ pub struct Kubernetes {
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
-pub struct DockerRegistry {
+pub struct Registry {
     pub server: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
     pub email: Option<String>,
+    #[serde(default = "default_token_ttl")]
+    pub token_ttl: u64,
+    #[serde(default = "default_retry_attempts")]
+    pub retry_attempts: u8,
+    #[serde(default = "default_retry_delay")]
+    pub retry_delay: u64,
 }
+
+fn default_token_ttl() -> u64 {
+    1800 // 30 minutes in seconds
+}
+
+fn default_retry_attempts() -> u8 {
+    3
+}
+
+fn default_retry_delay() -> u64 {
+    5 // 5 seconds
+}
+
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
@@ -122,7 +142,6 @@ pub struct Docker {
     pub shm_size: Option<i64>,
     pub sysctls: Option<std::collections::HashMap<String, String>>,
     pub ulimits: Option<Vec<std::collections::HashMap<String, serde_json::Value>>>,
-    pub registry: Option<DockerRegistry>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

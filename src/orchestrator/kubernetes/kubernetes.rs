@@ -2,10 +2,11 @@ use crate::api::{ApiConnector, ConnectorStatus};
 use crate::config::settings::Kubernetes;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
+use crate::orchestrator::registry_resolver::RegistryResolver;
 use async_trait::async_trait;
 use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
-use k8s_openapi::api::core::v1::{Container, ContainerStatus, EnvVar, Pod, PodSpec, PodTemplateSpec};
+use k8s_openapi::api::core::v1::{Container, ContainerStatus, EnvVar, Pod, PodSpec, PodTemplateSpec, Secret, LocalObjectReference};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use kube::api::{DeleteParams, LogParams, Patch, PatchParams};
 use kube::{
@@ -14,6 +15,7 @@ use kube::{
 };
 use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, error, info, warn};
+use base64::Engine;
 
 impl KubeOrchestrator {
     pub async fn new(config: Kubernetes) -> Self {
@@ -24,6 +26,80 @@ impl KubeOrchestrator {
             pods,
             deployments,
             config,
+        }
+    }
+
+    // Create or update imagePullSecret for private registry
+    async fn ensure_image_pull_secret(&self, registry_config: &crate::config::settings::Registry) -> Result<String, Box<dyn std::error::Error>> {
+        let client = Client::try_default().await?;
+        let secrets: Api<Secret> = Api::default_namespaced(client);
+        
+        let secret_name = format!("opencti-registry-{}", 
+            registry_config.server.as_ref()
+                .unwrap_or(&"default".to_string())
+                .replace([':', '.', '/'], "-"));
+
+        // Create Docker config JSON
+        let auth_string = format!(
+            "{}:{}",
+            registry_config.username.as_ref().unwrap_or(&String::new()),
+            registry_config.password.as_ref().unwrap_or(&String::new())
+        );
+        let auth_base64 = base64::engine::general_purpose::STANDARD.encode(auth_string.as_bytes());
+        
+        let default_server = "https://index.docker.io/v1/".to_string();
+        let server_url = registry_config.server.as_ref().unwrap_or(&default_server);
+        let docker_config = serde_json::json!({
+            "auths": {
+                server_url: {
+                    "username": registry_config.username,
+                    "password": registry_config.password,
+                    "email": registry_config.email.as_ref().unwrap_or(&"".to_string()),
+                    "auth": auth_base64
+                }
+            }
+        });
+        
+        let docker_config_json = base64::engine::general_purpose::STANDARD
+            .encode(docker_config.to_string().as_bytes());
+
+        let secret_data = BTreeMap::from([
+            (".dockerconfigjson".to_string(), docker_config_json)
+        ]);
+
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(secret_name.clone()),
+                ..Default::default()
+            },
+            type_: Some("kubernetes.io/dockerconfigjson".to_string()),
+            data: Some(secret_data.into_iter().map(|(k, v)| (k, k8s_openapi::ByteString(v.into_bytes()))).collect()),
+            ..Default::default()
+        };
+
+        // Try to create or update the secret
+        match secrets.create(&PostParams::default(), &secret).await {
+            Ok(_) => {
+                info!(secret_name = secret_name, "Created imagePullSecret");
+                Ok(secret_name)
+            }
+            Err(kube::Error::Api(api_err)) if api_err.code == 409 => {
+                // Secret already exists, update it
+                match secrets.replace(&secret_name, &PostParams::default(), &secret).await {
+                    Ok(_) => {
+                        debug!(secret_name = secret_name, "Updated existing imagePullSecret");
+                        Ok(secret_name)
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to update imagePullSecret");
+                        Err(e.into())
+                    }
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to create imagePullSecret");
+                Err(e.into())
+            }
         }
     }
 
@@ -124,6 +200,21 @@ impl KubeOrchestrator {
         connector: &ApiConnector,
         labels: HashMap<String, String>,
     ) -> Deployment {
+        self.build_configuration_with_image(
+            connector,
+            labels,
+            &connector.image,
+            Vec::new()
+        )
+    }
+
+    pub fn build_configuration_with_image(
+        &self,
+        connector: &ApiConnector,
+        labels: HashMap<String, String>,
+        image_name: &str,
+        image_pull_secrets: Vec<LocalObjectReference>,
+    ) -> Deployment {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(connector);
         let is_starting = &connector.requested_status == "starting";
@@ -153,11 +244,16 @@ impl KubeOrchestrator {
                     spec: Some(PodSpec {
                         containers: vec![Container {
                             name: connector.container_name(),
-                            image: Some(connector.image.clone()),
+                            image: Some(image_name.to_string()),
                             env: Some(pod_env),
                             image_pull_policy: Some(self.get_image_pull_policy()),
                             ..Default::default()
                         }],
+                        image_pull_secrets: if image_pull_secrets.is_empty() {
+                            None
+                        } else {
+                            Some(image_pull_secrets)
+                        },
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -291,8 +387,81 @@ impl Orchestrator for KubeOrchestrator {
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        let settings = crate::settings();
+        
+        // Create registry resolver - use daemon-level registry config
+        let registry_config = settings.opencti.daemon.registry.clone();
+        let resolver = RegistryResolver::new(registry_config.clone());
+        
+        // Resolve image name with registry prefix if needed
+        let resolved_image = match resolver.resolve_image(&connector.image) {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                error!(
+                    image = connector.image,
+                    error = %e,
+                    "Failed to resolve image name"
+                );
+                return None;
+            }
+        };
+
+        // Handle private registry authentication if needed
+        let mut image_pull_secrets = Vec::new();
+        if resolved_image.needs_auth {
+            if let Some(registry_config) = &registry_config {
+                // Ensure authentication is cached (similar to Docker)
+                if let Some(registry_server) = &resolved_image.registry_server {
+                    match resolver.get_credentials(registry_server).await {
+                        Ok(_) => {
+                            info!(registry = registry_server, "Registry authentication validated");
+                            
+                            // Create imagePullSecret
+                            match self.ensure_image_pull_secret(registry_config).await {
+                                Ok(secret_name) => {
+                                    image_pull_secrets.push(LocalObjectReference {
+                                        name: secret_name
+                                    });
+                                }
+                                Err(e) => {
+                                    error!(
+                                        registry = registry_server,
+                                        error = %e,
+                                        "Failed to create imagePullSecret"
+                                    );
+                                    return None;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                registry = registry_server,
+                                error = %e,
+                                "Failed to get registry credentials"
+                            );
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build deployment configuration with resolved image
         let labels = self.labels(connector);
-        let deployment_creation = self.build_configuration(connector, labels);
+        let deployment_creation = self.build_configuration_with_image(
+            connector, 
+            labels, 
+            &resolved_image.full_name,
+            image_pull_secrets
+        );
+
+        // Log deployment attempt
+        if resolved_image.registry_server.is_some() {
+            info!("Deploying Kubernetes pod with image {} from private registry", resolved_image.full_name);
+        } else {
+            info!("Deploying Kubernetes pod with image {} from Docker Hub", resolved_image.full_name);
+        }
+
         match self
             .deployments
             .create(&PostParams::default(), &deployment_creation)

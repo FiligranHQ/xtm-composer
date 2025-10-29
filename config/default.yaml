@@ -31,6 +31,15 @@ opencti:
   logs_schedule: 10 # report logs every 10 secondes maximum
   daemon:
     selector: kubernetes
+    # Registry configuration shared by all orchestrators (Docker, Kubernetes, Portainer)
+    registry:
+      # server: "registry.example.com"
+      # username: "your-username"
+      # password: "your-password"
+      # email: "your-email@example.com"
+      token_ttl: 1800          # Authentication cache duration in seconds (30 minutes)
+      retry_attempts: 3        # Number of retry attempts on auth failure
+      retry_delay: 5           # Delay between retries in seconds
     kubernetes:
       # Image pull policy for K8s containers created by xtmcomposer
       # Valid values: Always, IfNotPresent, Never  
@@ -38,6 +47,9 @@ opencti:
       # Environment variable: OPENCTI__DAEMON__KUBERNETES__IMAGE_PULL_POLICY
       image_pull_policy: IfNotPresent
       base_deployment:
+    docker:
+      # network_mode: "bridge"   # Docker network mode
+      # dns: ["8.8.8.8"]        # Custom DNS servers
     portainer:
       api: https://host.docker.internal:9443
       api_key: ChangeMe

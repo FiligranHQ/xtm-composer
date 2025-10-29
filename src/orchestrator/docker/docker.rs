@@ -1,9 +1,9 @@
 use crate::api::{ApiConnector, ConnectorStatus};
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
+use crate::orchestrator::registry_resolver::RegistryResolver;
 use async_trait::async_trait;
 use bollard::Docker;
-use bollard::auth::DockerCredentials;
 use bollard::container::{
     Config, CreateContainerOptions, InspectContainerOptions, ListContainersOptions, LogsOptions,
     RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
@@ -199,82 +199,78 @@ impl Orchestrator for DockerOrchestrator {
     async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         // Remove the current container if needed
         let container = self.get(connector).await;
-        if container.is_some() {
-            let _ = self.remove(&container.unwrap()).await;
+        if let Some(container) = container {
+            let _ = self.remove(&container).await;
         }
         // Deploy the new one
         self.deploy(connector).await
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        // Get settings and check for Docker options
         let settings = crate::settings();
         let docker_options = settings.opencti.daemon.docker.as_ref();
         
-        // Get registry server URL if configured
-        let registry_server = docker_options
-            .and_then(|opts| opts.registry.as_ref())
-            .and_then(|reg| reg.server.as_ref());
+        // Create registry resolver - use daemon-level registry config
+        let registry_config = settings.opencti.daemon.registry.clone();
+        let resolver = RegistryResolver::new(registry_config);
         
-        // Build authentication credentials if configured
-        let has_auth = docker_options
-            .and_then(|opts| opts.registry.as_ref())
-            .is_some();
-        
-        let auth = docker_options
-            .and_then(|opts| opts.registry.as_ref())
-            .map(|registry| DockerCredentials {
-                username: registry.username.clone(),
-                password: registry.password.clone(),
-                auth: None,
-                email: registry.email.clone(),
-                serveraddress: registry.server.clone(),
-                identitytoken: None,
-                registrytoken: None,
-            });
-
-        // Construct the full image name with registry if configured
-        let image_name = if let Some(registry) = registry_server {
-            // Check if the image already has a registry prefix
-            // (contains a dot before the first slash, like registry.com/image)
-            let needs_prefix = if let Some(first_slash_pos) = connector.image.find('/') {
-                // Check if there's a dot before the first slash (indicating a registry)
-                !connector.image[..first_slash_pos].contains('.')
-            } else {
-                // No slash at all, it's just an image name
-                true
-            };
-            
-            if needs_prefix {
-                // Add the registry prefix
-                let full_image = format!("{}/{}", registry.trim_end_matches('/'), connector.image);
-                debug!("Prefixing image with registry: {} -> {}", connector.image, full_image);
-                full_image
-            } else {
-                // Image already has a registry prefix
-                debug!("Image already has registry prefix: {}", connector.image);
-                connector.image.clone()
+        // Resolve image name with registry prefix if needed
+        let resolved_image = match resolver.resolve_image(&connector.image) {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                error!(
+                    image = connector.image,
+                    error = %e,
+                    "Failed to resolve image name"
+                );
+                return None;
             }
-        } else {
-            connector.image.clone()
         };
 
-        // Log the pull attempt
-        if registry_server.is_some() {
-            info!("Starting pull of {}", image_name);
-            if has_auth {
-                debug!("Using authentication for registry pull");
+        // Get authentication if needed
+        let auth = if resolved_image.needs_auth {
+            if let Some(registry_server) = &resolved_image.registry_server {
+                match resolver.get_credentials(registry_server).await {
+                    Ok(credentials) => {
+                        info!(registry = registry_server, "Using cached authentication");
+                        Some(credentials)
+                    }
+                    Err(e) => {
+                        error!(
+                            registry = registry_server,
+                            error = %e,
+                            "Failed to get authentication credentials"
+                        );
+                        return None;
+                    }
+                }
+            } else {
+                None
             }
         } else {
-            info!("Starting pull of {} from Docker Hub", image_name);
+            None
+        };
+
+        // Log the pull attempt with detailed registry information
+        if let Some(registry_server) = resolver.get_registry_server() {
+            info!(
+                image = resolved_image.full_name,
+                registry = registry_server,
+                "Starting pull from private registry"
+            );
+        } else {
+            info!(
+                image = resolved_image.full_name,
+                "Starting pull from Docker Hub"
+            );
         }
 
-        // Pull the image with optional authentication
+        // Pull the image with cached authentication
         let deploy_response = self
             .docker
             .create_image(
                 Some(CreateImageOptions {
-                    from_image: image_name.as_str(),
+                    from_image: resolved_image.full_name.as_str(),
                     ..Default::default()
                 }),
                 None,
@@ -285,14 +281,14 @@ impl Orchestrator for DockerOrchestrator {
                 if let Some(status) = info.status.as_deref() {
                     if let Some(progress) = info.progress.as_deref() {
                         trace!(
-                            image = image_name,
+                            image = resolved_image.full_name,
                             status = status,
                             progress = progress,
                             "Image pull progress"
                         );
                     } else {
                         trace!(
-                            image = image_name,
+                            image = resolved_image.full_name,
                             status = status,
                             "Image pull status"
                         );
@@ -302,7 +298,7 @@ impl Orchestrator for DockerOrchestrator {
                 // Log any error messages at error level
                 if let Some(error) = info.error.as_deref() {
                     error!(
-                        image = image_name,
+                        image = resolved_image.full_name,
                         error = error,
                         "Error during image pull"
                     );
@@ -311,10 +307,11 @@ impl Orchestrator for DockerOrchestrator {
                 future::ok(())
             })
             .await;
+
         match deploy_response {
             Ok(_) => {
                 info!(
-                    image = image_name,
+                    image = resolved_image.full_name,
                     "Image pulled successfully"
                 );
                 
@@ -402,7 +399,7 @@ impl Orchestrator for DockerOrchestrator {
                 }
                 
                 let config = Config {
-                    image: Some(image_name.clone()),
+                    image: Some(resolved_image.full_name.clone()),
                     env: Some(container_env_variables),
                     labels: Some(labels),
                     host_config: Some(host_config),
@@ -424,7 +421,7 @@ impl Orchestrator for DockerOrchestrator {
                     Ok(_) => {
                         info!(
                             name = container_name,
-                            image = image_name,
+                            image = resolved_image.full_name,
                             "Container created successfully"
                         );
                         
@@ -442,7 +439,7 @@ impl Orchestrator for DockerOrchestrator {
                     Err(e) => {
                         error!(
                             name = container_name,
-                            image = image_name,
+                            image = resolved_image.full_name,
                             error = %e,
                             "Failed to create container"
                         );
@@ -451,7 +448,7 @@ impl Orchestrator for DockerOrchestrator {
                         if e.to_string().contains("Conflict") {
                             error!("Container with name '{}' already exists. Consider removing it first.", container_name);
                         } else if e.to_string().contains("No such image") {
-                            error!("Image '{}' was pulled but cannot be found. This may indicate a Docker daemon issue.", image_name);
+                            error!("Image '{}' was pulled but cannot be found. This may indicate a Docker daemon issue.", resolved_image.full_name);
                         }
                         
                         None
@@ -459,27 +456,23 @@ impl Orchestrator for DockerOrchestrator {
                 }
             }
             Err(err) => {
-                // Detailed error logging
-                if let Some(registry) = registry_server {
+                // Enhanced error logging with registry context
+                if let Some(registry) = &resolved_image.registry_server {
                     error!(
-                        "Failed to pull image '{}' (resolved as '{}') from registry '{}'. Error: {:?}", 
-                        connector.image,
-                        image_name, 
-                        registry,
-                        err
+                        base_image = connector.image,
+                        resolved_image = resolved_image.full_name,
+                        registry = registry,
+                        error = ?err,
+                        "Failed to pull image from private registry"
                     );
-                    // Provide helpful hints
-                    error!("Possible causes: 1) Registry URL is incorrect, 2) Authentication failed, 3) Image doesn't exist on registry");
-                    if !has_auth {
-                        error!("Note: No authentication configured for registry. Check docker.registry configuration.");
-                    }
+                    error!("Check: 1) Registry URL, 2) Authentication, 3) Image exists, 4) Network connectivity");
                 } else {
                     error!(
-                        "Failed to pull image '{}' from Docker Hub. Error: {:?}", 
-                        image_name,
-                        err
+                        image = resolved_image.full_name,
+                        error = ?err,
+                        "Failed to pull image from Docker Hub"
                     );
-                    error!("Possible causes: 1) Image doesn't exist, 2) Network issues, 3) Docker Hub rate limiting");
+                    error!("Check: 1) Image exists, 2) Network connectivity, 3) Docker Hub rate limits");
                 }
                 None
             }
