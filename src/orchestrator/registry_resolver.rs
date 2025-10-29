@@ -72,11 +72,18 @@ impl RegistryResolver {
         };
 
         let registry_server = match &registry_config.server {
-            Some(server) => server.clone(),
-            None => {
-                return Err(RegistryError::ImageResolutionFailed(
-                    "Registry server not configured".to_string(),
-                ));
+            Some(server) if !server.trim().is_empty() => server.clone(),
+            _ => {
+                // No server configured or empty server, use Docker Hub
+                debug!(
+                    base_image = base_image,
+                    "No registry server configured, falling back to Docker Hub"
+                );
+                return Ok(ResolvedImage {
+                    full_name: base_image.to_string(),
+                    registry_server: None,
+                    needs_auth: false,
+                });
             }
         };
 
