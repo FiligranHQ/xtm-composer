@@ -37,9 +37,9 @@ opencti:
       # username: "your-username"
       # password: "your-password"
       # email: "your-email@example.com"
-      token_ttl: 1800          # Authentication cache duration in seconds (30 minutes)
-      retry_attempts: 3        # Number of retry attempts on auth failure
-      retry_delay: 5           # Delay between retries in seconds
+      # token_ttl: 1800          # Authentication cache duration in seconds (30 minutes)
+      # retry_attempts: 3        # Number of retry attempts on auth failure
+      # retry_delay: 5           # Delay between retries in seconds
     kubernetes:
       # Image pull policy for K8s containers created by xtmcomposer
       # Valid values: Always, IfNotPresent, Never  
