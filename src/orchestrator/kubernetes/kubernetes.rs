@@ -29,15 +29,85 @@ impl KubeOrchestrator {
         }
     }
 
+    // Generate RFC 1123 compliant secret name
+    fn generate_secret_name(&self, registry_config: &crate::config::settings::Registry) -> String {
+        let default_server = "default".to_string();
+        let server = registry_config.server.as_ref()
+            .unwrap_or(&default_server);
+        
+        // Remove trailing slashes and normalize the server name
+        let normalized_server = server.trim_end_matches('/');
+        
+        // Replace invalid characters with hyphens
+        let mut secret_name = format!("opencti-registry-{}", 
+            normalized_server.replace([':', '.', '/'], "-"));
+        
+        // Ensure the name doesn't end with a hyphen (RFC 1123 violation)
+        while secret_name.ends_with('-') {
+            secret_name.pop();
+        }
+        
+        // Ensure the name starts with alphanumeric character
+        if secret_name.starts_with('-') || secret_name.starts_with('.') {
+            secret_name = format!("r{}", secret_name);
+        }
+        
+        // Limit length to 253 characters (Kubernetes limit)
+        if secret_name.len() > 253 {
+            secret_name.truncate(253);
+            // Ensure it still doesn't end with a hyphen after truncation
+            while secret_name.ends_with('-') {
+                secret_name.pop();
+            }
+        }
+        
+        secret_name
+    }
+    
+    // Validate secret name against RFC 1123 subdomain rules
+    fn validate_secret_name(&self, name: &str) -> Result<(), String> {
+        if name.is_empty() {
+            return Err("Secret name cannot be empty".to_string());
+        }
+        
+        if name.len() > 253 {
+            return Err(format!("Secret name too long: {} characters (max 253)", name.len()));
+        }
+        
+        // Check first character
+        let first_char = name.chars().next().unwrap();
+        if !first_char.is_ascii_alphanumeric() {
+            return Err("Secret name must start with alphanumeric character".to_string());
+        }
+        
+        // Check last character
+        let last_char = name.chars().last().unwrap();
+        if !last_char.is_ascii_alphanumeric() {
+            return Err("Secret name must end with alphanumeric character".to_string());
+        }
+        
+        // Check all characters
+        for (i, c) in name.char_indices() {
+            if !c.is_ascii_alphanumeric() && c != '-' && c != '.' {
+                return Err(format!("Invalid character '{}' at position {}", c, i));
+            }
+        }
+        
+        Ok(())
+    }
+
     // Create or update imagePullSecret for private registry
     async fn ensure_image_pull_secret(&self, registry_config: &crate::config::settings::Registry) -> Result<String, Box<dyn std::error::Error>> {
         let client = Client::try_default().await?;
         let secrets: Api<Secret> = Api::default_namespaced(client);
         
-        let secret_name = format!("opencti-registry-{}", 
-            registry_config.server.as_ref()
-                .unwrap_or(&"default".to_string())
-                .replace([':', '.', '/'], "-"));
+        // Generate RFC 1123 compliant secret name
+        let secret_name = self.generate_secret_name(registry_config);
+        
+        // Validate secret name compliance
+        if let Err(e) = self.validate_secret_name(&secret_name) {
+            return Err(format!("Invalid secret name '{}': {}", secret_name, e).into());
+        }
 
         // Create Docker config JSON
         let auth_string = format!(
@@ -60,12 +130,16 @@ impl KubeOrchestrator {
             }
         });
         
-        let docker_config_json = base64::engine::general_purpose::STANDARD
-            .encode(docker_config.to_string().as_bytes());
+        // Serialize Docker config JSON to bytes directly
+        let docker_config_bytes = serde_json::to_vec(&docker_config)
+            .map_err(|e| format!("Failed to serialize Docker config JSON: {}", e))?;
 
-        let secret_data = BTreeMap::from([
-            (".dockerconfigjson".to_string(), docker_config_json)
-        ]);
+        // Create secret with raw JSON bytes (ByteString will base64 encode them)
+        let mut secret_data = BTreeMap::new();
+        secret_data.insert(
+            ".dockerconfigjson".to_string(), 
+            k8s_openapi::ByteString(docker_config_bytes)
+        );
 
         let secret = Secret {
             metadata: ObjectMeta {
@@ -73,31 +147,31 @@ impl KubeOrchestrator {
                 ..Default::default()
             },
             type_: Some("kubernetes.io/dockerconfigjson".to_string()),
-            data: Some(secret_data.into_iter().map(|(k, v)| (k, k8s_openapi::ByteString(v.into_bytes()))).collect()),
+            data: Some(secret_data),
             ..Default::default()
         };
 
         // Try to create or update the secret
         match secrets.create(&PostParams::default(), &secret).await {
             Ok(_) => {
-                info!(secret_name = secret_name, "Created imagePullSecret");
+                info!("Created imagePullSecret: {}", secret_name);
                 Ok(secret_name)
             }
             Err(kube::Error::Api(api_err)) if api_err.code == 409 => {
                 // Secret already exists, update it
                 match secrets.replace(&secret_name, &PostParams::default(), &secret).await {
                     Ok(_) => {
-                        debug!(secret_name = secret_name, "Updated existing imagePullSecret");
+                        debug!("Updated existing imagePullSecret: {}", secret_name);
                         Ok(secret_name)
                     }
                     Err(e) => {
-                        error!(error = %e, "Failed to update imagePullSecret");
+                        error!("Failed to update imagePullSecret: {}", e);
                         Err(e.into())
                     }
                 }
             }
             Err(e) => {
-                error!(error = %e, "Failed to create imagePullSecret");
+                error!("Failed to create imagePullSecret: {}", e);
                 Err(e.into())
             }
         }
@@ -189,7 +263,7 @@ impl KubeOrchestrator {
                 }
             }
             Err(err) => {
-                error!(error = err.to_string(), "Fail to get deployment pod");
+                error!("Fail to get deployment pod: {}", err.to_string());
                 None
             }
         }
@@ -313,7 +387,7 @@ impl Orchestrator for KubeOrchestrator {
         {
             Ok(dep) => dep,
             Err(err) => {
-                debug!(error = err.to_string(), "Cant find deployment");
+                debug!("Cant find deployment: {}", err.to_string());
                 return None;
             }
         };
@@ -339,16 +413,16 @@ impl Orchestrator for KubeOrchestrator {
             .collect()
     }
 
-    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) {
         connector.display_env_variables();
         self.set_deployment_scale(connector, 1).await;
     }
 
-    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) {
         self.set_deployment_scale(connector, 0).await;
     }
 
-    async fn remove(&self, container: &OrchestratorContainer) -> () {
+    async fn remove(&self, container: &OrchestratorContainer) {
         let lp = &ListParams::default().labels(&format!(
             "opencti-connector-id={}",
             container.extract_opencti_id()
@@ -357,10 +431,10 @@ impl Orchestrator for KubeOrchestrator {
         let delete_response = self.deployments.delete_collection(dp, lp).await;
         match delete_response {
             Ok(_) => info!(
-                id = container.extract_opencti_id(),
-                "Deployment successfully deleted"
+                "Deployment successfully deleted: {}",
+                container.extract_opencti_id()
             ),
-            Err(err) => error!(error = err.to_string(), "Fail removing the deployments"),
+            Err(err) => error!("Fail removing the deployments: {}", err.to_string()),
         }
     }
 
@@ -376,11 +450,11 @@ impl Orchestrator for KubeOrchestrator {
         match deployment_result {
             Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
             Err(kube::Error::Api(ae)) => {
-                error!(error = ae.to_string(), "Kubernetes update api error");
+                error!("Kubernetes update api error: {}", ae.to_string());
                 None
             }
             Err(e) => {
-                error!(error = e.to_string(), "Kubernetes update unknown error");
+                error!("Kubernetes update unknown error: {}", e.to_string());
                 None
             }
         }
@@ -397,11 +471,7 @@ impl Orchestrator for KubeOrchestrator {
         let resolved_image = match resolver.resolve_image(&connector.image) {
             Ok(resolved) => resolved,
             Err(e) => {
-                error!(
-                    image = connector.image,
-                    error = %e,
-                    "Failed to resolve image name"
-                );
+                error!("Failed to resolve image name {}: {}", connector.image, e);
                 return None;
             }
         };
@@ -414,7 +484,7 @@ impl Orchestrator for KubeOrchestrator {
                 if let Some(registry_server) = &resolved_image.registry_server {
                     match resolver.get_credentials(registry_server).await {
                         Ok(_) => {
-                            info!(registry = registry_server, "Registry authentication validated");
+                            info!("Registry authentication validated: {}", registry_server);
                             
                             // Create imagePullSecret
                             match self.ensure_image_pull_secret(registry_config).await {
@@ -424,21 +494,13 @@ impl Orchestrator for KubeOrchestrator {
                                     });
                                 }
                                 Err(e) => {
-                                    error!(
-                                        registry = registry_server,
-                                        error = %e,
-                                        "Failed to create imagePullSecret"
-                                    );
+                                    error!("Failed to create imagePullSecret for registry {}: {}", registry_server, e);
                                     return None;
                                 }
                             }
                         }
                         Err(e) => {
-                            error!(
-                                registry = registry_server,
-                                error = %e,
-                                "Failed to get registry credentials"
-                            );
+                            error!("Failed to get registry credentials for registry {}: {}", registry_server, e);
                             return None;
                         }
                     }
@@ -469,11 +531,11 @@ impl Orchestrator for KubeOrchestrator {
         {
             Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
             Err(kube::Error::Api(ae)) => {
-                error!(error = ae.to_string(), "Kubernetes creation api error");
+                error!("Kubernetes creation api error: {}", ae.to_string());
                 None
             }
             Err(e) => {
-                error!(error = e.to_string(), "Kubernetes creation unknown error");
+                error!("Kubernetes creation unknown error: {}", e.to_string());
                 None
             }
         }
@@ -493,7 +555,7 @@ impl Orchestrator for KubeOrchestrator {
                 match text_logs_response {
                     Ok(text_logs) => Some(text_logs.lines().map(|line| line.to_string()).collect()),
                     Err(err) => {
-                        error!(error = err.to_string(), "Error fetching logs");
+                        error!("Error fetching logs: {}", err.to_string());
                         None
                     }
                 }
