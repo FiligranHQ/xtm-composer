@@ -14,6 +14,10 @@ pub struct ApiOpenBAS {
     bearer: String,
     daemon: Daemon,
     logs_schedule: u64,
+    #[allow(dead_code)]
+    request_timeout: u64,
+    #[allow(dead_code)]
+    connect_timeout: u64,
 }
 
 impl ApiOpenBAS {
@@ -23,11 +27,15 @@ impl ApiOpenBAS {
         let api_uri = format!("{}/api", &settings.openbas.url);
         let daemon = settings.openbas.daemon.clone();
         let logs_schedule = settings.openbas.logs_schedule;
+        let request_timeout = settings.openbas.request_timeout;
+        let connect_timeout = settings.openbas.connect_timeout;
         Self {
             api_uri,
             bearer,
             daemon,
             logs_schedule,
+            request_timeout,
+            connect_timeout,
         }
     }
 }

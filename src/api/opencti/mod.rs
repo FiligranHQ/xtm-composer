@@ -23,6 +23,8 @@ pub struct ApiOpenCTI {
     bearer: String,
     daemon: Daemon,
     logs_schedule: u64,
+    request_timeout: u64,
+    connect_timeout: u64,
     private_key: RsaPrivateKey,
 }
 
@@ -33,6 +35,8 @@ impl ApiOpenCTI {
         let api_uri = format!("{}/graphql", &settings.opencti.url);
         let daemon = settings.opencti.daemon.clone();
         let logs_schedule = settings.opencti.logs_schedule;
+        let request_timeout = settings.opencti.request_timeout;
+        let connect_timeout = settings.opencti.connect_timeout;
         // Use the singleton private key
         let private_key = crate::private_key().clone();
         Self {
@@ -40,6 +44,8 @@ impl ApiOpenCTI {
             bearer,
             daemon,
             logs_schedule,
+            request_timeout,
+            connect_timeout,
             private_key
         }
     }
@@ -54,6 +60,8 @@ impl ApiOpenCTI {
     {
         use cynic::http::ReqwestExt;
         reqwest::Client::builder()
+            .timeout(Duration::from_secs(self.request_timeout))
+            .connect_timeout(Duration::from_secs(self.connect_timeout))
             .build()
             .unwrap()
             .post(self.api_uri.clone())
