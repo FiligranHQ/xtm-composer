@@ -14,6 +14,8 @@ pub struct ApiOpenBAS {
     bearer: String,
     daemon: Daemon,
     logs_schedule: u64,
+    // TODO: Implement timeout configuration when OpenBAS API methods are implemented
+    // These fields are stored for future use when the todo!() macros are replaced with actual implementations
     #[allow(dead_code)]
     request_timeout: u64,
     #[allow(dead_code)]

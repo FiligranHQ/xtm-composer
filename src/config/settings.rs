@@ -19,22 +19,6 @@ fn default_log_format() -> String {
     "json".to_string()
 }
 
-fn default_opencti_request_timeout() -> u64 {
-    30
-}
-
-fn default_opencti_connect_timeout() -> u64 {
-    10
-}
-
-fn default_openbas_request_timeout() -> u64 {
-    30
-}
-
-fn default_openbas_connect_timeout() -> u64 {
-    10
-}
-
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Debug {
@@ -75,9 +59,7 @@ pub struct OpenCTI {
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
     pub logs_schedule: u64,
-    #[serde(default = "default_opencti_request_timeout")]
     pub request_timeout: u64,
-    #[serde(default = "default_opencti_connect_timeout")]
     pub connect_timeout: u64,
     pub daemon: Daemon,
 }
@@ -91,9 +73,7 @@ pub struct OpenBAS {
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
     pub logs_schedule: u64,
-    #[serde(default = "default_openbas_request_timeout")]
     pub request_timeout: u64,
-    #[serde(default = "default_openbas_connect_timeout")]
     pub connect_timeout: u64,
     pub daemon: Daemon,
 }
