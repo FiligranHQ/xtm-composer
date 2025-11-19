@@ -59,6 +59,8 @@ pub struct OpenCTI {
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
     pub logs_schedule: u64,
+    pub request_timeout: u64,
+    pub connect_timeout: u64,
     pub daemon: Daemon,
 }
 
@@ -71,6 +73,8 @@ pub struct OpenBAS {
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
     pub logs_schedule: u64,
+    pub request_timeout: u64,
+    pub connect_timeout: u64,
     pub daemon: Daemon,
 }
 

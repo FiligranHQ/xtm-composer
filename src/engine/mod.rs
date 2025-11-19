@@ -58,35 +58,38 @@ pub async fn alive(api: Box<dyn ComposerApi + Send + Sync>) -> JoinHandle<()> {
         tokio::select! {
             _ = signals::handle_stop_signals() => {}
             _ = async {
-                // Get the api version
-                let version = api.version().await;
-                match version {
-                    Some(version) => {
-                        // Register the manager with contracts align with api version
-                        api.register().await;
-                        let mut detected_version: String = version.clone();
-                        loop {
-                            let ping_response = api.ping_alive().await;
-                            match ping_response {
-                                Some(platform_version) => {
-                                    // Register the manager at start or when version change
-                                    if platform_version != detected_version {
-                                        api.register().await;
-                                        detected_version = platform_version;
+                // Infinite retry loop for initial connection
+                loop {
+                    let version = api.version().await;
+                    match version {
+                        Some(version) => {
+                            // Connection successful - register and start ping loop
+                            api.register().await;
+                            let mut detected_version: String = version.clone();
+                            loop {
+                                let ping_response = api.ping_alive().await;
+                                match ping_response {
+                                    Some(platform_version) => {
+                                        // Register when version changes
+                                        if platform_version != detected_version {
+                                            api.register().await;
+                                            detected_version = platform_version;
+                                        }
+                                    }
+                                    _ => {
+                                        // Connection lost - break to outer retry loop
+                                        break;
                                     }
                                 }
-                                _ => {
-                                    // Error already handle in upper level
-                                }
+                                interval.tick().await;
                             }
-                            interval.tick().await; // Wait for period
+                        },
+                        None => {
+                            // Connection failed - wait and retry
+                            interval.tick().await;
                         }
-                    },
-                    _ => {
-                        // Error already handle in upper level
                     }
                 }
-
             } => {
                 // This branch will never be reached due to the infinite loop.
             }
