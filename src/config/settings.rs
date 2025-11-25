@@ -3,6 +3,8 @@ use k8s_openapi::api::apps::v1::Deployment;
 use serde::Deserialize;
 use std::env;
 
+use super::SecretString;
+
 const ENV_PRODUCTION: &str = "production";
 
 #[derive(Debug, Deserialize, Clone)]
@@ -99,27 +101,35 @@ pub struct Kubernetes {
 #[allow(unused)]
 pub struct Registry {
     pub server: Option<String>,
-    pub username: Option<String>,
-    pub password: Option<String>,
+    pub username: Option<SecretString>,
+    pub password: Option<SecretString>,
     pub email: Option<String>,
-    #[serde(default = "default_token_ttl")]
-    pub token_ttl: u64,
-    #[serde(default = "default_retry_attempts")]
-    pub retry_attempts: u8,
-    #[serde(default = "default_retry_delay")]
-    pub retry_delay: u64,
+    
+    // Kubernetes secret auto-refresh configuration
+    #[serde(default = "default_auto_refresh_secret")]
+    pub auto_refresh_secret: bool,
+    
+    #[serde(default = "default_refresh_threshold")]
+    pub refresh_threshold: f64,
 }
 
-fn default_token_ttl() -> u64 {
-    1800 // 30 minutes in seconds
+impl Registry {
+    /// Normalize the registry config by ensuring a server is always defined.
+    /// If no server is configured or it's empty, defaults to docker.io.
+    pub fn normalize(mut self) -> Self {
+        if self.server.is_none() || self.server.as_ref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+            self.server = Some("docker.io".to_string());
+        }
+        self
+    }
 }
 
-fn default_retry_attempts() -> u8 {
-    3
+fn default_auto_refresh_secret() -> bool {
+    false // Disabled by default (platform-managed secrets recommended)
 }
 
-fn default_retry_delay() -> u64 {
-    5 // 5 seconds
+fn default_refresh_threshold() -> f64 {
+    0.8 // Refresh at 80% of TTL
 }
 
 
@@ -160,11 +170,28 @@ impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
         let run_mode = Self::mode();
         let config_builder = Config::builder();
-        config_builder
+        let mut settings: Settings = config_builder
             .add_source(File::with_name("config/default"))
             .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
             .add_source(Environment::default().try_parsing(true).separator("__"))
             .build()?
-            .try_deserialize()
+            .try_deserialize()?;
+        
+        // Normalize the OpenCTI registry configuration
+        if let Some(registry) = settings.opencti.daemon.registry.take() {
+            settings.opencti.daemon.registry = Some(registry.normalize());
+        } else {
+            // If no registry config, create a default docker.io config
+            settings.opencti.daemon.registry = Some(Registry {
+                server: Some("docker.io".to_string()),
+                username: None,
+                password: None,
+                email: None,
+                auto_refresh_secret: default_auto_refresh_secret(),
+                refresh_threshold: default_refresh_threshold(),
+            });
+        }
+        
+        Ok(settings)
     }
 }

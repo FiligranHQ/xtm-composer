@@ -7,24 +7,24 @@ pub mod portainer;
 
 #[derive(Serialize)]
 #[serde(rename_all(serialize = "PascalCase"))]
-struct PortainerDeployHostConfig {
-    network_mode: Option<String>,
+pub struct PortainerDeployHostConfig {
+    pub network_mode: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all(serialize = "PascalCase"))]
-struct PortainerDeployPayload {
-    image: String,
-    env: Vec<String>,
-    labels: HashMap<String, String>,
-    host_config: PortainerDeployHostConfig,
+pub struct PortainerDeployPayload {
+    pub image: String,
+    pub env: Vec<String>,
+    pub labels: HashMap<String, String>,
+    pub host_config: PortainerDeployHostConfig,
 }
 
 pub struct PortainerDockerOrchestrator {
-    client: Client,
-    image_uri: String,
-    container_uri: String,
-    config: Portainer,
+    pub client: Client,
+    pub image_uri: String,
+    pub container_uri: String,
+    pub config: Portainer,
 }
 
 #[derive(Deserialize)]

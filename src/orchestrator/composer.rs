@@ -9,7 +9,7 @@ async fn orchestrate_missing(
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
     connector: &ApiConnector,
-) {
+) -> Option<()> {
     // Connector is not provisioned, deploy the images
     let id = connector.id.clone();
     info!(id = id, "Deploying the container");
@@ -19,9 +19,11 @@ async fn orchestrate_missing(
         Some(_) => {
             info!(id = id, "Container deployed successfully");
             api.patch_status(id, ConnectorStatus::Stopped).await;
+            Some(())
         }
         None => {
-            warn!(id = id, "Deployment canceled");
+            warn!(id = id, "Deployment failed");
+            None
         }
     }
 }
@@ -33,7 +35,7 @@ async fn orchestrate_existing(
     api: &Box<dyn ComposerApi + Send + Sync>,
     connector: &ApiConnector,
     container: OrchestratorContainer,
-) {
+) -> Option<()> {
     // Connector is provisioned
     let connector_id = connector.id.clone();
     let current_status_fetch = connector.current_status.clone().unwrap_or("stopped".into()); // Default current to created
@@ -101,7 +103,12 @@ async fn orchestrate_existing(
             hash = requested_connector_hash,
             "Refreshing"
         );
-        orchestrator.refresh(connector).await;
+        let refresh_result = orchestrator.refresh(connector).await;
+        if refresh_result.is_none() {
+            warn!(id = connector_id, "Refresh failed");
+            return None;
+        }
+        info!(id = connector_id, "Refresh successful");
     }
     // Align existing and requested status
     let requested_status = RequestedStatus::from_str(requested_status_fetch.as_str()).unwrap();
@@ -135,6 +142,7 @@ async fn orchestrate_existing(
         }
         *tick = now;
     }
+    Some(())
 }
 
 pub async fn orchestrate(
@@ -152,11 +160,20 @@ pub async fn orchestrate(
         for connector in &connectors {
             // Get current containers in the orchestrator
             let container_get = orchestrator.get(connector).await;
-            match container_get {
+            let orchestration_result = match container_get {
                 Some(container) => {
                     orchestrate_existing(tick, health_tick, orchestrator, api, connector, container).await
                 }
                 None => orchestrate_missing(orchestrator, api, connector).await,
+            };
+            
+            // Handle orchestration failure without blocking other connectors
+            if orchestration_result.is_none() {
+                warn!(
+                    connector_id = connector.id,
+                    "Failed to orchestrate connector - will retry on next tick"
+                );
+                // Continue with other connectors - failed connector will be retried next cycle
             }
         }
         // Iter on each existing container to clean the containers

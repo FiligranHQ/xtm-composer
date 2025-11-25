@@ -1,5 +1,6 @@
 use serde::Serialize;
-use crate::api::{ApiConnector, ApiContractConfig};
+use crate::api::{ApiConnector, ApiContractConfig, EnvValue};
+use crate::config::secret_string::SecretString;
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey};
 use tracing::{warn};
 use std::str;
@@ -86,23 +87,20 @@ impl ManagedConnector {
                     match decoded_value_result {
                         Ok(decoded_value) => ApiContractConfig {
                             key: c.key,
-                            value: decoded_value,
-                            is_sensitive: true,
+                            value: EnvValue::Secret(SecretString::new(decoded_value)),
                         },
                         Err(e) => {
                             warn!(error = e.to_string(), "Fail to decode value");
                             ApiContractConfig {
                                 key: c.key,
-                                value: String::from(""),
-                                is_sensitive: true,
+                                value: EnvValue::Secret(SecretString::new(String::from(""))),
                             }
                         }
                     }
                 } else {
                     ApiContractConfig {
                         key: c.key,
-                        value: c.value.unwrap_or_default(),
-                        is_sensitive: false,
+                        value: EnvValue::Public(c.value.unwrap_or_default()),
                     }
                 }
             })

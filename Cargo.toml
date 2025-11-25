@@ -3,6 +3,9 @@ name = "xtm-composer"
 version = "1.0.0"
 edition = "2024"
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 rsa = {version = "0.9.8"}
 bollard = { version = "0.18.1" }
@@ -24,7 +27,7 @@ kube = { version = "0.98.0", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.24.0", features = ["latest"] }
 base64 = "0.22.1"
 aes-gcm = "0.10.3"
-lazy_static = "1.4.0"
+oci-distribution = { version = "0.11.0", default-features = false }
 
 [build-dependencies]
 cynic-codegen = { version = "3" }

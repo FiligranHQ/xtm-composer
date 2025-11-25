@@ -19,7 +19,16 @@ use base64::Engine;
 
 impl KubeOrchestrator {
     pub async fn new(config: Kubernetes) -> Self {
-        let client = Client::try_default().await.unwrap();
+        let client = match Client::try_default().await {
+            Ok(client) => client,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "Failed to create Kubernetes client"
+                );
+                panic!("Cannot initialize Kubernetes orchestrator without client");
+            }
+        };
         let pods: Api<Pod> = Api::default_namespaced(client.clone());
         let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
         Self {
@@ -29,33 +38,26 @@ impl KubeOrchestrator {
         }
     }
 
-    // Generate RFC 1123 compliant secret name
-    fn generate_secret_name(&self, registry_config: &crate::config::settings::Registry) -> String {
+    pub fn generate_secret_name(&self, registry_config: &crate::config::settings::Registry) -> String {
         let default_server = "default".to_string();
         let server = registry_config.server.as_ref()
             .unwrap_or(&default_server);
         
-        // Remove trailing slashes and normalize the server name
         let normalized_server = server.trim_end_matches('/');
         
-        // Replace invalid characters with hyphens
         let mut secret_name = format!("opencti-registry-{}", 
             normalized_server.replace([':', '.', '/'], "-"));
         
-        // Ensure the name doesn't end with a hyphen (RFC 1123 violation)
         while secret_name.ends_with('-') {
             secret_name.pop();
         }
         
-        // Ensure the name starts with alphanumeric character
         if secret_name.starts_with('-') || secret_name.starts_with('.') {
             secret_name = format!("r{}", secret_name);
         }
         
-        // Limit length to 253 characters (Kubernetes limit)
         if secret_name.len() > 253 {
             secret_name.truncate(253);
-            // Ensure it still doesn't end with a hyphen after truncation
             while secret_name.ends_with('-') {
                 secret_name.pop();
             }
@@ -64,8 +66,7 @@ impl KubeOrchestrator {
         secret_name
     }
     
-    // Validate secret name against RFC 1123 subdomain rules
-    fn validate_secret_name(&self, name: &str) -> Result<(), String> {
+    pub fn validate_secret_name(&self, name: &str) -> Result<(), String> {
         if name.is_empty() {
             return Err("Secret name cannot be empty".to_string());
         }
@@ -74,19 +75,16 @@ impl KubeOrchestrator {
             return Err(format!("Secret name too long: {} characters (max 253)", name.len()));
         }
         
-        // Check first character
         let first_char = name.chars().next().unwrap();
         if !first_char.is_ascii_alphanumeric() {
             return Err("Secret name must start with alphanumeric character".to_string());
         }
         
-        // Check last character
         let last_char = name.chars().last().unwrap();
         if !last_char.is_ascii_alphanumeric() {
             return Err("Secret name must end with alphanumeric character".to_string());
         }
         
-        // Check all characters
         for (i, c) in name.char_indices() {
             if !c.is_ascii_alphanumeric() && c != '-' && c != '.' {
                 return Err(format!("Invalid character '{}' at position {}", c, i));
@@ -96,24 +94,27 @@ impl KubeOrchestrator {
         Ok(())
     }
 
-    // Create or update imagePullSecret for private registry
-    async fn ensure_image_pull_secret(&self, registry_config: &crate::config::settings::Registry) -> Result<String, Box<dyn std::error::Error>> {
+    /// Create or update imagePullSecret for private registry.
+    /// Kubernetes secrets persist in cluster and don't auto-refresh by default.
+    /// Use External Secrets Operator for automatic rotation, or set auto_refresh_secret=true.
+    pub async fn ensure_image_pull_secret(&self, registry_config: &crate::config::settings::Registry) -> Result<String, Box<dyn std::error::Error>> {
         let client = Client::try_default().await?;
         let secrets: Api<Secret> = Api::default_namespaced(client);
         
-        // Generate RFC 1123 compliant secret name
         let secret_name = self.generate_secret_name(registry_config);
         
-        // Validate secret name compliance
         if let Err(e) = self.validate_secret_name(&secret_name) {
             return Err(format!("Invalid secret name '{}': {}", secret_name, e).into());
         }
 
-        // Create Docker config JSON
         let auth_string = format!(
             "{}:{}",
-            registry_config.username.as_ref().unwrap_or(&String::new()),
-            registry_config.password.as_ref().unwrap_or(&String::new())
+            registry_config.username.as_ref()
+                .map(|s| s.expose_secret())
+                .unwrap_or(""),
+            registry_config.password.as_ref()
+                .map(|s| s.expose_secret())
+                .unwrap_or("")
         );
         let auth_base64 = base64::engine::general_purpose::STANDARD.encode(auth_string.as_bytes());
         
@@ -122,19 +123,21 @@ impl KubeOrchestrator {
         let docker_config = serde_json::json!({
             "auths": {
                 server_url: {
-                    "username": registry_config.username,
-                    "password": registry_config.password,
+                    "username": registry_config.username.as_ref()
+                        .map(|s| s.expose_secret())
+                        .unwrap_or(""),
+                    "password": registry_config.password.as_ref()
+                        .map(|s| s.expose_secret())
+                        .unwrap_or(""),
                     "email": registry_config.email.as_ref().unwrap_or(&"".to_string()),
                     "auth": auth_base64
                 }
             }
         });
         
-        // Serialize Docker config JSON to bytes directly
         let docker_config_bytes = serde_json::to_vec(&docker_config)
             .map_err(|e| format!("Failed to serialize Docker config JSON: {}", e))?;
 
-        // Create secret with raw JSON bytes (ByteString will base64 encode them)
         let mut secret_data = BTreeMap::new();
         secret_data.insert(
             ".dockerconfigjson".to_string(), 
@@ -151,14 +154,12 @@ impl KubeOrchestrator {
             ..Default::default()
         };
 
-        // Try to create or update the secret
         match secrets.create(&PostParams::default(), &secret).await {
             Ok(_) => {
                 info!("Created imagePullSecret: {}", secret_name);
                 Ok(secret_name)
             }
             Err(kube::Error::Api(api_err)) if api_err.code == 409 => {
-                // Secret already exists, update it
                 match secrets.replace(&secret_name, &PostParams::default(), &secret).await {
                     Ok(_) => {
                         debug!("Updated existing imagePullSecret: {}", secret_name);
@@ -177,8 +178,7 @@ impl KubeOrchestrator {
         }
     }
 
-    // Validate and return image pull policy
-    fn get_image_pull_policy(&self) -> String {
+    pub fn get_image_pull_policy(&self) -> String {
         const VALID_POLICIES: [&str; 3] = ["Always", "IfNotPresent", "Never"];
         const DEFAULT_POLICY: &str = "IfNotPresent";
         
@@ -205,15 +205,12 @@ impl KubeOrchestrator {
             .iter()
             .map(|config| EnvVar {
                 name: config.key.clone(),
-                value: Some(config.value.clone()),
+                value: Some(config.value.as_str().to_string()),
                 value_from: None,
             })
             .collect()
     }
 
-    pub fn convert_to_map(labels: &BTreeMap<String, String>) -> HashMap<String, String> {
-        labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-    }
 
     async fn set_deployment_scale(&self, connector: &ApiConnector, scale: i32) {
         let deployment_patch = Deployment {
@@ -225,10 +222,26 @@ impl KubeOrchestrator {
         };
         let patch = Patch::Merge(&deployment_patch);
         let name = connector.container_name();
-        self.deployments
+        match self.deployments
             .patch(name.as_str(), &PatchParams::default(), &patch)
             .await
-            .unwrap();
+        {
+            Ok(_) => {
+                debug!(
+                    name = name,
+                    scale = scale,
+                    "Deployment scale updated"
+                );
+            }
+            Err(e) => {
+                error!(
+                    name = name,
+                    scale = scale,
+                    error = %e,
+                    "Failed to update deployment scale"
+                );
+            }
+        }
     }
 
     pub fn from_deployment(deployment: Deployment) -> OrchestratorContainer {
@@ -239,13 +252,23 @@ impl KubeOrchestrator {
         } else {
             "running"
         };
-        let annotations_as_env = KubeOrchestrator::convert_to_map(deployment.annotations());
+        // Convert annotations (BTreeMap) to envs (HashMap)
+        let annotations_as_env: HashMap<String, String> = deployment.annotations()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        // Convert labels (BTreeMap) to HashMap
+        let labels_map: HashMap<String, String> = deployment.labels()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        
         OrchestratorContainer {
             id: deployment.uid().unwrap(),
             name: dep.metadata.name.unwrap(),
             state: compute_state.to_string(),
             envs: annotations_as_env,
-            labels: KubeOrchestrator::convert_to_map(&deployment.labels()),
+            labels: labels_map,
             restart_count: 0, // Will be updated from pod status
             started_at: None, // Will be updated from pod status
         }
@@ -339,10 +362,19 @@ impl KubeOrchestrator {
         let mut base_deploy = self.config.base_deployment.clone();
         // No direct deploy configuration, check the json format
         if base_deploy.is_none() {
-            let json_deploy = self.config.base_deployment_json.clone();
-            // If json base deploy defined, try to generate the base from it
-            if json_deploy.is_some() {
-                base_deploy = Some(serde_json::from_str(json_deploy.unwrap().as_str()).unwrap());
+            if let Some(json_deploy) = self.config.base_deployment_json.clone() {
+                // If json base deploy defined, try to generate the base from it
+                match serde_json::from_str(json_deploy.as_str()) {
+                    Ok(deployment) => {
+                        base_deploy = Some(deployment);
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            "Failed to parse base_deployment_json, using default deployment"
+                        );
+                    }
+                }
             }
         }
         let mut base_deployment = base_deploy.unwrap_or(Deployment {
@@ -352,7 +384,6 @@ impl KubeOrchestrator {
         base_deployment
     }
 
-    // Enrich container with pod information
     fn enrich_container_from_pod(&self, container: &mut OrchestratorContainer, pod: Pod) {
         let container_status = pod.status
             .and_then(|status| status.container_statuses)
@@ -367,7 +398,6 @@ impl KubeOrchestrator {
         }
     }
     
-    // Extract started_at timestamp from container status
     fn extract_started_at(&self, container_status: &ContainerStatus) -> Option<String> {
         container_status.state
             .as_ref()
@@ -406,11 +436,22 @@ impl Orchestrator for KubeOrchestrator {
         let settings = crate::settings();
         let lp = &ListParams::default()
             .labels(&format!("opencti-manager={}", settings.manager.id.clone()));
-        let get_deployments = self.deployments.list(lp).await.unwrap();
-        get_deployments
-            .into_iter()
-            .map(|deployment| KubeOrchestrator::from_deployment(deployment))
-            .collect()
+        match self.deployments.list(lp).await {
+            Ok(get_deployments) => {
+                get_deployments
+                    .into_iter()
+                    .map(|deployment| KubeOrchestrator::from_deployment(deployment))
+                    .collect()
+            }
+            Err(e) => {
+                error!(
+                    error = %e,
+                    manager_id = %settings.manager.id,
+                    "Failed to list Kubernetes deployments"
+                );
+                Vec::new()
+            }
+        }
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) {
@@ -463,7 +504,7 @@ impl Orchestrator for KubeOrchestrator {
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let settings = crate::settings();
         
-        // Create registry resolver - use daemon-level registry config
+        // Create registry resolver
         let registry_config = settings.opencti.daemon.registry.clone();
         let resolver = RegistryResolver::new(registry_config.clone());
         
@@ -476,33 +517,29 @@ impl Orchestrator for KubeOrchestrator {
             }
         };
 
-        // Handle private registry authentication if needed
+        // Handle private registry authentication - Kubernetes creates imagePullSecret (no cache needed)
         let mut image_pull_secrets = Vec::new();
         if resolved_image.needs_auth {
             if let Some(registry_config) = &registry_config {
-                // Ensure authentication is cached (similar to Docker)
-                if let Some(registry_server) = &resolved_image.registry_server {
-                    match resolver.get_credentials(registry_server).await {
-                        Ok(_) => {
-                            info!("Registry authentication validated: {}", registry_server);
-                            
-                            // Create imagePullSecret
-                            match self.ensure_image_pull_secret(registry_config).await {
-                                Ok(secret_name) => {
-                                    image_pull_secrets.push(LocalObjectReference {
-                                        name: secret_name
-                                    });
-                                }
-                                Err(e) => {
-                                    error!("Failed to create imagePullSecret for registry {}: {}", registry_server, e);
-                                    return None;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to get registry credentials for registry {}: {}", registry_server, e);
-                            return None;
-                        }
+                // Create imagePullSecret directly (secret persists in cluster)
+                match self.ensure_image_pull_secret(registry_config).await {
+                    Ok(secret_name) => {
+                        info!(
+                            orchestrator = "kubernetes",
+                            secret = secret_name,
+                            "ImagePullSecret ready"
+                        );
+                        image_pull_secrets.push(LocalObjectReference {
+                            name: secret_name
+                        });
+                    }
+                    Err(e) => {
+                        error!(
+                            orchestrator = "kubernetes",
+                            error = %e,
+                            "Failed to create imagePullSecret"
+                        );
+                        return None;
                     }
                 }
             }
@@ -518,10 +555,23 @@ impl Orchestrator for KubeOrchestrator {
         );
 
         // Log deployment attempt
-        if resolved_image.registry_server.is_some() {
-            info!("Deploying Kubernetes pod with image {} from private registry", resolved_image.full_name);
+        if let Some(registry_server) = &resolved_image.registry_server {
+            info!(
+                orchestrator = "kubernetes",
+                image = resolved_image.full_name,
+                registry = registry_server,
+                operation = "deploy",
+                status = "started",
+                "Starting Kubernetes deployment with private registry image"
+            );
         } else {
-            info!("Deploying Kubernetes pod with image {} from Docker Hub", resolved_image.full_name);
+            info!(
+                orchestrator = "kubernetes",
+                image = resolved_image.full_name,
+                operation = "deploy",
+                status = "started",
+                "Starting Kubernetes deployment with Docker Hub image"
+            );
         }
 
         match self
@@ -529,13 +579,36 @@ impl Orchestrator for KubeOrchestrator {
             .create(&PostParams::default(), &deployment_creation)
             .await
         {
-            Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
+            Ok(deployment) => {
+                info!(
+                    orchestrator = "kubernetes",
+                    image = resolved_image.full_name,
+                    operation = "deploy",
+                    status = "completed",
+                    "Kubernetes deployment completed"
+                );
+                Some(KubeOrchestrator::from_deployment(deployment))
+            }
             Err(kube::Error::Api(ae)) => {
-                error!("Kubernetes creation api error: {}", ae.to_string());
+                error!(
+                    orchestrator = "kubernetes",
+                    image = resolved_image.full_name,
+                    operation = "deploy",
+                    status = "failed",
+                    error = %ae,
+                    "Kubernetes deployment failed (API error)"
+                );
                 None
             }
             Err(e) => {
-                error!("Kubernetes creation unknown error: {}", e.to_string());
+                error!(
+                    orchestrator = "kubernetes",
+                    image = resolved_image.full_name,
+                    operation = "deploy",
+                    status = "failed",
+                    error = %e,
+                    "Kubernetes deployment failed"
+                );
                 None
             }
         }
@@ -574,13 +647,3 @@ impl Orchestrator for KubeOrchestrator {
         }
     }
 }
-
-// region async map resolution code sample
-// let async_resolver = get_deployments
-//     .into_iter()
-//     .map(|deployment| self.get_container(deployment, connector));
-// let deploy_to_containers = futures::stream::iter(async_resolver)
-//     .buffer_unordered(3)
-//     .collect::<Vec<_>>();
-// Some(deploy_to_containers.await)
-// endregion

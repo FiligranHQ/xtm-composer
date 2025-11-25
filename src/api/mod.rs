@@ -1,4 +1,5 @@
 use crate::config::settings::Daemon;
+use crate::config::secret_string::SecretString;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,18 +17,39 @@ pub struct ContractsManifest {
     contracts: Value,
 }
 
+/// Environment variable value that can be either public or secret
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum EnvValue {
+    Public(String),
+    Secret(SecretString),
+}
+
+impl EnvValue {
+    /// Get the raw string value (for Docker/K8s deployment)
+    pub fn as_str(&self) -> &str {
+        match self {
+            EnvValue::Public(s) => s,
+            EnvValue::Secret(secret) => secret.expose_secret(),
+        }
+    }
+    
+    /// Check if this value is sensitive
+    pub fn is_sensitive(&self) -> bool {
+        matches!(self, EnvValue::Secret(_))
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct EnvVariable {
     pub key: String,
-    pub value: String,
-    pub is_sensitive: bool,
+    pub value: EnvValue,
 }
 
 #[derive(Debug, Clone)]
 pub struct ApiContractConfig {
     pub key: String,
-    pub value: String,
-    pub is_sensitive: bool,
+    pub value: EnvValue,
 }
 
 #[derive(Debug, Clone)]
@@ -96,18 +118,15 @@ impl ApiConnector {
             .map(|config| EnvVariable {
                 key: config.key.clone(),
                 value: config.value.clone(),
-                is_sensitive: config.is_sensitive,
             })
             .collect::<Vec<EnvVariable>>();
         envs.push(EnvVariable {
             key: "OPENCTI_URL".into(),
-            value: settings.opencti.url.clone(),
-            is_sensitive: false,
+            value: EnvValue::Public(settings.opencti.url.clone()),
         });
         envs.push(EnvVariable {
             key: "OPENCTI_CONFIG_HASH".into(),
-            value: self.contract_hash.clone(),
-            is_sensitive: false,
+            value: EnvValue::Public(self.contract_hash.clone()),
         });
         envs
     }
@@ -117,29 +136,30 @@ impl ApiConnector {
         let settings = crate::settings();
         
         // Check if display is enabled in configuration
-        let should_display = settings.manager.debug
-            .as_ref()
-            .map_or(false, |debug| debug.show_env_vars);
-        
-        if !should_display {
+        if !settings.manager.debug.as_ref().map_or(false, |d| d.show_env_vars) {
             return;
         }
         
         // Check if we should show sensitive values
         let show_sensitive = settings.manager.debug
             .as_ref()
-            .map_or(false, |debug| debug.show_sensitive_env_vars);
+            .map_or(false, |d| d.show_sensitive_env_vars);
         
         let envs = self.container_envs();
         
-        // Build environment variables map with masked sensitive values
+        // Build environment variables map with automatic masking via SecretString
         let env_vars: HashMap<String, String> = envs
             .into_iter()
             .map(|env| {
-                let value = if env.is_sensitive && !show_sensitive {
-                    "***REDACTED***".to_string()
-                } else {
-                    env.value
+                let value = match &env.value {
+                    EnvValue::Public(v) => v.clone(),
+                    EnvValue::Secret(s) => {
+                        if show_sensitive {
+                            s.expose_secret().to_string()
+                        } else {
+                            format!("{:?}", s) // Automatically "***REDACTED***"
+                        }
+                    }
                 };
                 (env.key, value)
             })
@@ -174,4 +194,158 @@ pub trait ComposerApi {
     async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<cynic::Id>;
 
     async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<cynic::Id>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_env_value_secret_debug_redacted() {
+        let secret = EnvValue::Secret(SecretString::new("password123".to_string()));
+        let debug_output = format!("{:?}", secret);
+        assert!(debug_output.contains("***REDACTED***"));
+        assert!(!debug_output.contains("password123"));
+    }
+
+    #[test]
+    fn test_env_value_public_visible() {
+        let public = EnvValue::Public("public_value".to_string());
+        let debug_output = format!("{:?}", public);
+        assert!(debug_output.contains("public_value"));
+    }
+
+    #[test]
+    fn test_env_value_as_str() {
+        let public = EnvValue::Public("public_value".to_string());
+        let secret = EnvValue::Secret(SecretString::new("secret_value".to_string()));
+        
+        assert_eq!(public.as_str(), "public_value");
+        assert_eq!(secret.as_str(), "secret_value");
+    }
+
+    #[test]
+    fn test_env_value_is_sensitive() {
+        let public = EnvValue::Public("value".to_string());
+        let secret = EnvValue::Secret(SecretString::new("secret".to_string()));
+        
+        assert!(!public.is_sensitive());
+        assert!(secret.is_sensitive());
+    }
+
+    #[test]
+    fn test_env_variable_mixed_types() {
+        let public_var = EnvVariable {
+            key: "PUBLIC_KEY".to_string(),
+            value: EnvValue::Public("value".to_string()),
+        };
+        
+        let secret_var = EnvVariable {
+            key: "SECRET_KEY".to_string(),
+            value: EnvValue::Secret(SecretString::new("secret".to_string())),
+        };
+        
+        assert!(!public_var.value.is_sensitive());
+        assert!(secret_var.value.is_sensitive());
+        
+        // Test debug output masks secrets
+        let debug = format!("{:?}", secret_var);
+        assert!(debug.contains("***REDACTED***"));
+        assert!(!debug.contains("secret"));
+    }
+
+    #[test]
+    fn test_env_value_serialization() {
+        use serde_json;
+        
+        let public = EnvValue::Public("test_value".to_string());
+        let public_json = serde_json::to_string(&public).unwrap();
+        assert_eq!(public_json, r#""test_value""#);
+        
+        // Secret serializes as REDACTED for safety
+        let secret = EnvValue::Secret(SecretString::new("secret_pass".to_string()));
+        let secret_json = serde_json::to_string(&secret).unwrap();
+        assert_eq!(secret_json, r#""***REDACTED***""#);
+        assert!(!secret_json.contains("secret_pass"));
+    }
+
+    #[test]
+    fn test_api_contract_config_types() {
+        let public_config = ApiContractConfig {
+            key: "PUBLIC_VAR".to_string(),
+            value: EnvValue::Public("public_value".to_string()),
+        };
+        
+        let secret_config = ApiContractConfig {
+            key: "SECRET_VAR".to_string(),
+            value: EnvValue::Secret(SecretString::new("secret_value".to_string())),
+        };
+        
+        assert!(!public_config.value.is_sensitive());
+        assert_eq!(public_config.value.as_str(), "public_value");
+        
+        assert!(secret_config.value.is_sensitive());
+        assert_eq!(secret_config.value.as_str(), "secret_value");
+        
+        // Verify debug output
+        let debug = format!("{:?}", secret_config);
+        assert!(debug.contains("***REDACTED***"));
+        assert!(!debug.contains("secret_value"));
+    }
+
+    #[test]
+    fn test_container_envs_creates_correct_types() {
+        // Create a test connector with mixed sensitive/public configs
+        let connector = ApiConnector {
+            id: "test-id".to_string(),
+            name: "test-connector".to_string(),
+            image: "test/image".to_string(),
+            contract_hash: "hash123".to_string(),
+            current_status: None,
+            requested_status: "starting".to_string(),
+            contract_configuration: vec![
+                ApiContractConfig {
+                    key: "PUBLIC_VAR".to_string(),
+                    value: EnvValue::Public("public_value".to_string()),
+                },
+                ApiContractConfig {
+                    key: "SECRET_VAR".to_string(),
+                    value: EnvValue::Secret(SecretString::new("secret_value".to_string())),
+                },
+            ],
+        };
+        
+        let envs = connector.container_envs();
+        
+        // Should have 4 variables: 2 from config + OPENCTI_URL + OPENCTI_CONFIG_HASH
+        assert_eq!(envs.len(), 4);
+        
+        // Find each variable and verify types
+        let public_var = envs.iter().find(|e| e.key == "PUBLIC_VAR").unwrap();
+        assert!(!public_var.value.is_sensitive());
+        assert_eq!(public_var.value.as_str(), "public_value");
+        
+        let secret_var = envs.iter().find(|e| e.key == "SECRET_VAR").unwrap();
+        assert!(secret_var.value.is_sensitive());
+        assert_eq!(secret_var.value.as_str(), "secret_value");
+        
+        // Verify added environment variables are public
+        let opencti_url = envs.iter().find(|e| e.key == "OPENCTI_URL").unwrap();
+        assert!(!opencti_url.value.is_sensitive());
+        
+        let config_hash = envs.iter().find(|e| e.key == "OPENCTI_CONFIG_HASH").unwrap();
+        assert!(!config_hash.value.is_sensitive());
+        assert_eq!(config_hash.value.as_str(), "hash123");
+    }
+
+    #[test]
+    fn test_env_value_clone() {
+        let public = EnvValue::Public("test".to_string());
+        let public_clone = public.clone();
+        assert_eq!(public.as_str(), public_clone.as_str());
+        
+        let secret = EnvValue::Secret(SecretString::new("secret".to_string()));
+        let secret_clone = secret.clone();
+        assert_eq!(secret.as_str(), secret_clone.as_str());
+    }
 }

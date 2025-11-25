@@ -1,0 +1,15 @@
+name: run test on push
+
+on:
+  push:
+    branches:
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: use cargo to run test
+        run: |
+         cargo test --lib

@@ -16,7 +16,7 @@ use reqwest::header::HeaderMap;
 use reqwest::{Client, header};
 use std::collections::HashMap;
 use std::fmt::Error;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 const X_API_KEY: &str = "X-API-KEY";
 
@@ -31,15 +31,32 @@ impl PortainerDockerOrchestrator {
             config.api, config.env_id, config.api_version
         );
         let mut headers = HeaderMap::new();
-        headers.insert(
-            X_API_KEY,
-            HeaderValue::from_bytes(config.api_key.as_bytes()).unwrap(),
-        );
-        let client = Client::builder()
+        let header_value = match HeaderValue::from_bytes(config.api_key.as_bytes()) {
+            Ok(value) => value,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "Failed to create header value from API key"
+                );
+                panic!("Cannot initialize Portainer orchestrator with invalid API key");
+            }
+        };
+        headers.insert(X_API_KEY, header_value);
+        
+        let client = match Client::builder()
             .default_headers(headers)
             .danger_accept_invalid_certs(true)
             .build()
-            .unwrap();
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "Failed to build Portainer HTTP client"
+                );
+                panic!("Cannot initialize Portainer orchestrator without HTTP client");
+            }
+        };
         Self {
             image_uri,
             container_uri,
@@ -95,7 +112,19 @@ impl Orchestrator for PortainerDockerOrchestrator {
         let mut label_filters = Vec::new();
         label_filters.push(format!("opencti-manager={}", settings.manager.id.clone()));
         let filter: HashMap<String, Vec<String>> = HashMap::from([("label".into(), label_filters)]);
-        let serialized_filter = serde_json::to_string(&filter).unwrap();
+        
+        let serialized_filter = match serde_json::to_string(&filter) {
+            Ok(filter) => filter,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    manager_id = %settings.manager.id,
+                    "Failed to serialize filter for Portainer list"
+                );
+                return Vec::new();
+            }
+        };
+        
         let list_uri = format!(
             "{}/json?all=true&filters={}",
             self.container_uri, serialized_filter
@@ -103,28 +132,39 @@ impl Orchestrator for PortainerDockerOrchestrator {
         let response = self.client.get(list_uri.clone()).send().await;
         let response_result: Result<Vec<OrchestratorContainer>, _> = match response {
             Ok(data) => {
-                let response: Vec<ContainerSummary> = data.json().await.unwrap();
-                let containers = response
-                    .into_iter()
-                    .map(|summary| {
-                        let container_name: Option<String> =
-                            summary.names.unwrap().first().cloned();
-                        OrchestratorContainer {
-                            id: summary.id.unwrap(),
-                            name: DockerOrchestrator::normalize_name(container_name),
-                            state: summary.state.unwrap(),
-                            envs: HashMap::new(),
-                            labels: summary.labels.unwrap(),
-                            restart_count: 0, // Not available in list, will be updated by get()
-                            started_at: None, // Not available in list, will be updated by get()
-                        }
-                    })
-                    .collect();
-                Ok::<Vec<OrchestratorContainer>, Error>(containers)
+                match data.json::<Vec<ContainerSummary>>().await {
+                    Ok(response) => {
+                        let containers = response
+                            .into_iter()
+                            .map(|summary| {
+                                let container_name: Option<String> =
+                                    summary.names.unwrap().first().cloned();
+                                OrchestratorContainer {
+                                    id: summary.id.unwrap(),
+                                    name: DockerOrchestrator::normalize_name(container_name),
+                                    state: summary.state.unwrap(),
+                                    envs: HashMap::new(),
+                                    labels: summary.labels.unwrap(),
+                                    restart_count: 0, // Not available in list, will be updated by get()
+                                    started_at: None, // Not available in list, will be updated by get()
+                                }
+                            })
+                            .collect();
+                        Ok::<Vec<OrchestratorContainer>, Error>(containers)
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            "Failed to parse Portainer container list response"
+                        );
+                        Ok(Vec::new())
+                    }
+                }
             }
-            Err(err) => {
+            Err(e) => {
                 error!(
-                    error = err.to_string(),
+                    error = %e,
+                    manager_id = %settings.manager.id,
                     "Portainer error fetching containers"
                 );
                 Ok(Vec::new())
@@ -140,12 +180,44 @@ impl Orchestrator for PortainerDockerOrchestrator {
     async fn start(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> () {
         connector.display_env_variables();
         let start_container_uri = format!("{}/{}/start", self.container_uri, container.id);
-        self.client.post(start_container_uri).send().await.unwrap();
+        match self.client.post(start_container_uri).send().await {
+            Ok(_) => {
+                debug!(
+                    container_id = container.id,
+                    name = container.name,
+                    "Container started via Portainer"
+                );
+            }
+            Err(e) => {
+                error!(
+                    container_id = container.id,
+                    name = container.name,
+                    error = %e,
+                    "Failed to start container via Portainer"
+                );
+            }
+        }
     }
 
     async fn stop(&self, container: &OrchestratorContainer, _connector: &ApiConnector) -> () {
-        let start_container_uri = format!("{}/{}/stop", self.container_uri, container.id);
-        self.client.post(start_container_uri).send().await.unwrap();
+        let stop_container_uri = format!("{}/{}/stop", self.container_uri, container.id);
+        match self.client.post(stop_container_uri).send().await {
+            Ok(_) => {
+                debug!(
+                    container_id = container.id,
+                    name = container.name,
+                    "Container stopped via Portainer"
+                );
+            }
+            Err(e) => {
+                error!(
+                    container_id = container.id,
+                    name = container.name,
+                    error = %e,
+                    "Failed to stop container via Portainer"
+                );
+            }
+        }
     }
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
@@ -181,12 +253,13 @@ impl Orchestrator for PortainerDockerOrchestrator {
         // Get registry configuration from daemon level
         let settings = crate::settings();
         let registry_config = settings.opencti.daemon.registry.clone();
-        let registry_resolver = RegistryResolver::new(registry_config);
+        let resolver = RegistryResolver::new(registry_config.clone());
 
         // Resolve image name with registry prefix if needed
-        let resolved_image = match registry_resolver.resolve_image(&connector.image) {
+        let resolved_image = match resolver.resolve_image(&connector.image) {
             Ok(resolved) => {
-                info!(
+                debug!(
+                    orchestrator = "portainer",
                     original_image = connector.image,
                     resolved_image = resolved.full_name,
                     needs_auth = resolved.needs_auth,
@@ -195,53 +268,86 @@ impl Orchestrator for PortainerDockerOrchestrator {
                 resolved
             }
             Err(e) => {
-                error!(error = %e, "Failed to resolve image for Portainer deployment");
+                error!(
+                    orchestrator = "portainer",
+                    image = connector.image,
+                    error = %e,
+                    "Failed to resolve image"
+                );
                 return None;
             }
         };
 
-        // region First operation, pull the image with authentication if needed
         let create_image_uri = format!(
             "{}/create?fromImage={}",
             self.image_uri,
             resolved_image.full_name
         );
 
-        // Add authentication headers if registry credentials are available
         let mut pull_headers = HeaderMap::new();
         if resolved_image.needs_auth {
-            if let Some(registry_server) = &resolved_image.registry_server {
-                match registry_resolver.get_credentials(registry_server).await {
-                    Ok(credentials) => {
-                        // Build Docker auth config for Portainer
-                        let auth_config = serde_json::json!({
-                            "username": credentials.username,
-                            "password": credentials.password,
-                            "auth": "",
-                            "serveraddress": credentials.serveraddress
-                        });
-                        
-                        let auth_string = base64::engine::general_purpose::STANDARD
-                            .encode(auth_config.to_string());
-                        
-                        pull_headers.insert(
-                            "X-Registry-Auth",
-                            HeaderValue::from_str(&auth_string)
-                                .map_err(|e| error!(error = %e, "Failed to create auth header"))
-                                .unwrap_or_else(|_| HeaderValue::from_static(""))
-                        );
-                        
-                        info!(registry = registry_server, "Added registry authentication for Portainer image pull");
-                    }
-                    Err(e) => {
-                        warn!(
-                            registry = registry_server,
-                            error = %e,
-                            "Failed to get registry credentials, attempting pull without authentication"
-                        );
+            match resolver.get_docker_credentials() {
+                Ok(Some(credentials)) => {
+                    info!(
+                        orchestrator = "portainer",
+                        operation = "auth",
+                        status = "completed",
+                        "Registry authentication completed"
+                    );
+                    
+                    let auth_config = serde_json::json!({
+                        "username": credentials.username,
+                        "password": credentials.password,
+                        "auth": "",
+                        "serveraddress": credentials.serveraddress
+                    });
+                    
+                    let auth_string = base64::engine::general_purpose::STANDARD
+                        .encode(auth_config.to_string());
+                    
+                    if let Ok(header_value) = HeaderValue::from_str(&auth_string) {
+                        pull_headers.insert("X-Registry-Auth", header_value);
+                    } else {
+                        error!("Failed to create auth header");
                     }
                 }
+                Ok(None) => {
+                    warn!(
+                        orchestrator = "portainer",
+                        operation = "auth",
+                        "No credentials available, attempting pull without authentication"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        orchestrator = "portainer",
+                        operation = "auth",
+                        status = "failed",
+                        error = %e,
+                        "Registry authentication failed"
+                    );
+                    warn!("Attempting pull without authentication");
+                }
             }
+        }
+
+        if let Some(registry_server) = &resolved_image.registry_server {
+            info!(
+                orchestrator = "portainer",
+                image = resolved_image.full_name,
+                registry = registry_server,
+                operation = "pull",
+                status = "started",
+                "Starting image pull from private registry"
+            );
+        } else {
+            info!(
+                orchestrator = "portainer",
+                image = resolved_image.full_name,
+                operation = "pull",
+                status = "started",
+                "Starting image pull from Docker Hub"
+            );
         }
 
         let pull_request = if pull_headers.is_empty() {
@@ -253,30 +359,52 @@ impl Orchestrator for PortainerDockerOrchestrator {
         let mut create_response = match pull_request.send().await {
             Ok(response) => response,
             Err(e) => {
-                error!(error = %e, image = resolved_image.full_name, "Failed to pull image via Portainer");
+                error!(
+                    orchestrator = "portainer",
+                    image = resolved_image.full_name,
+                    operation = "pull",
+                    status = "failed",
+                    error = %e,
+                    "Image pull failed via Portainer"
+                );
                 return None;
             }
         };
         
-        // Process pull response chunks
         loop {
             match create_response.chunk().await {
-                Ok(Some(_chunk)) => {
-                    // Successfully processed chunk, continue
+                Ok(Some(chunk)) => {
+                    trace!(
+                        orchestrator = "portainer",
+                        image = resolved_image.full_name,
+                        chunk_size = chunk.len(),
+                        "Processing image pull chunk"
+                    );
                 }
                 Ok(None) => {
-                    // No more chunks, image pull completed
+                    info!(
+                        orchestrator = "portainer",
+                        image = resolved_image.full_name,
+                        operation = "pull",
+                        status = "completed",
+                        "Image pull completed"
+                    );
                     break;
                 }
                 Err(e) => {
-                    error!(error = %e, "Error processing image pull chunk");
+                    error!(
+                        orchestrator = "portainer",
+                        image = resolved_image.full_name,
+                        operation = "pull",
+                        status = "failed",
+                        error = %e,
+                        "Error processing image pull chunk"
+                    );
                     return None;
                 }
             }
         }
-        // endregion
 
-        // region Deploy the container after successful image pull
         let image_name: String = connector.container_name();
         let deploy_container_uri = format!("{}/create?name={}", self.container_uri, image_name);
         let mut image_labels = self.labels(connector);
@@ -287,7 +415,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
         let env_vars = connector.container_envs();
         let container_envs = env_vars
             .iter()
-            .map(|config| format!("{}={}", config.key, config.value))
+            .map(|config| format!("{}={}", config.key, config.value.as_str()))
             .collect();
         let image_name_for_deploy = resolved_image.full_name.clone();
         let json_body = PortainerDeployPayload {
@@ -306,20 +434,43 @@ impl Orchestrator for PortainerDockerOrchestrator {
             .await;
         match deploy_response {
             Ok(response) => {
-                let deploy_data: PortainerDeployResponse = response.json().await.unwrap();
-                info!(
-                    id = deploy_data.id,
-                    image = image_name_for_deploy,
-                    "Portainer container deployed with registry support"
-                );
-                self.get(connector).await
+                match response.json::<PortainerDeployResponse>().await {
+                    Ok(deploy_data) => {
+                        info!(
+                            orchestrator = "portainer",
+                            image = image_name_for_deploy,
+                            operation = "deploy",
+                            status = "completed",
+                            container_id = deploy_data.id,
+                            "Container deployment completed"
+                        );
+                        self.get(connector).await
+                    }
+                    Err(e) => {
+                        error!(
+                            orchestrator = "portainer",
+                            image = image_name_for_deploy,
+                            operation = "deploy",
+                            status = "failed",
+                            error = %e,
+                            "Failed to parse deployment response"
+                        );
+                        None
+                    }
+                }
             }
-            Err(err) => {
-                error!(error = err.to_string(), "Error deploying the container");
+            Err(e) => {
+                error!(
+                    orchestrator = "portainer",
+                    image = image_name_for_deploy,
+                    operation = "deploy",
+                    status = "failed",
+                    error = %e,
+                    "Container deployment failed"
+                );
                 None
             }
         }
-        // endregion
     }
 
     async fn logs(
@@ -331,9 +482,34 @@ impl Orchestrator for PortainerDockerOrchestrator {
             "{}/{}/logs?stderr=1&stdout=1&tail=100",
             self.container_uri, container.id
         );
-        let logs_response = self.client.get(logs_container_uri).send().await.unwrap();
-        let text_logs = logs_response.text().await.unwrap();
-        Some(text_logs.lines().map(|line| line.to_string()).collect())
+        
+        let logs_response = match self.client.get(logs_container_uri).send().await {
+            Ok(response) => response,
+            Err(e) => {
+                error!(
+                    container_id = container.id,
+                    name = container.name,
+                    error = %e,
+                    "Failed to fetch logs from Portainer"
+                );
+                return None;
+            }
+        };
+        
+        match logs_response.text().await {
+            Ok(text_logs) => {
+                Some(text_logs.lines().map(|line| line.to_string()).collect())
+            }
+            Err(e) => {
+                error!(
+                    container_id = container.id,
+                    name = container.name,
+                    error = %e,
+                    "Failed to parse logs response from Portainer"
+                );
+                None
+            }
+        }
     }
 
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {

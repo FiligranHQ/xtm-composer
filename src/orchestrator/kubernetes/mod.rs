@@ -4,9 +4,10 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::Api;
 
 pub mod kubernetes;
+pub mod secret_refresher;
 
 pub struct KubeOrchestrator {
-    pods: Api<Pod>,
-    deployments: Api<Deployment>,
-    config: Kubernetes
+    pub pods: Api<Pod>,
+    pub deployments: Api<Deployment>,
+    pub config: Kubernetes,
 }

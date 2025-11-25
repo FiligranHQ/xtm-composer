@@ -210,11 +210,9 @@ impl Orchestrator for DockerOrchestrator {
         let settings = crate::settings();
         let docker_options = settings.opencti.daemon.docker.as_ref();
         
-        // Create registry resolver - use daemon-level registry config
         let registry_config = settings.opencti.daemon.registry.clone();
         let resolver = RegistryResolver::new(registry_config);
         
-        // Resolve image name with registry prefix if needed
         let resolved_image = match resolver.resolve_image(&connector.image) {
             Ok(resolved) => resolved,
             Err(e) => {
@@ -227,45 +225,41 @@ impl Orchestrator for DockerOrchestrator {
             }
         };
 
-        // Get authentication if needed
         let auth = if resolved_image.needs_auth {
-            if let Some(registry_server) = &resolved_image.registry_server {
-                match resolver.get_credentials(registry_server).await {
-                    Ok(credentials) => {
-                        info!(registry = registry_server, "Using cached authentication");
-                        Some(credentials)
-                    }
-                    Err(e) => {
-                        error!(
-                            registry = registry_server,
-                            error = %e,
-                            "Failed to get authentication credentials"
-                        );
-                        return None;
-                    }
+            match resolver.get_docker_credentials() {
+                Ok(creds) => creds,
+                Err(e) => {
+                    error!(
+                        orchestrator = "docker",
+                        error = %e,
+                        "Failed to get registry credentials"
+                    );
+                    return None;
                 }
-            } else {
-                None
             }
         } else {
             None
         };
 
-        // Log the pull attempt with detailed registry information
         if let Some(registry_server) = resolver.get_registry_server() {
             info!(
+                orchestrator = "docker",
                 image = resolved_image.full_name,
                 registry = registry_server,
-                "Starting pull from private registry"
+                operation = "pull",
+                status = "started",
+                "Starting image pull from private registry"
             );
         } else {
             info!(
+                orchestrator = "docker",
                 image = resolved_image.full_name,
-                "Starting pull from Docker Hub"
+                operation = "pull",
+                status = "started",
+                "Starting image pull from Docker Hub"
             );
         }
 
-        // Pull the image with cached authentication
         let deploy_response = self
             .docker
             .create_image(
@@ -277,7 +271,6 @@ impl Orchestrator for DockerOrchestrator {
                 auth,
             )
             .try_for_each(|info| {
-                // Log pull progress at trace level to reduce verbosity
                 if let Some(status) = info.status.as_deref() {
                     if let Some(progress) = info.progress.as_deref() {
                         trace!(
@@ -295,7 +288,6 @@ impl Orchestrator for DockerOrchestrator {
                     }
                 }
                 
-                // Log any error messages at error level
                 if let Some(error) = info.error.as_deref() {
                     error!(
                         image = resolved_image.full_name,
@@ -311,23 +303,23 @@ impl Orchestrator for DockerOrchestrator {
         match deploy_response {
             Ok(_) => {
                 info!(
+                    orchestrator = "docker",
                     image = resolved_image.full_name,
-                    "Image pulled successfully"
+                    operation = "pull",
+                    status = "completed",
+                    "Image pull completed"
                 );
                 
-                // Create the container
                 let container_env_variables = connector
                     .container_envs()
                     .into_iter()
-                    .map(|config| format!("{}={}", config.key, config.value))
+                    .map(|config| format!("{}={}", config.key, config.value.as_str()))
                     .collect::<Vec<String>>();
                 let labels = self.labels(connector);
                 
-                // Build host config with Docker options
                 let mut host_config = HostConfig::default();
                 
                 if let Some(docker_opts) = docker_options {
-                    // Apply Docker options to host config
                     if let Some(network_mode) = &docker_opts.network_mode {
                         host_config.network_mode = Some(network_mode.clone());
                     }
@@ -374,7 +366,6 @@ impl Orchestrator for DockerOrchestrator {
                         host_config.sysctls = Some(sysctls.clone());
                     }
                     if let Some(ulimits) = &docker_opts.ulimits {
-                        // Convert ulimits from HashMap to bollard's expected format
                         let ulimits_vec: Vec<bollard::models::ResourcesUlimits> = ulimits.iter()
                             .filter_map(|ulimit_map| {
                                 if let (Some(name), Some(soft), Some(hard)) = (
@@ -420,15 +411,16 @@ impl Orchestrator for DockerOrchestrator {
                 {
                     Ok(_) => {
                         info!(
-                            name = container_name,
+                            orchestrator = "docker",
                             image = resolved_image.full_name,
-                            "Container created successfully"
+                            operation = "deploy",
+                            status = "completed",
+                            name = container_name,
+                            "Container deployment completed"
                         );
                         
-                        // Get the created container
                         let created = self.get(connector).await;
                         
-                        // Start the container if needed
                         let is_starting = connector.requested_status.clone().eq("starting");
                         if is_starting && created.is_some() {
                             self.start(&created.clone().unwrap(), connector).await;
@@ -444,7 +436,6 @@ impl Orchestrator for DockerOrchestrator {
                             "Failed to create container"
                         );
                         
-                        // Provide helpful error context
                         if e.to_string().contains("Conflict") {
                             error!("Container with name '{}' already exists. Consider removing it first.", container_name);
                         } else if e.to_string().contains("No such image") {
@@ -456,23 +447,27 @@ impl Orchestrator for DockerOrchestrator {
                 }
             }
             Err(err) => {
-                // Enhanced error logging with registry context
                 if let Some(registry) = &resolved_image.registry_server {
                     error!(
-                        base_image = connector.image,
-                        resolved_image = resolved_image.full_name,
+                        orchestrator = "docker",
+                        image = resolved_image.full_name,
                         registry = registry,
+                        operation = "pull",
+                        status = "failed",
                         error = ?err,
-                        "Failed to pull image from private registry"
+                        "Image pull failed from private registry"
                     );
-                    error!("Check: 1) Registry URL, 2) Authentication, 3) Image exists, 4) Network connectivity");
+                    debug!("Check: 1) Registry URL, 2) Authentication, 3) Image exists, 4) Network connectivity");
                 } else {
                     error!(
+                        orchestrator = "docker",
                         image = resolved_image.full_name,
+                        operation = "pull",
+                        status = "failed",
                         error = ?err,
-                        "Failed to pull image from Docker Hub"
+                        "Image pull failed from Docker Hub"
                     );
-                    error!("Check: 1) Image exists, 2) Network connectivity, 3) Docker Hub rate limits");
+                    debug!("Check: 1) Image exists, 2) Network connectivity, 3) Docker Hub rate limits");
                 }
                 None
             }
