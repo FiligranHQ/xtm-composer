@@ -6,7 +6,7 @@ use crate::orchestrator::registry_resolver::RegistryResolver;
 use async_trait::async_trait;
 use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
-use k8s_openapi::api::core::v1::{Container, ContainerStatus, EnvVar, Pod, PodSpec, PodTemplateSpec, Secret, LocalObjectReference};
+use k8s_openapi::api::core::v1::{Container, ContainerStatus, EnvVar, Pod, PodSpec, PodTemplateSpec, LocalObjectReference, Secret};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use kube::api::{DeleteParams, LogParams, Patch, PatchParams};
 use kube::{
@@ -31,6 +31,16 @@ impl KubeOrchestrator {
         };
         let pods: Api<Pod> = Api::default_namespaced(client.clone());
         let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
+
+        // Create imagePullSecret if registry credentials are configured
+        let settings = crate::settings();
+        let registry_config = &settings.opencti.daemon.registry;
+        if registry_config.username.is_some() && registry_config.password.is_some() {
+            Self::ensure_image_pull_secret(&client, registry_config)
+                .await
+                .expect("Failed to create imagePullSecret - cannot start without registry authentication");
+        }
+        
         Self {
             pods,
             deployments,
@@ -38,75 +48,17 @@ impl KubeOrchestrator {
         }
     }
 
-    pub fn generate_secret_name(&self, registry_config: &crate::config::settings::Registry) -> String {
-        let default_server = "default".to_string();
-        let server = registry_config.server.as_ref()
-            .unwrap_or(&default_server);
-        
-        let normalized_server = server.trim_end_matches('/');
-        
-        let mut secret_name = format!("opencti-registry-{}", 
-            normalized_server.replace([':', '.', '/'], "-"));
-        
-        while secret_name.ends_with('-') {
-            secret_name.pop();
-        }
-        
-        if secret_name.starts_with('-') || secret_name.starts_with('.') {
-            secret_name = format!("r{}", secret_name);
-        }
-        
-        if secret_name.len() > 253 {
-            secret_name.truncate(253);
-            while secret_name.ends_with('-') {
-                secret_name.pop();
-            }
-        }
-        
-        secret_name
-    }
-    
-    pub fn validate_secret_name(&self, name: &str) -> Result<(), String> {
-        if name.is_empty() {
-            return Err("Secret name cannot be empty".to_string());
-        }
-        
-        if name.len() > 253 {
-            return Err(format!("Secret name too long: {} characters (max 253)", name.len()));
-        }
-        
-        let first_char = name.chars().next().unwrap();
-        if !first_char.is_ascii_alphanumeric() {
-            return Err("Secret name must start with alphanumeric character".to_string());
-        }
-        
-        let last_char = name.chars().last().unwrap();
-        if !last_char.is_ascii_alphanumeric() {
-            return Err("Secret name must end with alphanumeric character".to_string());
-        }
-        
-        for (i, c) in name.char_indices() {
-            if !c.is_ascii_alphanumeric() && c != '-' && c != '.' {
-                return Err(format!("Invalid character '{}' at position {}", c, i));
-            }
-        }
-        
-        Ok(())
-    }
+    /// Ensures the imagePullSecret exists with correct credentials.
+    /// Checks if secret already exists with matching credentials before updating.
+    /// This is called at orchestrator initialization if credentials are configured.
+    async fn ensure_image_pull_secret(
+        client: &Client,
+        registry_config: &crate::config::settings::Registry,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        const SECRET_NAME: &str = "opencti-registry-auth";
+        let secrets: Api<Secret> = Api::default_namespaced(client.clone());
 
-    /// Create or update imagePullSecret for private registry.
-    /// Kubernetes secrets persist in cluster and don't auto-refresh by default.
-    /// Use External Secrets Operator for automatic rotation, or set auto_refresh_secret=true.
-    pub async fn ensure_image_pull_secret(&self, registry_config: &crate::config::settings::Registry) -> Result<String, Box<dyn std::error::Error>> {
-        let client = Client::try_default().await?;
-        let secrets: Api<Secret> = Api::default_namespaced(client);
-        
-        let secret_name = self.generate_secret_name(registry_config);
-        
-        if let Err(e) = self.validate_secret_name(&secret_name) {
-            return Err(format!("Invalid secret name '{}': {}", secret_name, e).into());
-        }
-
+        // Step 1: Build expected Docker config JSON
         let auth_string = format!(
             "{}:{}",
             registry_config.username.as_ref()
@@ -117,9 +69,11 @@ impl KubeOrchestrator {
                 .unwrap_or("")
         );
         let auth_base64 = base64::engine::general_purpose::STANDARD.encode(auth_string.as_bytes());
-        
-        let default_server = "https://index.docker.io/v1/".to_string();
-        let server_url = registry_config.server.as_ref().unwrap_or(&default_server);
+
+        let server_url = registry_config.server.as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("https://index.docker.io/v1/");
+
         let docker_config = serde_json::json!({
             "auths": {
                 server_url: {
@@ -129,24 +83,60 @@ impl KubeOrchestrator {
                     "password": registry_config.password.as_ref()
                         .map(|s| s.expose_secret())
                         .unwrap_or(""),
-                    "email": registry_config.email.as_ref().unwrap_or(&"".to_string()),
+                    "email": registry_config.email.as_ref()
+                        .map(|s| s.expose_secret())
+                        .unwrap_or(""),
                     "auth": auth_base64
                 }
             }
         });
-        
-        let docker_config_bytes = serde_json::to_vec(&docker_config)
-            .map_err(|e| format!("Failed to serialize Docker config JSON: {}", e))?;
 
+        let docker_config_bytes = serde_json::to_vec(&docker_config)?;
+
+        // Step 2: Check if secret already exists with same credentials
+        match secrets.get(SECRET_NAME).await {
+            Ok(existing_secret) => {
+                if let Some(existing_data) = existing_secret.data {
+                    if let Some(existing_dockerconfig) = existing_data.get(".dockerconfigjson") {
+                        // Compare the existing config with the new one
+                        if existing_dockerconfig.0 == docker_config_bytes {
+                            info!(
+                                orchestrator = "kubernetes",
+                                secret = SECRET_NAME,
+                                "imagePullSecret already exists with correct credentials, skipping update"
+                            );
+                            return Ok(());
+                        } else {
+                            info!(
+                                orchestrator = "kubernetes",
+                                secret = SECRET_NAME,
+                                "imagePullSecret exists but credentials differ, recreating"
+                            );
+                        }
+                    }
+                }
+                // Delete existing secret with different credentials
+                let _ = secrets.delete(SECRET_NAME, &DeleteParams::default()).await;
+            }
+            Err(_) => {
+                info!(
+                    orchestrator = "kubernetes",
+                    secret = SECRET_NAME,
+                    "imagePullSecret does not exist, creating new one"
+                );
+            }
+        }
+
+        // Step 3: Create the secret
         let mut secret_data = BTreeMap::new();
         secret_data.insert(
-            ".dockerconfigjson".to_string(), 
+            ".dockerconfigjson".to_string(),
             k8s_openapi::ByteString(docker_config_bytes)
         );
 
         let secret = Secret {
             metadata: ObjectMeta {
-                name: Some(secret_name.clone()),
+                name: Some(SECRET_NAME.to_string()),
                 ..Default::default()
             },
             type_: Some("kubernetes.io/dockerconfigjson".to_string()),
@@ -154,28 +144,22 @@ impl KubeOrchestrator {
             ..Default::default()
         };
 
-        match secrets.create(&PostParams::default(), &secret).await {
-            Ok(_) => {
-                info!("Created imagePullSecret: {}", secret_name);
-                Ok(secret_name)
-            }
-            Err(kube::Error::Api(api_err)) if api_err.code == 409 => {
-                match secrets.replace(&secret_name, &PostParams::default(), &secret).await {
-                    Ok(_) => {
-                        debug!("Updated existing imagePullSecret: {}", secret_name);
-                        Ok(secret_name)
-                    }
-                    Err(e) => {
-                        error!("Failed to update imagePullSecret: {}", e);
-                        Err(e.into())
-                    }
-                }
-            }
-            Err(e) => {
-                error!("Failed to create imagePullSecret: {}", e);
-                Err(e.into())
-            }
-        }
+        info!(
+            orchestrator = "kubernetes",
+            secret = SECRET_NAME,
+            server = server_url,
+            "Creating imagePullSecret for private registry"
+        );
+
+        secrets.create(&PostParams::default(), &secret).await?;
+
+        info!(
+            orchestrator = "kubernetes",
+            secret = SECRET_NAME,
+            "Successfully created imagePullSecret"
+        );
+
+        Ok(())
     }
 
     pub fn get_image_pull_policy(&self) -> String {
@@ -405,6 +389,23 @@ impl KubeOrchestrator {
             .and_then(|running| running.started_at.as_ref())
             .map(|timestamp| timestamp.0.to_rfc3339())
     }
+
+    /// Helper to log deployment operations consistently
+    fn log_deployment(&self, operation: &str, status: &str, image: &str, registry: Option<&str>) {
+        let registry_type = registry
+            .map(|_| "private registry")
+            .unwrap_or("Docker Hub");
+        
+        info!(
+            orchestrator = "kubernetes",
+            image = image,
+            registry = registry.unwrap_or("docker.io"),
+            operation = operation,
+            status = status,
+            "Kubernetes deployment: {} image from {}",
+            status, registry_type
+        );
+    }
 }
 
 #[async_trait]
@@ -506,7 +507,7 @@ impl Orchestrator for KubeOrchestrator {
         
         // Create registry resolver
         let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = RegistryResolver::new(registry_config.clone());
+        let resolver = RegistryResolver::new(registry_config);
         
         // Resolve image name with registry prefix if needed
         let resolved_image = match resolver.resolve_image(&connector.image) {
@@ -517,33 +518,21 @@ impl Orchestrator for KubeOrchestrator {
             }
         };
 
-        // Handle private registry authentication - Kubernetes creates imagePullSecret (no cache needed)
-        let mut image_pull_secrets = Vec::new();
-        if resolved_image.needs_auth {
-            if let Some(registry_config) = &registry_config {
-                // Create imagePullSecret directly (secret persists in cluster)
-                match self.ensure_image_pull_secret(registry_config).await {
-                    Ok(secret_name) => {
-                        info!(
-                            orchestrator = "kubernetes",
-                            secret = secret_name,
-                            "ImagePullSecret ready"
-                        );
-                        image_pull_secrets.push(LocalObjectReference {
-                            name: secret_name
-                        });
-                    }
-                    Err(e) => {
-                        error!(
-                            orchestrator = "kubernetes",
-                            error = %e,
-                            "Failed to create imagePullSecret"
-                        );
-                        return None;
-                    }
-                }
-            }
-        }
+        // Use pre-existing imagePullSecret if authentication is needed
+        const SECRET_NAME: &str = "opencti-registry-auth";
+        let image_pull_secrets = if resolved_image.needs_auth {
+            info!(
+                orchestrator = "kubernetes",
+                secret = SECRET_NAME,
+                image = resolved_image.full_name,
+                "Using pre-existing imagePullSecret for private registry"
+            );
+            vec![LocalObjectReference {
+                name: SECRET_NAME.to_string()
+            }]
+        } else {
+            Vec::new()
+        };
 
         // Build deployment configuration with resolved image
         let labels = self.labels(connector);
@@ -555,24 +544,7 @@ impl Orchestrator for KubeOrchestrator {
         );
 
         // Log deployment attempt
-        if let Some(registry_server) = &resolved_image.registry_server {
-            info!(
-                orchestrator = "kubernetes",
-                image = resolved_image.full_name,
-                registry = registry_server,
-                operation = "deploy",
-                status = "started",
-                "Starting Kubernetes deployment with private registry image"
-            );
-        } else {
-            info!(
-                orchestrator = "kubernetes",
-                image = resolved_image.full_name,
-                operation = "deploy",
-                status = "started",
-                "Starting Kubernetes deployment with Docker Hub image"
-            );
-        }
+        self.log_deployment("deploy", "started", &resolved_image.full_name, resolved_image.registry_server.as_deref());
 
         match self
             .deployments
@@ -580,13 +552,7 @@ impl Orchestrator for KubeOrchestrator {
             .await
         {
             Ok(deployment) => {
-                info!(
-                    orchestrator = "kubernetes",
-                    image = resolved_image.full_name,
-                    operation = "deploy",
-                    status = "completed",
-                    "Kubernetes deployment completed"
-                );
+                self.log_deployment("deploy", "completed", &resolved_image.full_name, resolved_image.registry_server.as_deref());
                 Some(KubeOrchestrator::from_deployment(deployment))
             }
             Err(kube::Error::Api(ae)) => {

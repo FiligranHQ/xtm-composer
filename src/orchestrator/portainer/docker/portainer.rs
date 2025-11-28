@@ -31,32 +31,15 @@ impl PortainerDockerOrchestrator {
             config.api, config.env_id, config.api_version
         );
         let mut headers = HeaderMap::new();
-        let header_value = match HeaderValue::from_bytes(config.api_key.as_bytes()) {
-            Ok(value) => value,
-            Err(e) => {
-                error!(
-                    error = %e,
-                    "Failed to create header value from API key"
-                );
-                panic!("Cannot initialize Portainer orchestrator with invalid API key");
-            }
-        };
+        let header_value = HeaderValue::from_bytes(config.api_key.as_bytes())
+            .expect("Invalid API key format for Portainer");
         headers.insert(X_API_KEY, header_value);
         
-        let client = match Client::builder()
+        let client = Client::builder()
             .default_headers(headers)
             .danger_accept_invalid_certs(true)
             .build()
-        {
-            Ok(client) => client,
-            Err(e) => {
-                error!(
-                    error = %e,
-                    "Failed to build Portainer HTTP client"
-                );
-                panic!("Cannot initialize Portainer orchestrator without HTTP client");
-            }
-        };
+            .expect("Failed to build Portainer HTTP client");
         Self {
             image_uri,
             container_uri,
@@ -113,17 +96,15 @@ impl Orchestrator for PortainerDockerOrchestrator {
         label_filters.push(format!("opencti-manager={}", settings.manager.id.clone()));
         let filter: HashMap<String, Vec<String>> = HashMap::from([("label".into(), label_filters)]);
         
-        let serialized_filter = match serde_json::to_string(&filter) {
-            Ok(filter) => filter,
-            Err(e) => {
+        let serialized_filter = serde_json::to_string(&filter)
+            .unwrap_or_else(|e| {
                 error!(
                     error = %e,
                     manager_id = %settings.manager.id,
                     "Failed to serialize filter for Portainer list"
                 );
-                return Vec::new();
-            }
-        };
+                String::new()
+            });
         
         let list_uri = format!(
             "{}/json?all=true&filters={}",

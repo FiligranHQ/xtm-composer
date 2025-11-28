@@ -1,4 +1,9 @@
-// Error handling tests - these will be completed after TASK-6 error handling refactoring
+use rstest::rstest;
+use crate::api::{ConnectorStatus, RequestedStatus};
+
+// ============================================================================
+// Container Management Tests (Parameterized)
+// ============================================================================
 
 #[test]
 fn test_orchestrator_container_is_managed() {
@@ -13,12 +18,18 @@ fn test_orchestrator_container_is_managed() {
     assert!(!unmanaged.is_managed());
 }
 
-#[test]
-fn test_orchestrator_container_extract_opencti_id() {
+#[rstest]
+#[case("connector-123", "connector-123")]
+#[case("test-1", "test-1")]
+#[case("abc-def-456", "abc-def-456")]
+fn test_orchestrator_container_extract_opencti_id(
+    #[case] connector_id: &str,
+    #[case] expected_id: &str,
+) {
     use super::test_helpers::create_test_container;
 
-    let container = create_test_container("connector-123", "test-container", "running");
-    assert_eq!(container.extract_opencti_id(), "connector-123");
+    let container = create_test_container(connector_id, "test-container", "running");
+    assert_eq!(container.extract_opencti_id(), expected_id);
 }
 
 #[test]
@@ -28,6 +39,10 @@ fn test_orchestrator_container_extract_opencti_hash() {
     let container = create_test_container("test-1", "test-container", "running");
     assert_eq!(container.extract_opencti_hash(), "test-hash-abc123");
 }
+
+// ============================================================================
+// Reboot Loop Detection Tests (Parameterized)
+// ============================================================================
 
 #[test]
 fn test_orchestrator_container_is_in_reboot_loop_high_restarts() {
@@ -60,20 +75,29 @@ fn test_orchestrator_container_is_in_reboot_loop_old_start() {
     assert!(!container.is_in_reboot_loop());
 }
 
-#[test]
-fn test_orchestrator_container_is_in_reboot_loop_low_restarts() {
+#[rstest]
+#[case(0, false)]
+#[case(1, false)]
+#[case(2, false)]
+#[case(3, false)]
+#[case(4, true)]
+#[case(5, true)]
+#[case(10, true)]
+fn test_orchestrator_container_is_in_reboot_loop_restart_count(
+    #[case] restart_count: u32,
+    #[case] expected_in_loop: bool,
+) {
     use super::test_helpers::create_test_container_with_restarts;
     use chrono::Utc;
 
-    // Low restart count even with recent start = not in reboot loop
     let container = create_test_container_with_restarts(
         "test-1",
         "test-container",
-        2,
+        restart_count,
         Some(Utc::now().to_rfc3339()),
     );
 
-    assert!(!container.is_in_reboot_loop());
+    assert_eq!(container.is_in_reboot_loop(), expected_in_loop);
 }
 
 #[test]
@@ -101,15 +125,26 @@ fn test_orchestrator_container_is_in_reboot_loop_invalid_timestamp() {
     assert!(!container.is_in_reboot_loop());
 }
 
-#[test]
-fn test_api_connector_container_name_sanitization() {
+// ============================================================================
+// API Connector Tests (Parameterized)
+// ============================================================================
+
+#[rstest]
+#[case("Test Connector", "test-connector")]
+#[case("Test Connector_With Special@Chars", "test-connector-with-special-chars")]
+#[case("UPPERCASE_CONNECTOR", "uppercase-connector")]
+#[case("multiple   spaces", "multiple---spaces")] // Multiple spaces become multiple hyphens
+#[case("dots.and.dashes-test", "dots-and-dashes-test")]
+fn test_api_connector_container_name_sanitization(
+    #[case] input_name: &str,
+    #[case] expected_name: &str,
+) {
     use crate::api::{ApiConnector, ApiContractConfig, EnvValue};
     use crate::config::SecretString;
 
-    // Create a connector with a name that needs sanitization
     let connector = ApiConnector {
         id: "test-1".to_string(),
-        name: "Test Connector_With Special@Chars".to_string(),
+        name: input_name.to_string(),
         image: "nginx:latest".to_string(),
         requested_status: "starting".to_string(),
         current_status: Some("stopped".to_string()),
@@ -129,7 +164,7 @@ fn test_api_connector_container_name_sanitization() {
     assert!(!container_name.contains(' '));
     assert!(!container_name.contains('_'));
     assert!(!container_name.contains('@'));
-    assert_eq!(container_name, "test-connector-with-special-chars");
+    assert_eq!(container_name, expected_name);
 }
 
 #[test]
@@ -157,59 +192,44 @@ fn test_api_connector_container_envs_includes_opencti_url() {
     assert!(url_env.is_some());
 }
 
-#[test]
-fn test_connector_status_from_str() {
+// ============================================================================
+// Connector Status Tests (Parameterized)
+// ============================================================================
+
+#[rstest]
+#[case("started", ConnectorStatus::Started)]
+#[case("running", ConnectorStatus::Started)]
+#[case("healthy", ConnectorStatus::Started)]
+#[case("stopped", ConnectorStatus::Stopped)]
+#[case("created", ConnectorStatus::Stopped)]
+#[case("exited", ConnectorStatus::Stopped)]
+#[case("unknown", ConnectorStatus::Stopped)]
+fn test_connector_status_from_str(
+    #[case] input: &str,
+    #[case] expected: ConnectorStatus,
+) {
     use crate::api::ConnectorStatus;
     use std::str::FromStr;
 
-    assert_eq!(
-        ConnectorStatus::from_str("started").unwrap(),
-        ConnectorStatus::Started
-    );
-    assert_eq!(
-        ConnectorStatus::from_str("running").unwrap(),
-        ConnectorStatus::Started
-    );
-    assert_eq!(
-        ConnectorStatus::from_str("healthy").unwrap(),
-        ConnectorStatus::Started
-    );
-    assert_eq!(
-        ConnectorStatus::from_str("stopped").unwrap(),
-        ConnectorStatus::Stopped
-    );
-    assert_eq!(
-        ConnectorStatus::from_str("created").unwrap(),
-        ConnectorStatus::Stopped
-    );
-    assert_eq!(
-        ConnectorStatus::from_str("exited").unwrap(),
-        ConnectorStatus::Stopped
-    );
-    assert_eq!(
-        ConnectorStatus::from_str("unknown").unwrap(),
-        ConnectorStatus::Stopped
-    );
+    let status = ConnectorStatus::from_str(input).unwrap();
+    assert_eq!(status, expected);
 }
 
-#[test]
-fn test_requested_status_from_str() {
+// ============================================================================
+// Requested Status Tests (Parameterized)
+// ============================================================================
+
+#[rstest]
+#[case("starting", RequestedStatus::Starting)]
+#[case("stopping", RequestedStatus::Stopping)]
+#[case("unknown", RequestedStatus::Stopping)]
+fn test_requested_status_from_str(
+    #[case] input: &str,
+    #[case] expected: RequestedStatus,
+) {
     use crate::api::RequestedStatus;
     use std::str::FromStr;
 
-    assert_eq!(
-        RequestedStatus::from_str("starting").unwrap(),
-        RequestedStatus::Starting
-    );
-    assert_eq!(
-        RequestedStatus::from_str("stopping").unwrap(),
-        RequestedStatus::Stopping
-    );
-    assert_eq!(
-        RequestedStatus::from_str("unknown").unwrap(),
-        RequestedStatus::Stopping
-    );
+    let status = RequestedStatus::from_str(input).unwrap();
+    assert_eq!(status, expected);
 }
-
-// Additional error handling tests to be added after TASK-6
-// These will test error propagation, error types, error messages, etc.

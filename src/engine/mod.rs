@@ -28,28 +28,8 @@ async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
             },
             "kubernetes" => match daemon_configuration.kubernetes.clone() {
                 Some(config) => {
-                    use crate::orchestrator::kubernetes::secret_refresher::SecretRefresher;
-                    use std::sync::Arc;
-                    
                     let kube_orchestrator = KubeOrchestrator::new(config).await;
-                    
-                    // Initialize secret refresher if enabled
-                    if let Some(registry_config) = daemon_configuration.registry.clone() {
-                        let orchestrator_arc = Arc::new(kube_orchestrator);
-                        let refresher = Arc::new(SecretRefresher::new(
-                            orchestrator_arc.clone(),
-                            registry_config
-                        ));
-                        refresher.start_refresh_loop().await;
-                        
-                        // Extract the orchestrator back from Arc for boxing
-                        // Note: This is safe because we just created the Arc and have the only reference
-                        let kube_orch = Arc::try_unwrap(orchestrator_arc)
-                            .unwrap_or_else(|_| panic!("Failed to unwrap Arc - should have only one reference"));
-                        Box::new(kube_orch) as Box<dyn Orchestrator + Send + Sync>
-                    } else {
-                        Box::new(kube_orchestrator) as Box<dyn Orchestrator + Send + Sync>
-                    }
+                    Box::new(kube_orchestrator) as Box<dyn Orchestrator + Send + Sync>
                 },
                 None => panic!("Missing kubernetes configuration"),
             },

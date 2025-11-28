@@ -47,7 +47,8 @@ pub struct Manager {
 #[allow(unused)]
 pub struct Daemon {
     pub selector: String,
-    pub registry: Option<Registry>,
+    #[serde(default)]
+    pub registry: Registry,
     pub portainer: Option<Portainer>,
     pub kubernetes: Option<Kubernetes>,
     pub docker: Option<Docker>,
@@ -103,14 +104,7 @@ pub struct Registry {
     pub server: Option<String>,
     pub username: Option<SecretString>,
     pub password: Option<SecretString>,
-    pub email: Option<String>,
-    
-    // Kubernetes secret auto-refresh configuration
-    #[serde(default = "default_auto_refresh_secret")]
-    pub auto_refresh_secret: bool,
-    
-    #[serde(default = "default_refresh_threshold")]
-    pub refresh_threshold: f64,
+    pub email: Option<SecretString>,
 }
 
 impl Registry {
@@ -124,12 +118,15 @@ impl Registry {
     }
 }
 
-fn default_auto_refresh_secret() -> bool {
-    false // Disabled by default (platform-managed secrets recommended)
-}
-
-fn default_refresh_threshold() -> f64 {
-    0.8 // Refresh at 80% of TTL
+impl Default for Registry {
+    fn default() -> Self {
+        Self {
+            server: Some("docker.io".to_string()),
+            username: None,
+            password: None,
+            email: None,
+        }
+    }
 }
 
 
@@ -178,19 +175,10 @@ impl Settings {
             .try_deserialize()?;
         
         // Normalize the OpenCTI registry configuration
-        if let Some(registry) = settings.opencti.daemon.registry.take() {
-            settings.opencti.daemon.registry = Some(registry.normalize());
-        } else {
-            // If no registry config, create a default docker.io config
-            settings.opencti.daemon.registry = Some(Registry {
-                server: Some("docker.io".to_string()),
-                username: None,
-                password: None,
-                email: None,
-                auto_refresh_secret: default_auto_refresh_secret(),
-                refresh_threshold: default_refresh_threshold(),
-            });
-        }
+        settings.opencti.daemon.registry = settings.opencti.daemon.registry.normalize();
+        
+        // Normalize the OpenBAS registry configuration
+        settings.openbas.daemon.registry = settings.openbas.daemon.registry.normalize();
         
         Ok(settings)
     }

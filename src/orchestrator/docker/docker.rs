@@ -232,33 +232,24 @@ impl Orchestrator for DockerOrchestrator {
                     error!(
                         orchestrator = "docker",
                         error = %e,
-                        "Failed to get registry credentials"
+                        "Failed to get registry credentials - cannot proceed without authentication"
                     );
-                    return None;
+                    panic!("Registry authentication required but failed - aborting deployment");
                 }
             }
         } else {
             None
         };
 
-        if let Some(registry_server) = resolver.get_registry_server() {
-            info!(
-                orchestrator = "docker",
-                image = resolved_image.full_name,
-                registry = registry_server,
-                operation = "pull",
-                status = "started",
-                "Starting image pull from private registry"
-            );
-        } else {
-            info!(
-                orchestrator = "docker",
-                image = resolved_image.full_name,
-                operation = "pull",
-                status = "started",
-                "Starting image pull from Docker Hub"
-            );
-        }
+        let registry_server = resolver.get_registry_server();
+        info!(
+            orchestrator = "docker",
+            image = resolved_image.full_name,
+            registry = registry_server,
+            operation = "pull",
+            status = "started",
+            "Starting image pull"
+        );
 
         let deploy_response = self
             .docker
