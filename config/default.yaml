@@ -47,7 +47,7 @@ opencti:
       env_type: docker
       api_version: v1.41
 
-openbas:
+openaev:
   enable: false
   url: http://host.docker.internal:4000
   token: ChangeMe
