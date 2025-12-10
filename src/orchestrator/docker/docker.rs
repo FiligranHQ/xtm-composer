@@ -1,5 +1,6 @@
 use crate::api::{ApiConnector, ConnectorStatus};
 use crate::orchestrator::docker::DockerOrchestrator;
+use crate::orchestrator::image::Image;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use bollard::Docker;
@@ -7,8 +8,8 @@ use bollard::container::{
     Config, CreateContainerOptions, InspectContainerOptions, ListContainersOptions, LogsOptions,
     RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
 };
-use bollard::models::HostConfig;
 use bollard::image::CreateImageOptions;
+use bollard::models::HostConfig;
 use futures::TryStreamExt;
 use futures::future;
 use std::collections::HashMap;
@@ -49,7 +50,7 @@ impl Orchestrator for DockerOrchestrator {
                 let state = docker_container.state.unwrap();
                 let restart_count = docker_container.restart_count.unwrap_or(0) as u32;
                 let started_at = state.started_at;
-                
+
                 Some(OrchestratorContainer {
                     id: docker_container.id.unwrap(),
                     name: DockerOrchestrator::normalize_name(docker_container.name),
@@ -61,7 +62,7 @@ impl Orchestrator for DockerOrchestrator {
                     restart_count,
                     started_at,
                 })
-            },
+            }
             Err(_) => {
                 debug!(name = container_name, "Could not find docker container");
                 None
@@ -165,27 +166,33 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        // We need to pull the image first
+        let settings = crate::settings();
+        let registry_config = settings.opencti.daemon.registry.clone();
+        let resolver = Image::new(registry_config);
+        let auth = resolver.get_credentials();
+        let image = resolver.build_name(connector.image.clone());
+
         let deploy_response = self
             .docker
             .create_image(
                 Some(CreateImageOptions {
-                    from_image: connector.image.as_str(),
+                    from_image: image.as_str(),
                     ..Default::default()
                 }),
                 None,
-                None,
+                auth,
             )
             .try_for_each(|info| {
                 info!(
                     "{} {:?} {:?} pulling...",
-                    connector.image,
+                    image,
                     info.status.as_deref(),
                     info.progress.as_deref()
                 );
                 future::ok(())
             })
             .await;
+
         match deploy_response {
             Ok(_) => {
                 // Create the container
@@ -195,14 +202,14 @@ impl Orchestrator for DockerOrchestrator {
                     .map(|config| format!("{}={}", config.key, config.value))
                     .collect::<Vec<String>>();
                 let labels = self.labels(connector);
-                
+
                 // Build host config with Docker options
                 let mut host_config = HostConfig::default();
-                
+
                 // Get settings and check for Docker options
                 let settings = crate::settings();
                 let docker_options = settings.opencti.daemon.docker.as_ref();
-                
+
                 if let Some(docker_opts) = docker_options {
                     // Apply Docker options to host config
                     if let Some(network_mode) = &docker_opts.network_mode {
@@ -252,7 +259,8 @@ impl Orchestrator for DockerOrchestrator {
                     }
                     if let Some(ulimits) = &docker_opts.ulimits {
                         // Convert ulimits from HashMap to bollard's expected format
-                        let ulimits_vec: Vec<bollard::models::ResourcesUlimits> = ulimits.iter()
+                        let ulimits_vec: Vec<bollard::models::ResourcesUlimits> = ulimits
+                            .iter()
                             .filter_map(|ulimit_map| {
                                 if let (Some(name), Some(soft), Some(hard)) = (
                                     ulimit_map.get("name").and_then(|v| v.as_str()),
@@ -274,9 +282,9 @@ impl Orchestrator for DockerOrchestrator {
                         }
                     }
                 }
-                
+
                 let config = Config {
-                    image: Some(connector.image.clone()),
+                    image: Some(image),
                     env: Some(container_env_variables),
                     labels: Some(labels),
                     host_config: Some(host_config),
@@ -310,8 +318,12 @@ impl Orchestrator for DockerOrchestrator {
                 // Return the created container
                 created
             }
-            Err(_) => {
-                error!(image = connector.image, "Error fetching container image");
+            Err(e) => {
+                error!(
+                    image = image,
+                    error = e.to_string(),
+                    "Error fetching container image"
+                );
                 None
             }
         }

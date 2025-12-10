@@ -43,8 +43,18 @@ pub struct Manager {
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
+pub struct Registry {
+    pub server: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
 pub struct Daemon {
     pub selector: String,
+    pub registry: Option<Registry>,
     pub portainer: Option<Portainer>,
     pub kubernetes: Option<Kubernetes>,
     pub docker: Option<Docker>,

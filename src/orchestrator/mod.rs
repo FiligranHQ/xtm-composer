@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 pub mod composer;
 pub mod docker;
+pub mod image;
 pub mod kubernetes;
 pub mod portainer;
 
