@@ -28,26 +28,4 @@ pub async fn add_logs(id: String, logs: Vec<String>, api: &ApiOpenAEV)-> Option<
     ).await;
 
     Some(cynic::Id::new(id))
-    // match add_logs_response {
-    //     Ok(response) => {
-    //         if response.status().is_success() {
-    //             info!("Successfully pushed logs for connector instance: {}", id);
-    //             Some(cynic::Id::new(id))
-    //         } else {
-    //             let status = response.status();
-    //             let body = response.text().await.unwrap_or_default();
-    //             error!(
-    //                 status = status.as_u16(),
-    //                 body = body,
-    //                 "Failed to push logs for connector instance: {}",
-    //                 id
-    //             );
-    //             None
-    //         }
-    //     }
-    //     Err(e) => {
-    //         error!(error = e.to_string(), "Failed to send request to push logs");
-    //         None
-    //     }
-    // }
 }

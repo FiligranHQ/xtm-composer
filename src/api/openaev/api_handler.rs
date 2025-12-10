@@ -62,38 +62,3 @@ pub async fn handle_api_text_response(
         }
     }
 }
-
-// pub async fn handle_api_response<T>(
-//     response: Result<reqwest::Response, reqwest::Error>,
-//     operation_name: &str,
-//     unsupported_parse_message: &str,
-// )-> Option<T>  where T: DeserializeOwned {
-//     match response {
-//         Ok(resp) if resp.status().is_success() => {
-//             match resp.json::<T>().await {
-//                 Ok(data) => Some(data),
-//                 Err(err) => {
-//                     error!(
-//                         error = err.to_string(),
-//                         "Failed to parse response for {}", unsupported_parse_message
-//                     );
-//                     None
-//                 }
-//             }
-//         }
-//         Ok(resp) => {
-//             error!(
-//                 status = resp.status().as_u16(),
-//                 "Failed to {}: non-success status code", operation_name
-//             );
-//             None
-//         }
-//         Err(err) => {
-//             error!(
-//                 error = err.to_string(),
-//                 "Failed to {}, check your configuration", operation_name
-//             );
-//             None
-//         }
-//     }
-// }
