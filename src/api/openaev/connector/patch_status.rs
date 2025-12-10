@@ -31,37 +31,3 @@ pub async fn update_status(id: String, status: ConnectorStatus, api: &ApiOpenAEV
         .await
         .map(|connector| connector.to_api_connector(&api.private_key))
 }
-
-// match update_status_response {
-//     Ok(response) => {
-//         if response.status().is_success() {
-//             match response.json::<ConnectorInstances>().await {
-//                 Ok(connector) => {
-//                     let instance = connector.to_api_connector(&api.private_key);
-//                     info!("Connector instance updated successfully: {:?}", instance);
-//                     Some(instance)
-//                 }
-//                 Err(err) => {
-//                     error!(
-//                         error = err.to_string(),
-//                         "Failed to parse connector instance response"
-//                     );
-//                     None
-//                 }
-//             }
-//         } else {
-//             error!(
-//                 status = response.status().as_u16(),
-//                 "Failed to fetch patch status"
-//             );
-//             None
-//         }
-//     }
-//     Err(err) => {
-//         error!(
-//             error = err.to_string(),
-//             "Fail to patch status"
-//         );
-//         None
-//     }
-// }
