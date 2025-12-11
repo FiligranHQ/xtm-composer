@@ -1,8 +1,26 @@
 use crate::config::settings::Registry;
+use base64::Engine;
+use base64::engine::general_purpose;
 use bollard::auth::DockerCredentials;
+use serde::Serialize;
+use slug::slugify;
+use std::collections::{BTreeMap, HashMap};
 
 pub struct Image {
     config: Registry,
+}
+
+#[derive(Serialize)]
+struct DockerConfig {
+    auths: HashMap<String, DockerAuthEntry>,
+}
+
+#[derive(Serialize)]
+struct DockerAuthEntry {
+    username: String,
+    password: String,
+    email: Option<String>,
+    auth: String, // base64(user:pass)
 }
 
 impl Image {
@@ -17,6 +35,7 @@ impl Image {
         }
     }
 
+    // region Docker
     pub fn build_name(&self, image_name: String) -> String {
         match self.config.server {
             None => image_name,
@@ -42,4 +61,37 @@ impl Image {
         }
         Some(self.build_credentials(&self.config))
     }
+    // endregion
+
+    // region Kubernetes
+    pub fn get_kubernetes_secret_name(&self) -> Option<String> {
+        // secret name must be slug to be compatible with kubernetes naming convention (RFC 1123)
+        self.config.server.clone().map(|server| slugify(&server))
+    }
+
+    pub fn get_kubernetes_registry_secret(&self) -> Option<BTreeMap<String, String>> {
+        let registry_config = self.config.clone();
+        if registry_config.username.is_some() && registry_config.password.is_some() {
+            let username = registry_config.username?.clone();
+            let password = registry_config.password?.clone();
+            let auth_string = format!("{}:{}", username, password);
+            let auth_encoded = general_purpose::STANDARD.encode(auth_string);
+            let entry = DockerAuthEntry {
+                username,
+                password,
+                email: registry_config.email.clone(),
+                auth: auth_encoded,
+            };
+            let config = DockerConfig {
+                auths: HashMap::from([(registry_config.server.unwrap().to_string(), entry)]),
+            };
+            Some(BTreeMap::from([(
+                ".dockerconfigjson".to_string(),
+                serde_json::to_string(&config).unwrap(),
+            )]))
+        } else {
+            None
+        }
+    }
+    // endregion
 }
