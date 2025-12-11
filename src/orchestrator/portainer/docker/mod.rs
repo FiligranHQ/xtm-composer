@@ -33,6 +33,11 @@ pub struct PortainerDeployResponse {
     pub id: String,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct PortainerApiError {
+    message: String,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all(deserialize = "PascalCase"))]
 pub struct PortainerGetResponseState {

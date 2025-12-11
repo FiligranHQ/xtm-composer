@@ -9,7 +9,6 @@ rsa = { version = "0.9.8" }
 bollard = { version = "0.18.1" }
 chrono = { version = "0.4" }
 futures = { version = "0.3.31" }
-url = { version = "2.5.4" }
 rolling-file = { version = " 0.2.0" }
 tracing = { version = "0.1.41" }
 tracing-appender = { version = "0.2.3" }
