@@ -1,10 +1,7 @@
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::JSON;
 use serde::Serialize;
-use serde_json::json;
-use tracing::{error, info};
 use crate::api::openaev::api_handler::handle_api_response;
 use crate::api::openaev::ApiOpenAEV;
-use crate::api::openaev::connector::ConnectorInstances;
 
 #[derive(Serialize)]
 struct InstanceConnectorLogsInput {

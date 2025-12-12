@@ -1,6 +1,6 @@
 use serde::Serialize;
 use crate::api::{ApiConnector, ApiContractConfig};
-use rsa::{Pkcs1v15Encrypt, RsaPrivateKey};
+use rsa::{RsaPrivateKey};
 use tracing::{warn};
 use std::str;
 
@@ -10,12 +10,7 @@ pub mod post_logs;
 pub mod post_health;
 
 use cynic;
-use base64::{Engine as _, engine::general_purpose};
 use crate::api::opencti::opencti as schema;
-use aes_gcm::{
-    aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce
-};
 use crate::api::decrypt_value::parse_aes_encrypted_value;
 
 #[derive(cynic::QueryFragment, Debug, Clone, Serialize)]

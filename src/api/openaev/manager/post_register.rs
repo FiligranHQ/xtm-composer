@@ -2,7 +2,6 @@ use rsa::{RsaPublicKey};
 use rsa::pkcs1::LineEnding;
 use rsa::pkcs8::EncodePublicKey;
 use serde::Serialize;
-use tracing::{error, info};
 use crate::api::openaev::api_handler::handle_api_response;
 use crate::api::openaev::ApiOpenAEV;
 use crate::api::openaev::manager::ConnectorManager;

@@ -1,5 +1,4 @@
 use serde::Serialize;
-use tracing::{error, info};
 use crate::api::{ApiConnector, ConnectorStatus};
 use crate::api::openaev::api_handler::handle_api_response;
 use crate::api::openaev::ApiOpenAEV;
