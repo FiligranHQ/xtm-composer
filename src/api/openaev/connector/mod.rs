@@ -24,14 +24,14 @@ pub struct ConnectorInstances {
     pub connector_image: Option<String>,
     pub connector_instance_current_status: Option<String>,
     pub connector_instance_requested_status: Option<String>,
-    pub connector_instance_configuration: Option<Vec<ConnectorContractConfiguration>>,
+    pub connector_instance_configurations: Option<Vec<ConnectorContractConfiguration>>,
 }
 
 impl ConnectorInstances {
 
     pub fn to_api_connector(&self, private_key: &RsaPrivateKey )->ApiConnector {
         let contract_configuration = self
-            .connector_instance_configuration
+            .connector_instance_configurations
             .as_ref()
             .unwrap()
             .into_iter()
@@ -40,8 +40,6 @@ impl ConnectorInstances {
                 if is_sensitive {
                     let encrypted_value = c.configuration_value.clone().unwrap_or_default();
                     let decoded_value_result = parse_aes_encrypted_value(private_key, encrypted_value);
-                    println!("Configuration key: {}", c.configuration_key.clone());
-                    println!("Decoded value result: {:?}", decoded_value_result);
                     match decoded_value_result {
                         Ok(decoded_value) => ApiContractConfig {
                             key: c.configuration_key.clone(),
