@@ -44,7 +44,6 @@ opencti:
       # Registry configuration for Docker orchestrator
       # If no registry configured, uses original image name and default Docker Hub authentication
       registry:
-#        url: registry.example.com:5000  # Registry URL
         url: localhost:5000  # Registry URL
 #        username: username                 # Optional: Registry username
 #        password: password                 # Optional: Registry password
