@@ -329,8 +329,9 @@ impl Orchestrator for DockerOrchestrator {
             )
             .try_for_each(|info| {
                 info!(
-                    "{} pulling...",
-                    full_image_name.as_str()
+                    "{} {:?} pulling...",
+                    full_image_name.as_str(),
+                    info.status.as_deref()
                 );
                 future::ok(())
             })
