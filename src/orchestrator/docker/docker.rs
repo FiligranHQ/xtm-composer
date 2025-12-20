@@ -33,6 +33,121 @@ impl DockerOrchestrator {
     pub fn normalize_name(name: Option<String>) -> String {
         name.unwrap().strip_prefix("/").unwrap().into()
     }
+
+    /// Get full image name with registry prefix if configured
+    ///
+    /// This method intelligently prepends the configured registry URL to image names
+    /// that don't already have a registry prefix.
+    ///
+    /// # Examples
+    /// ```
+    /// // Config: registry.url = "localhost:5000"
+    ///
+    /// // Simple image name → Prepend registry
+    /// "connector-misp:5.0.0" → "localhost:5000/connector-misp:5.0.0"
+    ///
+    /// // Organization/image format → Prepend registry
+    /// "myorg/connector:1.0" → "localhost:5000/myorg/connector:1.0"
+    ///
+    /// // Already has registry → Keep as-is
+    /// "docker.io/alpine:3.18" → "docker.io/alpine:3.18"
+    /// "registry.company.com/app:v1" → "registry.company.com/app:v1"
+    /// ```
+    ///
+    /// # Detection Logic
+    /// An image is considered to have a registry prefix if:
+    /// - It contains '/' AND the first part contains '.' (e.g., "docker.io", "localhost:5000")
+    ///
+    /// # Arguments
+    /// * `image` - Original image name from OpenCTI (e.g., "connector-misp:5.0.0")
+    ///
+    /// # Returns
+    /// * Full image name, optionally prefixed with registry URL
+    fn get_full_image_name(&self, image: &str) -> String {
+        // Step 1: Load global settings from config/default.yaml
+        let settings = crate::settings();
+        let docker_config = settings.opencti.daemon.docker.as_ref();
+
+        // Step 2: Check if Docker orchestrator configuration exists
+        if let Some(docker_opts) = docker_config {
+
+            // Step 3: Check if registry configuration exists
+            if let Some(registry_config) = &docker_opts.registry {
+
+                // Step 4: Check if registry URL is configured
+                if let Some(registry_url) = &registry_config.url {
+
+                    // Step 5: Determine if we should prepend the registry URL
+                    // Decision criteria:
+                    //   - If image has NO '/', it's a simple name (e.g., "alpine:3.18") → Prepend
+                    //   - If image has '/' but first part has NO '.', it's org/image format (e.g., "myorg/app") → Prepend
+                    //   - If image has '/' and first part has '.', it already has a registry (e.g., "docker.io/alpine") → Don't prepend
+                    if !image.contains('/') || !image.split('/').next().unwrap().contains('.') {
+                        // Image doesn't have a registry prefix → Prepend our registry URL
+                        // trim_end_matches('/') removes trailing slashes to avoid "localhost:5000//image"
+                        return format!("{}/{}", registry_url.trim_end_matches('/'), image);
+                    }
+                    // If we reach here: Image already has a registry prefix → Use as-is
+                }
+            }
+        }
+
+        // Step 6: No registry configured or image already has registry → Return unchanged
+        image.to_string()
+    }
+
+    /// Build Docker registry authentication credentials
+    ///
+    /// This method constructs authentication credentials for private Docker registries.
+    /// If no credentials are configured, it returns None and Docker will fall back to:
+    /// - Public access (no authentication)
+    /// - Credentials from ~/.docker/config.json
+    /// - Docker daemon's credential store
+    ///
+    /// # Examples
+    /// ```
+    /// // Config with credentials:
+    /// registry:
+    ///   url: localhost:5000
+    ///   username: username
+    ///   password: secret123
+    ///
+    /// // Returns: Some(DockerCredentials { username: "username", password: "secret123" })
+    ///
+    /// // Config without credentials:
+    /// registry:
+    ///   url: localhost:5000
+    ///
+    /// // Returns: Some(DockerCredentials { username: None, password: None })
+    ///
+    /// // No registry config at all:
+    /// // Returns: None (Docker will use default authentication)
+    /// ```
+    ///
+    /// # Returns
+    /// * `Some(DockerCredentials)` - If registry configuration exists (credentials optional)
+    /// * `None` - If no registry configuration found
+    fn build_registry_auth(&self) -> Option<bollard::auth::DockerCredentials> {
+        // Step 1: Load global settings from config/default.yaml
+        let settings = crate::settings();
+
+        // Step 2: Get Docker orchestrator configuration
+        // The '?' operator returns None early if docker config doesn't exist
+        let docker_config = settings.opencti.daemon.docker.as_ref()?;
+
+        // Step 3: Get registry configuration
+        // The '?' operator returns None early if registry config doesn't exist
+        let registry_config = docker_config.registry.as_ref()?;
+
+        // Step 4: Build credentials struct
+        // Note: username and password are Option<String>, so they can be None
+        // If they're None, Docker will attempt unauthenticated access or use daemon credentials
+        Some(bollard::auth::DockerCredentials {
+            username: registry_config.username.clone(),  // Optional: Can be None
+            password: registry_config.password.clone(),  // Optional: Can be None
+            ..Default::default()  // Use default values
+        })
+    }
 }
 
 #[async_trait]
@@ -165,23 +280,57 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        // We need to pull the image first
+        // Step 1: Build full image name with registry prefix (if configured)
+        // Example: "connector-misp:5.0.0" → "localhost:5000/connector-misp:5.0.0"
+        let full_image_name = self.get_full_image_name(&connector.image);
+
+        // Step 2: Build authentication credentials (if configured)
+        // Returns:
+        //   - Some(credentials) if registry config exists with username/password
+        //   - None if no registry config (will use Docker's default auth)
+        let auth = self.build_registry_auth();
+
+        // Step 3: Log deployment information for debugging purpose only
+        let settings = crate::settings();
+        if let Some(docker_config) = settings.opencti.daemon.docker.as_ref() {
+            if let Some(registry_config) = &docker_config.registry {
+                if let Some(registry_url) = &registry_config.url {
+                    // Log: Custom registry with URL
+                    info!(
+                        "Deploying container - Registry: {}, Original image: {}, Pulling: {}",
+                        registry_url,
+                        connector.image,
+                        full_image_name
+                    );
+                } else {
+                    // Log: Registry config exists but no URL
+                    info!("Deploying container - Pulling image: {}", full_image_name);
+                }
+            } else {
+                // Log: No registry config (using Docker Hub or daemon defaults)
+                info!("Deploying container - Pulling image: {} (default registry)", full_image_name);
+            }
+        } else {
+            // Log: No Docker config at all
+            info!("Deploying container - Pulling image: {} (default registry)", full_image_name);
+        }
+
+        // Pull the image from the registry (with optional authentication)
+        // This is an async streaming operation that reports progress
         let deploy_response = self
             .docker
             .create_image(
                 Some(CreateImageOptions {
-                    from_image: connector.image.as_str(),
+                    from_image: full_image_name.as_str(),  // Full image name with registry
                     ..Default::default()
                 }),
-                None,
-                None,
+                None,  // No rootfs changes
+                auth,  // Optional authentication (can be None)
             )
             .try_for_each(|info| {
                 info!(
-                    "{} {:?} {:?} pulling...",
-                    connector.image,
-                    info.status.as_deref(),
-                    info.progress.as_deref()
+                    "{} pulling...",
+                    full_image_name.as_str()
                 );
                 future::ok(())
             })
@@ -276,7 +425,7 @@ impl Orchestrator for DockerOrchestrator {
                 }
                 
                 let config = Config {
-                    image: Some(connector.image.clone()),
+                    image: Some(full_image_name.clone()),
                     env: Some(container_env_variables),
                     labels: Some(labels),
                     host_config: Some(host_config),

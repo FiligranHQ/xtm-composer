@@ -78,6 +78,16 @@ pub struct OpenBAS {
     pub daemon: Daemon,
 }
 
+// Add Registry Configuration Struct
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct Registry {
+    pub url: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub insecure: Option<bool>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Portainer {
@@ -88,6 +98,7 @@ pub struct Portainer {
     pub api_version: String,
     pub stack: Option<String>,
     pub network_mode: Option<String>,
+    pub registry: Option<Registry>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -96,6 +107,8 @@ pub struct Kubernetes {
     pub base_deployment: Option<Deployment>,
     pub base_deployment_json: Option<String>,
     pub image_pull_policy: Option<String>,
+    // Now add registry field to each orchestrator config
+    pub registry: Option<Registry>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -117,6 +130,7 @@ pub struct Docker {
     pub shm_size: Option<i64>,
     pub sysctls: Option<std::collections::HashMap<String, String>>,
     pub ulimits: Option<Vec<std::collections::HashMap<String, serde_json::Value>>>,
+    pub registry: Option<Registry>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

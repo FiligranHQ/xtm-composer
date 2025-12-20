@@ -40,6 +40,25 @@ opencti:
       # Environment variable: OPENCTI__DAEMON__KUBERNETES__IMAGE_PULL_POLICY
       image_pull_policy: IfNotPresent
       base_deployment:
+    docker:
+      # Registry configuration for Docker orchestrator
+      # If no registry configured, uses original image name and default Docker Hub authentication
+      registry:
+#        url: registry.example.com:5000  # Registry URL
+        url: localhost:5000  # Registry URL
+#        username: username                 # Optional: Registry username
+#        password: password                 # Optional: Registry password
+#        insecure: false                   # Optional: Allow insecure connections
+
+      # Network configuration - Use same network as OpenCTI
+      # This allows deployed connectors to communicate with OpenCTI platform
+      # Valid values:
+      network_mode: host
+
+      # Optional: Add custom host entries for hostname resolution
+#      extra_hosts:
+#        - "custom-host:172.20.0.8"  # Map hostname to IP if needed
+
     portainer:
       api: https://host.docker.internal:9443
       api_key: ChangeMe

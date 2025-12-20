@@ -45,6 +45,17 @@ impl ManagedConnector {
     pub fn parse_aes_encrypted_value(&self,  private_key: &RsaPrivateKey, encrypted_value: String) -> Result<String, Box<dyn std::error::Error>> {
         let encrypted_bytes = general_purpose::STANDARD.decode(encrypted_value)?;
 
+        // Minimum expected length: 1 (version) + 512 (RSA encrypted key/IV) + 1 (at least some encrypted data)
+        // Warn and not panic when length is encrypted data too short for expected format
+        if encrypted_bytes.len() < 513 {
+            warn!(
+                actual_length = encrypted_bytes.len(),
+                expected_min_length = 513,
+                "Encrypted data too short for expected format"
+            );
+            return Ok(String::from(""));
+        }
+
         let version = encrypted_bytes[0];
         if version != 1 {
             warn!(version, "Encryption version not handled");
