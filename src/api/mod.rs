@@ -178,7 +178,7 @@ pub trait ComposerApi {
 
     async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiConnector>;
 
-    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<cynic::Id>;
+    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<String>;
 
     async fn patch_health(
         &self,
@@ -186,5 +186,5 @@ pub trait ComposerApi {
         restart_count: u32,
         started_at: String,
         is_in_reboot_loop: bool,
-    ) -> Option<cynic::Id>;
+    ) -> Option<String>;
 }

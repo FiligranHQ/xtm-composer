@@ -37,8 +37,8 @@ impl ApiOpenAEV {
         let connect_timeout = settings.openaev.connect_timeout;
 
         let http_client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(2))
-            .timeout(Duration::from_secs(5))
+            .connect_timeout(Duration::from_secs(connect_timeout))
+            .timeout(Duration::from_secs(request_timeout))
             .build()
             .unwrap(); // or handle the error appropriately
 
@@ -70,6 +70,7 @@ impl ApiOpenAEV {
 
         self.http_client
             .put(&api_route)
+            .header("Content-Type", "application/json")
             .header(AUTHORIZATION_HEADER, self.bearer.as_str())
     }
 
@@ -113,11 +114,11 @@ impl ComposerApi for ApiOpenAEV {
         connector::patch_status::update_status(id, status, self).await
     }
 
-    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<cynic::Id> {
+    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<String> {
         connector::post_logs::add_logs(id, logs, self).await
     }
 
-    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<cynic::Id> {
+    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<String> {
         connector::patch_health::update_health(id, restart_count, started_at, is_in_reboot_loop, self).await
     }
 }

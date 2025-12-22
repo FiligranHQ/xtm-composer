@@ -16,7 +16,7 @@ pub async fn update_health(
     started_at: String,
     is_in_reboot_loop: bool,
     api: &ApiOpenAEV,
-)-> Option<cynic::Id> {
+)-> Option<String> {
     let settings = crate::settings();
     let health_check_input = ConnectorInstanceHealthInput {
         connector_instance_restart_count: restart_count,
@@ -34,5 +34,5 @@ pub async fn update_health(
         "push health metrics"
     ).await;
 
-    Some(cynic::Id::new(id))
+    Some(id)
 }

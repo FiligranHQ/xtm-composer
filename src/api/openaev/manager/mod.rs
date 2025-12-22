@@ -6,6 +6,6 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct ConnectorManager {
-    pub xtm_composer_id: cynic::Id,
+    pub xtm_composer_id: String,
     pub xtm_composer_version: String,
 }
