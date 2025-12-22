@@ -11,7 +11,7 @@ pub mod post_health;
 
 use cynic;
 use crate::api::opencti::opencti as schema;
-use crate::api::decrypt_value::parse_aes_encrypted_value;
+use crate::api::decrypt_value::parse_aes_encrypted_value_deprecated_fct;
 
 #[derive(cynic::QueryFragment, Debug, Clone, Serialize)]
 pub struct ConnectorContractConfiguration {
@@ -48,7 +48,7 @@ impl ManagedConnector {
                 let is_sensitive = c.encrypted.unwrap_or_default();
                 if is_sensitive {
                     let encrypted_value = c.value.unwrap_or_default();
-                    let decoded_value_result = parse_aes_encrypted_value(private_key, encrypted_value);
+                    let decoded_value_result = parse_aes_encrypted_value_deprecated_fct(private_key, encrypted_value);
                     match decoded_value_result {
                         Ok(decoded_value) => ApiContractConfig {
                             key: c.key,

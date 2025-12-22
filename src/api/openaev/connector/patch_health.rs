@@ -29,7 +29,6 @@ pub async fn update_health(
         .send()
         .await;
 
-    // Discard the result
     let _ = handle_api_response::<ConnectorInstances>(
         health_check_response,
         "push health metrics"
