@@ -13,7 +13,7 @@ where
             match resp.json::<T>().await {
                 Ok(data) => Some(data),
                 Err(err) => {
-                    error!("Failed to parse JSON for {}: {}", operation_name, err);
+                    error!("Failed to parse JSON for {}: {}", operation_name, err.to_string());
                     None
                 }
             }
