@@ -18,7 +18,7 @@ pub struct ConnectorContractConfiguration {
 
 #[derive(Debug, Deserialize)]
 pub struct ConnectorInstances {
-    pub connector_instance_id: cynic::Id,
+    pub connector_instance_id: String,
     pub connector_instance_name: String,
     pub connector_instance_hash: Option<String>,
     pub connector_image: Option<String>,
@@ -65,7 +65,7 @@ impl ConnectorInstances {
             })
             .collect();
         ApiConnector {
-            id: self.connector_instance_id.clone().into_inner(),
+            id: self.connector_instance_id.clone(),
             name: self.connector_instance_name.clone(),
             image: self.connector_image.clone().unwrap(),
             contract_hash: self.connector_instance_hash.clone().unwrap(),

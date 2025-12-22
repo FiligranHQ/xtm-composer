@@ -8,7 +8,7 @@ struct InstanceConnectorLogsInput {
     connector_instance_logs: Vec<String>,
 }
 
-pub async fn add_logs(id: String, logs: Vec<String>, api: &ApiOpenAEV)-> Option<cynic::Id> {
+pub async fn add_logs(id: String, logs: Vec<String>, api: &ApiOpenAEV)-> Option<String> {
     let logs_input = InstanceConnectorLogsInput{
         connector_instance_logs: logs
     };
@@ -24,5 +24,5 @@ pub async fn add_logs(id: String, logs: Vec<String>, api: &ApiOpenAEV)-> Option<
         "push logs for connector instance"
     ).await;
 
-    Some(cynic::Id::new(id))
+    Some(id)
 }
