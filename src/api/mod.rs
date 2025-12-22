@@ -7,8 +7,9 @@ use std::str::FromStr;
 use std::time::Duration;
 use tracing::info;
 
-pub mod openbas;
+pub mod openaev;
 pub mod opencti;
+mod decrypt_value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ContractsManifest {
@@ -99,11 +100,20 @@ impl ApiConnector {
                 is_sensitive: config.is_sensitive,
             })
             .collect::<Vec<EnvVariable>>();
-        envs.push(EnvVariable {
-            key: "OPENCTI_URL".into(),
-            value: settings.opencti.url.clone(),
-            is_sensitive: false,
-        });
+        if settings.opencti.enable {
+            envs.push(EnvVariable {
+                key: "OPENCTI_URL".into(),
+                value: settings.opencti.url.clone(),
+                is_sensitive: false,
+            });
+        }
+        if settings.openaev.enable {
+            envs.push(EnvVariable {
+                key: "OPENAEV_URL".into(),
+                value: settings.openaev.url.clone(),
+                is_sensitive: false,
+            });
+        }
         envs.push(EnvVariable {
             key: "OPENCTI_CONFIG_HASH".into(),
             value: self.contract_hash.clone(),
@@ -171,7 +181,7 @@ pub trait ComposerApi {
 
     async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiConnector>;
 
-    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<cynic::Id>;
+    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<String>;
 
-    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<cynic::Id>;
+    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<String>;
 }
