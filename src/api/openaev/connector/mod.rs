@@ -8,6 +8,7 @@ pub mod get_connector_instances;
 pub mod patch_health;
 pub mod patch_status;
 pub mod post_logs;
+pub mod notify_container_removed;
 
 #[derive(Debug, Deserialize)]
 pub struct ConnectorContractConfiguration {

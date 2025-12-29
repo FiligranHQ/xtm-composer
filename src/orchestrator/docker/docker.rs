@@ -127,7 +127,7 @@ impl Orchestrator for DockerOrchestrator {
             .await;
     }
 
-    async fn remove(&self, container: &OrchestratorContainer) -> () {
+    async fn remove(&self, container: &OrchestratorContainer) -> bool {
         let container_name = container.name.as_str();
         let remove_response = self
             .docker
@@ -143,6 +143,7 @@ impl Orchestrator for DockerOrchestrator {
         match remove_response {
             Ok(_) => {
                 info!(name = container_name, "Removed container");
+                true
             }
             Err(err) => {
                 error!(
@@ -150,6 +151,7 @@ impl Orchestrator for DockerOrchestrator {
                     error = err.to_string(),
                     "Could not remove container"
                 );
+                false
             }
         }
     }

@@ -184,4 +184,6 @@ pub trait ComposerApi {
     async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<String>;
 
     async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<String>;
+
+    async fn container_removed_successfully(&self, id: String) -> ();
 }
