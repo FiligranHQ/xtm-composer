@@ -108,4 +108,8 @@ impl ComposerApi for ApiOpenCTI {
     async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<String> {
         connector::post_health::health(id, restart_count, started_at, is_in_reboot_loop, self).await
     }
+
+    async fn container_removed_successfully(&self, id: String) -> () {
+        // Do nothing
+    }
 }

@@ -146,7 +146,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
         self.client.post(start_container_uri).send().await.unwrap();
     }
 
-    async fn remove(&self, container: &OrchestratorContainer) -> () {
+    async fn remove(&self, container: &OrchestratorContainer) -> bool {
         let container_name = container.name.as_str();
         let delete_container_uri =
             format!("{}/{}?v=0&force=true", self.container_uri, container.id);
@@ -154,6 +154,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
         match remove_response {
             Ok(_) => {
                 info!(name = container_name, "Removed container");
+                true
             }
             Err(err) => {
                 error!(
@@ -161,6 +162,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
                     error = err.to_string(),
                     "Could not remove container"
                 );
+                false
             }
         }
     }

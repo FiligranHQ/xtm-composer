@@ -65,7 +65,7 @@ pub trait Orchestrator {
 
     async fn stop(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> ();
 
-    async fn remove(&self, container: &OrchestratorContainer) -> ();
+    async fn remove(&self, container: &OrchestratorContainer) -> bool;
 
     async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer>;
 
