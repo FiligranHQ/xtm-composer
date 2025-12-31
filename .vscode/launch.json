@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run xtm-composer",
+            "type": "lldb",
+            "request": "launch",
+            "env": {
+                "COMPOSER_ENV": "development",
+            },
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=xtm-composer"
+                ]
+            },
+            "args": []
+        }
+    ]
+}
