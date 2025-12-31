@@ -82,7 +82,7 @@ impl ApiConnector {
     }
 
     pub fn container_envs(&self) -> Vec<EnvVariable> {
-        let settings = crate::settings();
+        let settings = &crate::config::settings::SETTINGS;
         let mut envs = self
             .contract_configuration
             .iter()
@@ -107,8 +107,7 @@ impl ApiConnector {
 
     /// Display environment variables with sensitive values masked (if configured)
     pub fn display_env_variables(&self) {
-        let settings = crate::settings();
-
+        let settings = &crate::config::settings::SETTINGS;
         // Check if display is enabled in configuration
         let should_display = settings
             .manager
