@@ -1,5 +1,6 @@
 use config::{Config, ConfigError, Environment, File};
 use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::core::v1::ResourceRequirements;
 use serde::Deserialize;
 use std::env;
 
@@ -106,6 +107,7 @@ pub struct Kubernetes {
     pub base_deployment: Option<Deployment>,
     pub base_deployment_json: Option<String>,
     pub image_pull_policy: Option<String>,
+    pub image_resources: Option<ResourceRequirements>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
