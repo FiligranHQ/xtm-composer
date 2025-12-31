@@ -14,7 +14,7 @@ tracing = { version = "0.1.41" }
 tracing-appender = { version = "0.2.3" }
 tracing-subscriber = { version = "0.3.19", features = ["json"] }
 async-trait = { version = "0.1.87" }
-reqwest = { version = "0.12.12" }
+reqwest = { version = "0.13.0" }
 serde_json = { version = "1.0.140" }
 tokio = { version = "1.43.0", features = ["full"] }
 cynic = { version = "3", features = ["http-reqwest"] }
