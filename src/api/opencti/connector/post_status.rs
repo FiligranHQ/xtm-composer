@@ -1,6 +1,6 @@
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
-use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
+use crate::api::opencti::error_handler::{extract_optional_field, handle_graphql_response};
 use crate::api::{ApiConnector, ConnectorStatus};
 
 use crate::api::opencti::opencti as schema;
@@ -29,14 +29,6 @@ pub enum ConnectorCurrentStatus {
     Started,
     #[cynic(rename = "stopped")]
     Stopped,
-}
-
-#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq)]
-pub enum ConnectorRequestStatus {
-    #[cynic(rename = "starting")]
-    Starting,
-    #[cynic(rename = "stopping")]
-    Stopping,
 }
 
 #[derive(cynic::InputObject, Debug)]

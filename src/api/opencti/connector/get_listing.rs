@@ -1,17 +1,12 @@
 use crate::api::ApiConnector;
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
-use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
+use crate::api::opencti::error_handler::{extract_optional_field, handle_graphql_response};
 use tracing::error;
 
 // region schema
 use crate::api::opencti::opencti as schema;
 use cynic;
-
-#[derive(cynic::QueryVariables, Debug)]
-pub struct GetConnectorsVariables<'a> {
-    pub manager_id: &'a cynic::Id,
-}
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "Query")]
