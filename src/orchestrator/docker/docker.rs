@@ -4,12 +4,12 @@ use crate::orchestrator::image::Image;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use bollard::Docker;
-use bollard::container::{
-    Config, CreateContainerOptions, InspectContainerOptions, ListContainersOptions, LogsOptions,
-    RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
+
+use bollard::models::{ContainerCreateBody, HostConfig};
+use bollard::query_parameters::{
+    CreateContainerOptions, CreateImageOptions, InspectContainerOptions, ListContainersOptions,
+    LogsOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
 };
-use bollard::image::CreateImageOptions;
-use bollard::models::HostConfig;
 use futures::TryStreamExt;
 use futures::future;
 use std::collections::HashMap;
@@ -78,9 +78,9 @@ impl Orchestrator for DockerOrchestrator {
 
         let container_result = self
             .docker
-            .list_containers(Some(ListContainersOptions::<String> {
+            .list_containers(Some(ListContainersOptions {
                 all: true,
-                filters: list_container_filters,
+                filters: Some(list_container_filters),
                 ..Default::default()
             }))
             .await;
@@ -93,7 +93,7 @@ impl Orchestrator for DockerOrchestrator {
                     OrchestratorContainer {
                         id: docker_container.id.unwrap(),
                         name: DockerOrchestrator::normalize_name(container_name),
-                        state: docker_container.state.unwrap(),
+                        state: docker_container.state.unwrap().to_string(),
                         envs: HashMap::new(),
                         labels: docker_container.labels.unwrap(),
                         restart_count: 0, // Not available in list, will be updated by get()
@@ -113,10 +113,7 @@ impl Orchestrator for DockerOrchestrator {
         let container_name = connector.container_name();
         let _ = self
             .docker
-            .start_container(
-                container_name.as_str(),
-                None::<StartContainerOptions<String>>,
-            )
+            .start_container(container_name.as_str(), None::<StartContainerOptions>)
             .await;
     }
 
@@ -176,7 +173,7 @@ impl Orchestrator for DockerOrchestrator {
             .docker
             .create_image(
                 Some(CreateImageOptions {
-                    from_image: image.as_str(),
+                    from_image: Some(image.clone()),
                     ..Default::default()
                 }),
                 None,
@@ -283,7 +280,7 @@ impl Orchestrator for DockerOrchestrator {
                     }
                 }
 
-                let config = Config {
+                let config = ContainerCreateBody {
                     image: Some(image),
                     env: Some(container_env_variables),
                     labels: Some(labels),
@@ -293,10 +290,10 @@ impl Orchestrator for DockerOrchestrator {
 
                 let create_response = self
                     .docker
-                    .create_container::<String, String>(
+                    .create_container(
                         Some(CreateContainerOptions {
-                            name: connector.container_name(),
-                            platform: None,
+                            name: Some(connector.container_name()),
+                            ..Default::default()
                         }),
                         config,
                     )
@@ -334,7 +331,7 @@ impl Orchestrator for DockerOrchestrator {
         _container: &OrchestratorContainer,
         connector: &ApiConnector,
     ) -> Option<Vec<String>> {
-        let opts = Some(LogsOptions::<String> {
+        let opts = Some(LogsOptions {
             follow: false,
             stdout: true,
             stderr: true,
