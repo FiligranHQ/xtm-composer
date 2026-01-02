@@ -5,7 +5,9 @@ use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
-use k8s_openapi::api::core::v1::{Container, ContainerStatus, EnvVar, Pod, PodSpec, PodTemplateSpec};
+use k8s_openapi::api::core::v1::{
+    Container, ContainerStatus, EnvVar, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
+};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use kube::api::{DeleteParams, LogParams, Patch, PatchParams};
 use kube::{
@@ -27,15 +29,17 @@ impl KubeOrchestrator {
         }
     }
 
+    fn get_image_resources(&self) -> Option<ResourceRequirements> {
+        self.config.image_resources.clone()
+    }
+
     // Validate and return image pull policy
     fn get_image_pull_policy(&self) -> String {
         const VALID_POLICIES: [&str; 3] = ["Always", "IfNotPresent", "Never"];
         const DEFAULT_POLICY: &str = "IfNotPresent";
-        
+
         match &self.config.image_pull_policy {
-            Some(policy) if VALID_POLICIES.contains(&policy.as_str()) => {
-                policy.clone()
-            }
+            Some(policy) if VALID_POLICIES.contains(&policy.as_str()) => policy.clone(),
             Some(invalid_policy) => {
                 warn!(
                     "Invalid image_pull_policy '{}'. Valid values: {:?}. Using default: {}",
@@ -43,9 +47,7 @@ impl KubeOrchestrator {
                 );
                 DEFAULT_POLICY.to_string()
             }
-            None => {
-                DEFAULT_POLICY.to_string()
-            }
+            None => DEFAULT_POLICY.to_string(),
         }
     }
 
@@ -127,7 +129,7 @@ impl KubeOrchestrator {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(connector);
         let is_starting = &connector.requested_status == "starting";
-        
+
         let target_deployment = Deployment {
             metadata: ObjectMeta {
                 name: Some(connector.container_name()),
@@ -156,6 +158,7 @@ impl KubeOrchestrator {
                             image: Some(connector.image.clone()),
                             env: Some(pod_env),
                             image_pull_policy: Some(self.get_image_pull_policy()),
+                            resources: self.get_image_resources(),
                             ..Default::default()
                         }],
                         ..Default::default()
@@ -184,22 +187,24 @@ impl KubeOrchestrator {
 
     // Enrich container with pod information
     fn enrich_container_from_pod(&self, container: &mut OrchestratorContainer, pod: Pod) {
-        let container_status = pod.status
+        let container_status = pod
+            .status
             .and_then(|status| status.container_statuses)
             .and_then(|statuses| statuses.first().cloned());
-        
+
         if let Some(status) = container_status {
             container.restart_count = status.restart_count as u32;
-            
+
             if let Some(started_at) = self.extract_started_at(&status) {
                 container.started_at = Some(started_at);
             }
         }
     }
-    
+
     // Extract started_at timestamp from container status
     fn extract_started_at(&self, container_status: &ContainerStatus) -> Option<String> {
-        container_status.state
+        container_status
+            .state
             .as_ref()
             .and_then(|state| state.running.as_ref())
             .and_then(|running| running.started_at.as_ref())
@@ -221,14 +226,14 @@ impl Orchestrator for KubeOrchestrator {
                 return None;
             }
         };
-        
+
         let mut container = KubeOrchestrator::from_deployment(deployment);
-        
+
         // Enrich container with pod information
         if let Some(pod) = self.get_deployment_pod(connector.id.clone()).await {
             self.enrich_container_from_pod(&mut container, pod);
         }
-        
+
         Some(container)
     }
 
