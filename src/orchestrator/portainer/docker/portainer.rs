@@ -1,12 +1,15 @@
 use crate::api::{ApiConnector, ConnectorStatus};
 use crate::config::settings::Portainer;
 use crate::orchestrator::docker::DockerOrchestrator;
+use crate::orchestrator::image::Image;
 use crate::orchestrator::portainer::docker::{
-    PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
+    PortainerApiError, PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
     PortainerDockerOrchestrator, PortainerGetResponse,
 };
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
+use base64::Engine;
+use base64::engine::general_purpose;
 use bollard::models::ContainerSummary;
 use header::HeaderValue;
 use k8s_openapi::serde_json;
@@ -176,18 +179,28 @@ impl Orchestrator for PortainerDockerOrchestrator {
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        let settings = crate::settings();
+        let registry_config = settings.opencti.daemon.registry.clone();
+        let resolver = Image::new(registry_config);
+        let auth = resolver.get_credentials();
+        let auth_header =
+            auth.map(|c| general_purpose::STANDARD.encode(serde_json::to_string(&c).unwrap()));
+        let image = resolver.build_name(connector.image.clone());
         // region First operation, pull the image
-        let create_image_uri = format!(
-            "{}/create?fromImage={}",
-            self.image_uri,
-            connector.image.clone()
+        let create_image_uri = format!("{}/create", self.image_uri);
+        let request_builder = auth_header.into_iter().fold(
+            self.client
+                .post(create_image_uri)
+                .query(&[("fromImage", image.clone())]),
+            |req, val| req.header("X-Registry-Auth", val),
         );
-        let mut create_response = self.client.post(create_image_uri).send().await.unwrap();
+        let mut create_response = request_builder.send().await.unwrap();
         while let Some(_chunk) = create_response.chunk().await.unwrap() {} // Iter chunk to fetch all
         // endregion
         // region Deploy the container after success
         let image_name: String = connector.container_name();
         let deploy_container_uri = format!("{}/create?name={}", self.container_uri, image_name);
+
         let mut image_labels = self.labels(connector);
         let portainer_config = self.config.clone();
         if portainer_config.stack.is_some() {
@@ -201,7 +214,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
             .collect();
         let json_body = PortainerDeployPayload {
             env: container_envs,
-            image: connector.image.clone(),
+            image,
             labels: image_labels,
             host_config: PortainerDeployHostConfig {
                 network_mode: portainer_config.network_mode,
@@ -215,9 +228,18 @@ impl Orchestrator for PortainerDockerOrchestrator {
             .await;
         match deploy_response {
             Ok(response) => {
-                let deploy_data: PortainerDeployResponse = response.json().await.unwrap();
-                debug!(id = deploy_data.id, "Portainer container deployed");
-                self.get(connector).await
+                if response.status().is_success() {
+                    let deploy_data: PortainerDeployResponse = response.json().await.unwrap();
+                    debug!(id = deploy_data.id, "Portainer container deployed");
+                    self.get(connector).await
+                } else {
+                    let deploy_error: PortainerApiError = response.json().await.unwrap();
+                    error!(
+                        error = deploy_error.message,
+                        "Error deploying the container"
+                    );
+                    None
+                }
             }
             Err(err) => {
                 error!(error = err.to_string(), "Error deploying the container");

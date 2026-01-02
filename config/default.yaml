@@ -50,7 +50,7 @@ opencti:
       api_key: ChangeMe
       env_id: 3
       env_type: docker
-      api_version: v1.41
+      api_version: v1.44
 
 openbas:
   enable: false
@@ -78,7 +78,7 @@ openbas:
     portainer:
       api: https://localhost:9443
       api_key: ChangeMe
-      api_version: v1.41
+      api_version: v1.44
       env_id: 3
       env_type: docker
       stack: opencti-dev
