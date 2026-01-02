@@ -1,12 +1,13 @@
 use crate::api::{ApiConnector, ConnectorStatus};
 use crate::config::settings::Kubernetes;
+use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{
-    Container, ContainerStatus, EnvVar, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
+    Container, LocalObjectReference, Secret, ContainerStatus, EnvVar, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use kube::api::{DeleteParams, LogParams, Patch, PatchParams};
@@ -22,6 +23,8 @@ impl KubeOrchestrator {
         let client = Client::try_default().await.unwrap();
         let pods: Api<Pod> = Api::default_namespaced(client.clone());
         let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
+        let secrets: Api<Secret> = Api::default_namespaced(client.clone());
+        Self::register_secret(&secrets).await;
         Self {
             pods,
             deployments,
@@ -34,6 +37,42 @@ impl KubeOrchestrator {
     }
 
     // Validate and return image pull policy
+    async fn register_secret(secrets: &Api<Secret>) {
+        let settings = crate::settings();
+        let registry_config = settings.opencti.daemon.registry.clone();
+        let resolver = Image::new(registry_config);
+        let registry_secret = resolver.get_kubernetes_registry_secret();
+        if registry_secret.is_some() {
+            let secret_name = resolver.get_kubernetes_secret_name().unwrap();
+            // region Start by removing the secret if it already exists
+            let params = &DeleteParams::default();
+            match secrets.delete(secret_name.as_str(), params).await {
+                Ok(_) => info!("Kubernetes registry secret deleted"),
+                Err(_) => info!("Kubernetes registry doesnt exists"),
+            }
+            // endregion
+            // region Then initialize the secret
+            let kube_secret = Secret {
+                metadata: ObjectMeta {
+                    name: Some(secret_name.clone()),
+                    ..Default::default()
+                },
+                string_data: registry_secret,
+                type_: Some("kubernetes.io/dockerconfigjson".to_string()),
+                ..Default::default()
+            };
+            match secrets.create(&PostParams::default(), &kube_secret).await {
+                Ok(_) => info!("Kubernetes registry secret created"),
+                Err(err) => error!(
+                    error = err.to_string(),
+                    secret_name = secret_name,
+                    "Kubernetes registry secret creation failed"
+                ),
+            }
+            // endregion
+        }
+    }
+
     fn get_image_pull_policy(&self) -> String {
         const VALID_POLICIES: [&str; 3] = ["Always", "IfNotPresent", "Never"];
         const DEFAULT_POLICY: &str = "IfNotPresent";
@@ -129,7 +168,11 @@ impl KubeOrchestrator {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(connector);
         let is_starting = &connector.requested_status == "starting";
-
+        let settings = crate::settings();
+        let registry_config = settings.opencti.daemon.registry.clone();
+        let resolver = Image::new(registry_config);
+        let auth = resolver.get_credentials();
+        let image = resolver.build_name(connector.image.clone());
         let target_deployment = Deployment {
             metadata: ObjectMeta {
                 name: Some(connector.container_name()),
@@ -153,9 +196,14 @@ impl KubeOrchestrator {
                         ..Default::default()
                     }),
                     spec: Some(PodSpec {
+                        image_pull_secrets: auth.map(|_| {
+                            vec![LocalObjectReference {
+                                name: resolver.get_kubernetes_secret_name().unwrap(),
+                            }]
+                        }),
                         containers: vec![Container {
                             name: connector.container_name(),
-                            image: Some(connector.image.clone()),
+                            image: Some(image.clone()),
                             env: Some(pod_env),
                             image_pull_policy: Some(self.get_image_pull_policy()),
                             resources: self.get_image_resources(),
@@ -330,7 +378,7 @@ impl Orchestrator for KubeOrchestrator {
                     Ok(text_logs) => Some(text_logs.lines().map(|line| line.to_string()).collect()),
                     Err(err) => {
                         error!(error = err.to_string(), "Error fetching logs");
-                        None
+                        Some(vec![err.to_string()])
                     }
                 }
             }
