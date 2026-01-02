@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{
-    Container, LocalObjectReference, Secret, ContainerStatus, EnvVar, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
+    Container, ContainerStatus, EnvVar, LocalObjectReference, Pod, PodSpec, PodTemplateSpec,
+    ResourceRequirements, Secret,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use kube::api::{DeleteParams, LogParams, Patch, PatchParams};
@@ -38,7 +39,7 @@ impl KubeOrchestrator {
 
     // Validate and return image pull policy
     async fn register_secret(secrets: &Api<Secret>) {
-        let settings = crate::settings();
+        let settings = &crate::config::settings::SETTINGS;
         let registry_config = settings.opencti.daemon.registry.clone();
         let resolver = Image::new(registry_config);
         let registry_secret = resolver.get_kubernetes_registry_secret();
@@ -168,7 +169,7 @@ impl KubeOrchestrator {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(connector);
         let is_starting = &connector.requested_status == "starting";
-        let settings = crate::settings();
+        let settings = &crate::config::settings::SETTINGS;
         let registry_config = settings.opencti.daemon.registry.clone();
         let resolver = Image::new(registry_config);
         let auth = resolver.get_credentials();
@@ -286,7 +287,7 @@ impl Orchestrator for KubeOrchestrator {
     }
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
-        let settings = crate::settings();
+        let settings = &crate::config::settings::SETTINGS;
         let lp = &ListParams::default()
             .labels(&format!("opencti-manager={}", settings.manager.id.clone()));
         let get_deployments = self.deployments.list(lp).await.unwrap();

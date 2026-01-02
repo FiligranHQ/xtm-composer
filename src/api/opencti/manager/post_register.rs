@@ -1,10 +1,10 @@
 use crate::api::opencti::ApiOpenCTI;
+use crate::api::opencti::error_handler::{extract_optional_field, handle_graphql_response};
 use crate::api::opencti::manager::ConnectorManager;
-use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
 use crate::api::opencti::opencti as schema;
 use cynic;
-use tracing::{error, info};
 use rsa::{RsaPublicKey, pkcs1::EncodeRsaPublicKey};
+use tracing::{error, info};
 
 // region schema
 #[derive(cynic::QueryVariables, Debug)]
@@ -34,9 +34,8 @@ pub struct RegisterConnectorsManagerInput<'a> {
 pub async fn register(api: &ApiOpenCTI) {
     use cynic::MutationBuilder;
 
-    let settings = crate::settings();
-    // Use the singleton private key
-    let priv_key = crate::private_key();
+    let settings = &crate::config::settings::SETTINGS;
+    let priv_key = &*crate::config::rsa::PRIVATE_KEY;
     let pub_key = RsaPublicKey::from(priv_key);
     let public_key = RsaPublicKey::to_pkcs1_pem(&pub_key, Default::default()).unwrap();
 
@@ -54,12 +53,12 @@ pub async fn register(api: &ApiOpenCTI) {
             if let Some(data) = handle_graphql_response(
                 response,
                 "register_connectors_manager",
-                "OpenCTI backend does not support XTM composer manager registration. The composer will continue to run but won't be registered in OpenCTI."
+                "OpenCTI backend does not support XTM composer manager registration. The composer will continue to run but won't be registered in OpenCTI.",
             ) {
                 if let Some(manager) = extract_optional_field(
                     data.register_connectors_manager,
                     "register_connectors_manager",
-                    "register_connectors_manager"
+                    "register_connectors_manager",
                 ) {
                     info!(manager_id = manager.id.into_inner(), "Manager registered");
                 }

@@ -6,14 +6,14 @@ use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::portainer::docker::PortainerDockerOrchestrator;
 use crate::orchestrator::{Orchestrator, composer};
-use crate::settings;
+
 use crate::system::signals;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 
 async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
-    let settings = settings();
+    let settings = &crate::config::settings::SETTINGS;
     // Get current deployment in target orchestrator
     let daemon_configuration = api.daemon();
     let orchestrator: Box<dyn Orchestrator + Send + Sync> =
@@ -51,7 +51,7 @@ async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
 }
 
 pub async fn alive(api: Box<dyn ComposerApi + Send + Sync>) -> JoinHandle<()> {
-    let settings = settings();
+    let settings = &crate::config::settings::SETTINGS;
     let mut interval = interval(Duration::from_secs(settings.manager.ping_alive_schedule));
     tokio::spawn(async move {
         // Start scheduling

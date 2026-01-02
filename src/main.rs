@@ -2,6 +2,7 @@ mod api;
 mod config;
 mod engine;
 mod orchestrator;
+mod prometheus;
 mod system;
 
 use crate::config::settings::Settings;
@@ -10,15 +11,13 @@ use crate::engine::opencti::{opencti_alive, opencti_orchestration};
 use futures::future::join_all;
 use rolling_file::{BasicRollingFileAppender, RollingConditionBasic};
 use std::str::FromStr;
-use std::sync::OnceLock;
 use std::{env, fs};
 use tokio::task::JoinHandle;
-use tracing::{Level, info, warn};
+use tracing::{Level, info};
 use tracing_subscriber::fmt::Layer;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Registry, layer::SubscriberExt};
-use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -26,21 +25,9 @@ const BASE_DIRECTORY_LOG: &str = "logs";
 const BASE_DIRECTORY_SIZE: usize = 5;
 const PREFIX_LOG_NAME: &str = "xtm-composer.log";
 
-// Singleton settings for all application
-fn settings() -> &'static Settings {
-    static CONFIG: OnceLock<Settings> = OnceLock::new();
-    CONFIG.get_or_init(|| Settings::new().unwrap())
-}
-
-// Singleton RSA private key for all application
-pub fn private_key() -> &'static RsaPrivateKey {
-    static KEY: OnceLock<RsaPrivateKey> = OnceLock::new();
-    KEY.get_or_init(|| load_and_verify_credentials_key())
-}
-
 // Global init logger
 fn init_logger() {
-    let setting = Settings::new().unwrap();
+    let setting = &crate::config::settings::SETTINGS;
     let logger_config = &setting.manager.logger;
 
     // Validate log level
@@ -49,7 +36,7 @@ fn init_logger() {
         Err(_) => panic!(
             "Invalid log level: '{}'. Valid values are: trace, debug, info, warn, error",
             logger_config.level
-        )
+        ),
     };
 
     // Validate log format
@@ -95,55 +82,12 @@ fn init_logger() {
     }
 }
 
-// Load and verify RSA private key from configuration
-pub fn load_and_verify_credentials_key() -> RsaPrivateKey {
-    let setting = settings();
-    
-    // Priority: file > environment variable
-    let key_content = if let Some(filepath) = &setting.manager.credentials_key_filepath {
-        // Warning if both are set
-        if setting.manager.credentials_key.is_some() {
-            warn!("Both credentials_key and credentials_key_filepath are set. Using filepath (priority).");
-        }
-        
-        // Read key from file
-        match fs::read_to_string(filepath) {
-            Ok(content) => content,
-            Err(e) => panic!("Failed to read credentials key file '{}': {}", filepath, e)
-        }
-    } else if let Some(key) = &setting.manager.credentials_key {
-        // Use environment variable or config value
-        key.clone()
-    } else {
-        panic!(
-            "No credentials key provided! Set either 'manager.credentials_key' or 'manager.credentials_key_filepath' in configuration."
-        );
-    };
-    
-    // Validate key format (trim to handle trailing whitespace)
-    // Check for presence of RSA PRIVATE KEY markers for PKCS#8 format
-    let trimmed_content = key_content.trim();
-    if !trimmed_content.contains("BEGIN PRIVATE KEY") || !trimmed_content.contains("END PRIVATE KEY") {
-        panic!("Invalid private key format. Expected PKCS#8 PEM format with 'BEGIN PRIVATE KEY' and 'END PRIVATE KEY' markers.");
-    }
-    
-    // Parse and validate RSA private key using PKCS#8 format
-    match RsaPrivateKey::from_pkcs8_pem(&key_content) {
-        Ok(key) => {
-            info!("Successfully loaded RSA private key (PKCS#8 format)");
-            key
-        },
-        Err(e) => {
-            panic!("Failed to decode RSA private key: {}", e);
-        }
-    }
-}
-
+// Init opencti
 fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
-    let setting = settings();
+    let setting = &crate::config::settings::SETTINGS;
     if setting.opencti.enable {
         // Initialize private key singleton
-        let _ = private_key();
+        let _ = &crate::config::rsa::PRIVATE_KEY;
         let opencti_alive = opencti_alive();
         orchestrations.push(opencti_alive);
         let opencti_orchestration = opencti_orchestration();
@@ -155,7 +99,7 @@ fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
 
 // Init openbas
 fn openbas_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
-    let setting = settings();
+    let setting = &crate::config::settings::SETTINGS;
     if setting.openbas.enable {
         let openbas_alive = openbas_alive();
         orchestrations.push(openbas_alive);
@@ -166,6 +110,21 @@ fn openbas_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     }
 }
 
+// Init prometheus metrics server
+fn prometheus_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
+    let setting = &crate::config::settings::SETTINGS;
+    if let Some(prometheus_config) = &setting.manager.prometheus {
+        if prometheus_config.enable {
+            let port = prometheus_config.port;
+            let handle = tokio::spawn(async move {
+                crate::prometheus::start_metrics_server(port).await;
+            });
+            orchestrations.push(handle);
+        }
+    }
+}
+
+// Main function
 #[tokio::main]
 async fn main() {
     // Initialize the global logging system
@@ -173,8 +132,9 @@ async fn main() {
     // Log the start
     let env = Settings::mode();
     info!(version = VERSION, env, "Starting XTM composer");
-    // Start orchestration threads
+    // Start threads
     let mut orchestrations = Vec::new();
+    prometheus_orchestrate(&mut orchestrations);
     opencti_orchestrate(&mut orchestrations);
     openbas_orchestrate(&mut orchestrations);
     // Wait for threads to terminate

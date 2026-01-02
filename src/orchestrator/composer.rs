@@ -18,6 +18,7 @@ async fn orchestrate_missing(
         // Update the connector status
         Some(_) => {
             api.patch_status(id, ConnectorStatus::Stopped).await;
+            crate::prometheus::CONNECTOR_INITIALIZED.inc();
         }
         None => {
             warn!(id = id, "Deployment canceled");
@@ -53,23 +54,23 @@ async fn orchestrate_existing(
     } else {
         container_status
     };
-    
+
     // Update the connector status if needed
     let container_status_not_aligned = final_status != connector_status;
-    
+
     // Detect if connector just started
-    let just_started = container_status_not_aligned && 
-                       final_status == ConnectorStatus::Started && 
-                       connector_status == ConnectorStatus::Stopped;
-    
+    let just_started = container_status_not_aligned
+        && final_status == ConnectorStatus::Started
+        && connector_status == ConnectorStatus::Stopped;
+
     // Send health metrics if:
     // - Connector just started (immediate reporting)
     // - OR connector is running and 30 seconds have elapsed
     let now = Instant::now();
-    let should_send_health = just_started || 
-        (final_status == ConnectorStatus::Started && 
-         now.duration_since(health_tick.clone()) >= Duration::from_secs(30));
-    
+    let should_send_health = just_started
+        || (final_status == ConnectorStatus::Started
+            && now.duration_since(health_tick.clone()) >= Duration::from_secs(30));
+
     if should_send_health {
         if let Some(started_at) = &container.started_at {
             info!(id = connector_id, "Reporting health metrics");
@@ -78,7 +79,8 @@ async fn orchestrate_existing(
                 container.restart_count,
                 started_at.clone(),
                 is_in_reboot_loop,
-            ).await;
+            )
+            .await;
         }
         // Reset timer only for running connectors
         if final_status == ConnectorStatus::Started {
@@ -86,8 +88,7 @@ async fn orchestrate_existing(
         }
     }
     if container_status_not_aligned {
-        api.patch_status(connector.id.clone(), final_status)
-            .await;
+        api.patch_status(connector.id.clone(), final_status).await;
         info!(id = connector_id, "Patch status");
     }
     // In case of platform upgrade, we need to align all deployed connectors
@@ -101,6 +102,7 @@ async fn orchestrate_existing(
             "Refreshing"
         );
         orchestrator.refresh(connector).await;
+        crate::prometheus::CONNECTOR_UPDATED.inc();
     }
     // Align existing and requested status
     let requested_status = RequestedStatus::from_str(requested_status_fetch.as_str()).unwrap();
@@ -108,10 +110,12 @@ async fn orchestrate_existing(
         (RequestedStatus::Stopping, ConnectorStatus::Started) => {
             info!(id = connector_id, "Stopping");
             orchestrator.stop(&container, connector).await;
+            crate::prometheus::CONNECTOR_STOPPED.inc();
         }
         (RequestedStatus::Starting, ConnectorStatus::Stopped) => {
             info!(id = connector_id, "Starting");
             orchestrator.start(&container, connector).await;
+            crate::prometheus::CONNECTOR_STARTED.inc();
         }
         _ => {
             info!(id = connector_id, "Nothing to execute");
@@ -145,13 +149,16 @@ pub async fn orchestrate(
     if connectors_response.is_some() {
         // First round trip to instantiate and control if needed
         let connectors = connectors_response.unwrap();
+        crate::prometheus::MANAGED_CONNECTORS.set(connectors.len() as i64);
+
         // Iter on each definition and check alignment between the status and the container
         for connector in &connectors {
             // Get current containers in the orchestrator
             let container_get = orchestrator.get(connector).await;
             match container_get {
                 Some(container) => {
-                    orchestrate_existing(tick, health_tick, orchestrator, api, connector, container).await
+                    orchestrate_existing(tick, health_tick, orchestrator, api, connector, container)
+                        .await
                 }
                 None => orchestrate_missing(orchestrator, api, connector).await,
             }

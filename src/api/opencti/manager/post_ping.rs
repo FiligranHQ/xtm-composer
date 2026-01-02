@@ -1,7 +1,7 @@
 use crate::api::opencti::ApiOpenCTI;
+use crate::api::opencti::error_handler::{extract_optional_field, handle_graphql_response};
 use crate::api::opencti::manager::ConnectorManager;
-use crate::api::opencti::error_handler::{handle_graphql_response, extract_optional_field};
-use crate::settings;
+
 use tracing::error;
 
 use crate::api::opencti::opencti as schema;
@@ -32,7 +32,7 @@ pub struct UpdateConnectorManagerStatusInput<'a> {
 pub async fn ping(api: &ApiOpenCTI) -> Option<String> {
     use cynic::MutationBuilder;
 
-    let settings = settings();
+    let settings = &crate::config::settings::SETTINGS;
     let vars = UpdateConnectorManagerStatusVariables {
         input: UpdateConnectorManagerStatusInput {
             id: &cynic::Id::new(&settings.manager.id),

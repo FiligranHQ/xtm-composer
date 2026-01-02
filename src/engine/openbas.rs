@@ -1,8 +1,8 @@
-use tokio::task::JoinHandle;
-use tracing::info;
 use crate::api::ComposerApi;
 use crate::api::openbas::ApiOpenBAS;
 use crate::engine::{alive, orchestration};
+use tokio::task::JoinHandle;
+use tracing::info;
 
 pub fn openbas_orchestration() -> JoinHandle<()> {
     info!("Starting OpenBAS connectors orchestration");
@@ -19,4 +19,3 @@ pub fn openbas_alive() -> JoinHandle<()> {
         alive(api).await;
     })
 }
-

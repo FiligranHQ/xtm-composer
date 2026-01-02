@@ -34,6 +34,47 @@ impl DockerOrchestrator {
     pub fn normalize_name(name: Option<String>) -> String {
         name.unwrap().strip_prefix("/").unwrap().into()
     }
+
+    fn build_host_config() -> HostConfig {
+        let settings = &crate::config::settings::SETTINGS;
+        let Some(docker_opts) = &settings.opencti.daemon.docker else {
+            return HostConfig::default();
+        };
+
+        let ulimits = docker_opts.ulimits.as_ref().and_then(|ulimits| {
+            let vec: Vec<bollard::models::ResourcesUlimits> = ulimits
+                .iter()
+                .filter_map(|ulimit_map| {
+                    Some(bollard::models::ResourcesUlimits {
+                        name: ulimit_map.get("name")?.as_str()?.to_string().into(),
+                        soft: ulimit_map.get("soft")?.as_i64(),
+                        hard: ulimit_map.get("hard")?.as_i64(),
+                    })
+                })
+                .collect();
+            if vec.is_empty() { None } else { Some(vec) }
+        });
+
+        HostConfig {
+            network_mode: docker_opts.network_mode.clone(),
+            extra_hosts: docker_opts.extra_hosts.clone(),
+            dns: docker_opts.dns.clone(),
+            dns_search: docker_opts.dns_search.clone(),
+            privileged: docker_opts.privileged,
+            cap_add: docker_opts.cap_add.clone(),
+            cap_drop: docker_opts.cap_drop.clone(),
+            security_opt: docker_opts.security_opt.clone(),
+            userns_mode: docker_opts.userns_mode.clone(),
+            pid_mode: docker_opts.pid_mode.clone(),
+            ipc_mode: docker_opts.ipc_mode.clone(),
+            uts_mode: docker_opts.uts_mode.clone(),
+            runtime: docker_opts.runtime.clone(),
+            shm_size: docker_opts.shm_size,
+            sysctls: docker_opts.sysctls.clone(),
+            ulimits,
+            ..Default::default()
+        }
+    }
 }
 
 #[async_trait]
@@ -71,7 +112,7 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
-        let settings = crate::settings();
+        let settings = &crate::config::settings::SETTINGS;
         let manager_label = format!("opencti-manager={}", settings.manager.id.clone());
         let list_container_filters: HashMap<String, Vec<String>> =
             HashMap::from([("label".to_string(), Vec::from([manager_label]))]);
@@ -166,7 +207,7 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        let settings = crate::settings();
+        let settings = &crate::config::settings::SETTINGS;
         let registry_config = settings.opencti.daemon.registry.clone();
         let resolver = Image::new(registry_config);
         let auth = resolver.get_credentials();
@@ -193,140 +234,60 @@ impl Orchestrator for DockerOrchestrator {
             })
             .await;
 
-        match deploy_response {
-            Ok(_) => {
-                // Create the container
-                let container_env_variables = connector
-                    .container_envs()
-                    .into_iter()
-                    .map(|config| format!("{}={}", config.key, config.value))
-                    .collect::<Vec<String>>();
-                let labels = self.labels(connector);
+        if let Err(e) = deploy_response {
+            error!(
+                image = image,
+                error = e.to_string(),
+                "Error fetching container image"
+            );
+            return None;
+        }
 
-                // Build host config with Docker options
-                let mut host_config = HostConfig::default();
+        // Create the container
+        let container_env_variables = connector
+            .container_envs()
+            .into_iter()
+            .map(|config| format!("{}={}", config.key, config.value))
+            .collect::<Vec<String>>();
+        let labels = self.labels(connector);
 
-                // Get settings and check for Docker options
-                let settings = crate::settings();
-                let docker_options = settings.opencti.daemon.docker.as_ref();
+        // Build host config with Docker options
+        let host_config = DockerOrchestrator::build_host_config();
 
-                if let Some(docker_opts) = docker_options {
-                    // Apply Docker options to host config
-                    if let Some(network_mode) = &docker_opts.network_mode {
-                        host_config.network_mode = Some(network_mode.clone());
-                    }
-                    if let Some(extra_hosts) = &docker_opts.extra_hosts {
-                        host_config.extra_hosts = Some(extra_hosts.clone());
-                    }
-                    if let Some(dns) = &docker_opts.dns {
-                        host_config.dns = Some(dns.clone());
-                    }
-                    if let Some(dns_search) = &docker_opts.dns_search {
-                        host_config.dns_search = Some(dns_search.clone());
-                    }
-                    if let Some(privileged) = docker_opts.privileged {
-                        host_config.privileged = Some(privileged);
-                    }
-                    if let Some(cap_add) = &docker_opts.cap_add {
-                        host_config.cap_add = Some(cap_add.clone());
-                    }
-                    if let Some(cap_drop) = &docker_opts.cap_drop {
-                        host_config.cap_drop = Some(cap_drop.clone());
-                    }
-                    if let Some(security_opt) = &docker_opts.security_opt {
-                        host_config.security_opt = Some(security_opt.clone());
-                    }
-                    if let Some(userns_mode) = &docker_opts.userns_mode {
-                        host_config.userns_mode = Some(userns_mode.clone());
-                    }
-                    if let Some(pid_mode) = &docker_opts.pid_mode {
-                        host_config.pid_mode = Some(pid_mode.clone());
-                    }
-                    if let Some(ipc_mode) = &docker_opts.ipc_mode {
-                        host_config.ipc_mode = Some(ipc_mode.clone());
-                    }
-                    if let Some(uts_mode) = &docker_opts.uts_mode {
-                        host_config.uts_mode = Some(uts_mode.clone());
-                    }
-                    if let Some(runtime) = &docker_opts.runtime {
-                        host_config.runtime = Some(runtime.clone());
-                    }
-                    if let Some(shm_size) = docker_opts.shm_size {
-                        host_config.shm_size = Some(shm_size);
-                    }
-                    if let Some(sysctls) = &docker_opts.sysctls {
-                        host_config.sysctls = Some(sysctls.clone());
-                    }
-                    if let Some(ulimits) = &docker_opts.ulimits {
-                        // Convert ulimits from HashMap to bollard's expected format
-                        let ulimits_vec: Vec<bollard::models::ResourcesUlimits> = ulimits
-                            .iter()
-                            .filter_map(|ulimit_map| {
-                                if let (Some(name), Some(soft), Some(hard)) = (
-                                    ulimit_map.get("name").and_then(|v| v.as_str()),
-                                    ulimit_map.get("soft").and_then(|v| v.as_i64()),
-                                    ulimit_map.get("hard").and_then(|v| v.as_i64()),
-                                ) {
-                                    Some(bollard::models::ResourcesUlimits {
-                                        name: Some(name.to_string()),
-                                        soft: Some(soft),
-                                        hard: Some(hard),
-                                    })
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        if !ulimits_vec.is_empty() {
-                            host_config.ulimits = Some(ulimits_vec);
-                        }
-                    }
-                }
+        let config = Config {
+            image: Some(image),
+            env: Some(container_env_variables),
+            labels: Some(labels),
+            host_config: Some(host_config),
+            ..Default::default()
+        };
 
-                let config = Config {
-                    image: Some(image),
-                    env: Some(container_env_variables),
-                    labels: Some(labels),
-                    host_config: Some(host_config),
+        let create_response = self
+            .docker
+            .create_container::<String, String>(
+                Some(CreateContainerOptions {
+                    name: connector.container_name(),
                     ..Default::default()
-                };
+                }),
+                config,
+            )
+            .await;
 
-                let create_response = self
-                    .docker
-                    .create_container::<String, String>(
-                        Some(CreateContainerOptions {
-                            name: connector.container_name(),
-                            platform: None,
-                        }),
-                        config,
-                    )
-                    .await;
-                match create_response {
-                    Ok(_) => {}
-                    Err(err) => {
-                        error!(error = err.to_string(), "Error creating container");
-                    }
-                }
+        if let Err(err) = create_response {
+            error!(error = err.to_string(), "Error creating container");
+        }
 
-                // Get the created connector
-                let created = self.get(connector).await;
-                // Start the container if needed
-                let is_starting = connector.requested_status.clone().eq("starting");
-                if is_starting {
-                    self.start(&created.clone().unwrap(), connector).await;
-                }
-                // Return the created container
-                created
-            }
-            Err(e) => {
-                error!(
-                    image = image,
-                    error = e.to_string(),
-                    "Error fetching container image"
-                );
-                None
+        // Get the created connector
+        let created = self.get(connector).await;
+        // Start the container if needed
+        let is_starting = connector.requested_status.clone().eq("starting");
+        if is_starting {
+            if let Some(container) = &created {
+                self.start(container, connector).await;
             }
         }
+        // Return the created container
+        created
     }
 
     async fn logs(
