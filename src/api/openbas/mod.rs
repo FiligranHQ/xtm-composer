@@ -24,7 +24,7 @@ pub struct ApiOpenBAS {
 
 impl ApiOpenBAS {
     pub fn new() -> Self {
-        let settings = crate::settings();
+        let settings = &crate::config::settings::SETTINGS;
         let bearer = format!("{} {}", BEARER, settings.openbas.token);
         let api_uri = format!("{}/api", &settings.openbas.url);
         let daemon = settings.openbas.daemon.clone();
@@ -81,7 +81,13 @@ impl ComposerApi for ApiOpenBAS {
         todo!()
     }
 
-    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<cynic::Id> {
+    async fn patch_health(
+        &self,
+        id: String,
+        restart_count: u32,
+        started_at: String,
+        is_in_reboot_loop: bool,
+    ) -> Option<cynic::Id> {
         todo!()
     }
 }

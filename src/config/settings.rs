@@ -3,8 +3,12 @@ use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::ResourceRequirements;
 use serde::Deserialize;
 use std::env;
+use std::sync::LazyLock;
 
 const ENV_PRODUCTION: &str = "production";
+
+// Singleton settings for all application
+pub static SETTINGS: LazyLock<Settings> = LazyLock::new(|| Settings::new().unwrap());
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
@@ -40,6 +44,7 @@ pub struct Manager {
     pub credentials_key: Option<String>,
     pub credentials_key_filepath: Option<String>,
     pub debug: Option<Debug>,
+    pub prometheus: Option<Prometheus>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -129,6 +134,13 @@ pub struct Docker {
     pub shm_size: Option<i64>,
     pub sysctls: Option<std::collections::HashMap<String, String>>,
     pub ulimits: Option<Vec<std::collections::HashMap<String, serde_json::Value>>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct Prometheus {
+    pub enable: bool,
+    pub port: u16,
 }
 
 #[derive(Debug, Deserialize, Clone)]

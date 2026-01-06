@@ -3,14 +3,14 @@ use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use cynic::Operation;
 use cynic::http::CynicReqwestError;
+use rsa::RsaPrivateKey;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
-use rsa::RsaPrivateKey;
 
 pub mod connector;
-pub mod manager;
 pub mod error_handler;
+pub mod manager;
 
 const BEARER: &str = "Bearer";
 const AUTHORIZATION_HEADER: &str = "Authorization";
@@ -30,7 +30,7 @@ pub struct ApiOpenCTI {
 
 impl ApiOpenCTI {
     pub fn new() -> Self {
-        let settings = crate::settings();
+        let settings = &crate::config::settings::SETTINGS;
         let bearer = format!("{} {}", BEARER, settings.opencti.token);
         let api_uri = format!("{}/graphql", &settings.opencti.url);
         let daemon = settings.opencti.daemon.clone();
@@ -38,7 +38,7 @@ impl ApiOpenCTI {
         let request_timeout = settings.opencti.request_timeout;
         let connect_timeout = settings.opencti.connect_timeout;
         // Use the singleton private key
-        let private_key = crate::private_key().clone();
+        let private_key = crate::config::rsa::PRIVATE_KEY.clone();
         Self {
             api_uri,
             bearer,
@@ -46,7 +46,7 @@ impl ApiOpenCTI {
             logs_schedule,
             request_timeout,
             connect_timeout,
-            private_key
+            private_key,
         }
     }
 
@@ -105,7 +105,13 @@ impl ComposerApi for ApiOpenCTI {
         connector::post_logs::logs(id, logs, self).await
     }
 
-    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<cynic::Id> {
+    async fn patch_health(
+        &self,
+        id: String,
+        restart_count: u32,
+        started_at: String,
+        is_in_reboot_loop: bool,
+    ) -> Option<cynic::Id> {
         connector::post_health::health(id, restart_count, started_at, is_in_reboot_loop, self).await
     }
 }

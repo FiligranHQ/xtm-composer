@@ -92,7 +92,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
     }
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
-        let settings = crate::settings();
+        let settings = &crate::config::settings::SETTINGS;
         let mut label_filters = Vec::new();
         label_filters.push(format!("opencti-manager={}", settings.manager.id.clone()));
         let filter: HashMap<String, Vec<String>> = HashMap::from([("label".into(), label_filters)]);
@@ -179,7 +179,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        let settings = crate::settings();
+        let settings = &crate::config::settings::SETTINGS;
         let registry_config = settings.opencti.daemon.registry.clone();
         let resolver = Image::new(registry_config);
         let auth = resolver.get_credentials();

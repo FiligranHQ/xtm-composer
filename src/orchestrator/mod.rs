@@ -51,7 +51,7 @@ impl OrchestratorContainer {
 #[async_trait]
 pub trait Orchestrator {
     fn labels(&self, connector: &ApiConnector) -> HashMap<String, String> {
-        let settings = crate::settings();
+        let settings = &crate::config::settings::SETTINGS;
         let mut labels: HashMap<String, String> = HashMap::new();
         labels.insert("opencti-manager".into(), settings.manager.id.clone());
         labels.insert("opencti-connector-id".into(), connector.id.clone());
