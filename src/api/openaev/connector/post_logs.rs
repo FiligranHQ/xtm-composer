@@ -13,7 +13,7 @@ pub async fn add_logs(id: String, logs: Vec<String>, api: &ApiOpenAEV)-> Option<
         connector_instance_logs: logs
     };
     let settings = crate::settings();
-    let add_logs_response = api.post(&format!("/xtm-composer/{}/connector-instances/{}/logs",settings.clone().manager.id, id))
+    let add_logs_response = api.post(&format!("/xtm-composer/{}/connector-instances/{}/logs",settings.manager.id, id))
         .json(&logs_input)
         .send()
         .await;

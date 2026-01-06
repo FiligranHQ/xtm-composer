@@ -4,7 +4,7 @@ use crate::api::openaev::manager::ConnectorManager;
 
 pub async fn ping_alive(api: &ApiOpenAEV) -> Option<String> {
     let settings = crate::settings();
-    let response = api.put(&format!("/xtm-composer/{}/refresh-connectivity", settings.clone().manager.id))
+    let response = api.put(&format!("/xtm-composer/{}/refresh-connectivity", settings.manager.id))
         .send()
         .await;
 

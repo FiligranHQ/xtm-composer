@@ -36,7 +36,7 @@ impl ConnectorInstances {
             .unwrap()
             .into_iter()
             .map(|c| {
-                let is_sensitive = c.configuration_is_encrypted.clone();
+                let is_sensitive = c.configuration_is_encrypted;
                 if is_sensitive {
                     let encrypted_value = c.configuration_value.clone().unwrap_or_default();
                     let decoded_value_result = parse_aes_encrypted_value(private_key, encrypted_value);
@@ -50,7 +50,7 @@ impl ConnectorInstances {
                             warn!(error = e.to_string(), "Fail to decode value");
                             ApiContractConfig {
                                 key: c.configuration_key.clone(),
-                                value: String::from(""),
+                                value: String::new(),
                                 is_sensitive: true,
                             }
                         }
