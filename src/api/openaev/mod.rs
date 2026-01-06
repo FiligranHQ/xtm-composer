@@ -18,12 +18,6 @@ pub struct ApiOpenAEV {
     daemon: Daemon,
     logs_schedule: u64,
     private_key: RsaPrivateKey,
-    // TODO: Implement timeout configuration when OpenBAS API methods are implemented
-    // These fields are stored for future use when the todo!() macros are replaced with actual implementations
-    #[allow(dead_code)]
-    request_timeout: u64,
-    #[allow(dead_code)]
-    connect_timeout: u64,
 }
 
 impl ApiOpenAEV {
@@ -51,8 +45,6 @@ impl ApiOpenAEV {
             daemon,
             logs_schedule,
             private_key,
-            request_timeout,
-            connect_timeout,
         }
     }
 

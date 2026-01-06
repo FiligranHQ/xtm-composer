@@ -2,6 +2,7 @@ use rsa::{RsaPublicKey};
 use rsa::pkcs1::LineEnding;
 use rsa::pkcs8::EncodePublicKey;
 use serde::Serialize;
+use tracing::info;
 use crate::api::openaev::api_handler::handle_api_response;
 use crate::api::openaev::ApiOpenAEV;
 use crate::api::openaev::manager::ConnectorManager;
@@ -32,10 +33,13 @@ pub async fn register(api: &ApiOpenAEV) {
         .send()
         .await;
 
-    // Discard the result
-    let _ = handle_api_response::<ConnectorManager>(
+    let manager = handle_api_response::<ConnectorManager>(
         register_response,
         "register into OpenAEV backend"
     ).await;
+
+    if let Some(m) = manager {
+        info!("Manager registered: {}", m.xtm_composer_id);
+    }
 }
 

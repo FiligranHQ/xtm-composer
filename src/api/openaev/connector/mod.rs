@@ -20,11 +20,11 @@ pub struct ConnectorContractConfiguration {
 pub struct ConnectorInstances {
     pub connector_instance_id: String,
     pub connector_instance_name: String,
-    pub connector_instance_hash: Option<String>,
-    pub connector_image: Option<String>,
-    pub connector_instance_current_status: Option<String>,
-    pub connector_instance_requested_status: Option<String>,
-    pub connector_instance_configurations: Option<Vec<ConnectorContractConfiguration>>,
+    pub connector_instance_hash: String,
+    pub connector_image: String,
+    pub connector_instance_current_status: String,
+    pub connector_instance_requested_status: String,
+    pub connector_instance_configurations: Vec<ConnectorContractConfiguration>,
 }
 
 impl ConnectorInstances {
@@ -32,9 +32,7 @@ impl ConnectorInstances {
     pub fn to_api_connector(&self, private_key: &RsaPrivateKey )->ApiConnector {
         let contract_configuration = self
             .connector_instance_configurations
-            .as_ref()
-            .unwrap()
-            .into_iter()
+            .iter()
             .map(|c| {
                 let is_sensitive = c.configuration_is_encrypted;
                 if is_sensitive {
@@ -67,10 +65,10 @@ impl ConnectorInstances {
         ApiConnector {
             id: self.connector_instance_id.clone(),
             name: self.connector_instance_name.clone(),
-            image: self.connector_image.clone().unwrap(),
-            contract_hash: self.connector_instance_hash.clone().unwrap(),
-            current_status: self.connector_instance_current_status.clone(),
-            requested_status: self.connector_instance_requested_status.clone().unwrap(),
+            image: self.connector_image.clone(),
+            contract_hash: self.connector_instance_hash.clone(),
+            current_status: Some(self.connector_instance_current_status.clone()),
+            requested_status: self.connector_instance_requested_status.clone(),
             contract_configuration,
         }
     }
