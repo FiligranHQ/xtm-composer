@@ -113,7 +113,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
                         OrchestratorContainer {
                             id: summary.id.unwrap(),
                             name: DockerOrchestrator::normalize_name(container_name),
-                            state: summary.state.unwrap(),
+                            state: summary.state.unwrap().to_string(),
                             envs: HashMap::new(),
                             labels: summary.labels.unwrap(),
                             restart_count: 0, // Not available in list, will be updated by get()
