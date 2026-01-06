@@ -57,7 +57,7 @@ impl ApiOpenAEV {
     }
 
     pub fn post(&self, route: &str) -> reqwest::RequestBuilder {
-        let api_route = format!("{}{}", self.api_uri.clone(), route);
+        let api_route = format!("{}{}", self.api_uri, route);
 
         self.http_client
             .post(&api_route)
@@ -66,7 +66,7 @@ impl ApiOpenAEV {
     }
 
     pub fn put(&self, route: &str) -> reqwest::RequestBuilder {
-        let api_route = format!("{}{}", self.api_uri.clone(), route);
+        let api_route = format!("{}{}", self.api_uri, route);
 
         self.http_client
             .put(&api_route)
@@ -75,7 +75,7 @@ impl ApiOpenAEV {
     }
 
     pub fn get(&self, route: &str) -> reqwest::RequestBuilder {
-        let api_route = format!("{}{}", self.api_uri.clone(), route);
+        let api_route = format!("{}{}", self.api_uri, route);
 
         self.http_client
             .get(&api_route)
@@ -83,7 +83,7 @@ impl ApiOpenAEV {
     }
 
     pub fn delete(&self, route: &str) -> reqwest::RequestBuilder {
-        let api_route = format!("{}{}", self.api_uri.clone(), route);
+        let api_route = format!("{}{}", self.api_uri, route);
 
         self.http_client
             .delete(&api_route)

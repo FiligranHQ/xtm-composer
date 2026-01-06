@@ -21,7 +21,7 @@ pub async fn update_status(id: String, status: ConnectorStatus, api: &ApiOpenAEV
     };
 
     let settings = crate::settings();
-    let update_status_response = api.put(&format!("/xtm-composer/{}/connector-instances/{}/status", settings.clone().manager.id, id))
+    let update_status_response = api.put(&format!("/xtm-composer/{}/connector-instances/{}/status", settings.manager.id, id))
         .json(&status_input)
         .send()
         .await;

@@ -3,7 +3,7 @@ use crate::api::openaev::ApiOpenAEV;
 
 pub async fn notify_container_removed(id: String, api: &ApiOpenAEV) {
     let settings = crate::settings();
-    let response = api.delete(&format!("/xtm-composer/{}/connector-instances/{}", settings.clone().manager.id, id.clone()))
+    let response = api.delete(&format!("/xtm-composer/{}/connector-instances/{}", settings.manager.id, id))
         .send()
         .await;
 
