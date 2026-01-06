@@ -57,7 +57,7 @@ impl ApiOpenAEV {
     }
 
     pub fn post(&self, route: &str) -> reqwest::RequestBuilder {
-        let api_route = format!("{}{}", self.api_uri.clone(), route);
+        let api_route = format!("{}{}", self.api_uri, route);
 
         self.http_client
             .post(&api_route)
@@ -66,7 +66,7 @@ impl ApiOpenAEV {
     }
 
     pub fn put(&self, route: &str) -> reqwest::RequestBuilder {
-        let api_route = format!("{}{}", self.api_uri.clone(), route);
+        let api_route = format!("{}{}", self.api_uri, route);
 
         self.http_client
             .put(&api_route)
@@ -75,10 +75,18 @@ impl ApiOpenAEV {
     }
 
     pub fn get(&self, route: &str) -> reqwest::RequestBuilder {
-        let api_route = format!("{}{}", self.api_uri.clone(), route);
+        let api_route = format!("{}{}", self.api_uri, route);
 
         self.http_client
             .get(&api_route)
+            .header(AUTHORIZATION_HEADER, self.bearer.as_str())
+    }
+
+    pub fn delete(&self, route: &str) -> reqwest::RequestBuilder {
+        let api_route = format!("{}{}", self.api_uri, route);
+
+        self.http_client
+            .delete(&api_route)
             .header(AUTHORIZATION_HEADER, self.bearer.as_str())
     }
 
@@ -118,7 +126,11 @@ impl ComposerApi for ApiOpenAEV {
         connector::post_logs::add_logs(id, logs, self).await
     }
 
-    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<String> {
+    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool ) -> Option<String> {
         connector::patch_health::update_health(id, restart_count, started_at, is_in_reboot_loop, self).await
+    }
+
+    async fn container_removed_successfully(&self, id: String) -> () {
+        connector::notify_container_removed::notify_container_removed(id, self).await
     }
 }

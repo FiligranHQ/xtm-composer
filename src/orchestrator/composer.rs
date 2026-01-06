@@ -165,7 +165,9 @@ pub async fn orchestrate(
         for container in existing_containers {
             let connector_id = container.extract_opencti_id();
             if !connectors_by_id.contains_key(&connector_id) {
-                orchestrator.remove(&container).await;
+                if orchestrator.remove(&container).await {
+                    api.container_removed_successfully(connector_id).await;
+                }
             }
         }
     }

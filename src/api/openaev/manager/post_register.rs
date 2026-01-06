@@ -22,9 +22,9 @@ pub async fn register(api: &ApiOpenAEV) {
         .expect("Failed to encode public key as PKCS#8");
 
     let register_input = RegisterInput {
-        id: settings.clone().manager.id,
+        id: settings.manager.id.clone(),
         name: settings.manager.name.clone(),
-        public_key: public_key.clone(),
+        public_key,
     };
 
     let register_response = api.post("/xtm-composer/register")

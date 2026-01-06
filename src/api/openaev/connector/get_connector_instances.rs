@@ -4,7 +4,7 @@ use crate::api::openaev::connector::ConnectorInstances;
 
 pub async fn get_connector_instances(api: &crate::api::openaev::ApiOpenAEV) -> Option<Vec<ApiConnector>> {
     let settings = crate::settings();
-    let get_connectors = api.get(&format!("/xtm-composer/{}/connector-instances", settings.clone().manager.id))
+    let get_connectors = api.get(&format!("/xtm-composer/{}/connector-instances", settings.manager.id))
         .send()
         .await;
 

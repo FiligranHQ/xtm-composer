@@ -24,7 +24,7 @@ pub async fn update_health(
         connector_instance_is_in_reboot_loop: is_in_reboot_loop
     };
 
-    let health_check_response = api.put(&format!("/xtm-composer/{}/connector-instances/{}/health-check", settings.clone().manager.id, id.clone()))
+    let health_check_response = api.put(&format!("/xtm-composer/{}/connector-instances/{}/health-check", settings.manager.id, id))
         .json(&health_check_input)
         .send()
         .await;
