@@ -25,7 +25,7 @@ pub struct LogsConnectorStatusInput<'a> {
 }
 // endregion
 
-pub async fn logs(id: String, logs: Vec<String>, api: &ApiOpenCTI) -> Option<cynic::Id> {
+pub async fn logs(id: String, logs: Vec<String>, api: &ApiOpenCTI) -> Option<String> {
     use cynic::MutationBuilder;
     let str_logs = logs.iter().map(|c| c.as_str()).collect();
     let vars = ReportConnectorLogsVariables {
@@ -42,7 +42,7 @@ pub async fn logs(id: String, logs: Vec<String>, api: &ApiOpenCTI) -> Option<cyn
                 response,
                 "update_connector_logs",
                 "OpenCTI backend does not support XTM composer log updates. The connector will continue to run but logs won't be sent to OpenCTI."
-            ).map(|data| data.update_connector_logs)
+            ).map(|data| data.update_connector_logs.inner().to_string())
         }
         Err(e) => {
             error!(error = e.to_string(), "Fail to push logs");

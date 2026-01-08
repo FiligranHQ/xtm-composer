@@ -101,11 +101,11 @@ impl ComposerApi for ApiOpenCTI {
         connector::post_status::status(id, status, self).await
     }
 
-    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<cynic::Id> {
+    async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<String> {
         connector::post_logs::logs(id, logs, self).await
     }
 
-    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<cynic::Id> {
+    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool) -> Option<String> {
         connector::post_health::health(id, restart_count, started_at, is_in_reboot_loop, self).await
     }
 }

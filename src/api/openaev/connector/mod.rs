@@ -1,0 +1,75 @@
+use rsa::{RsaPrivateKey};
+use serde::Deserialize;
+use tracing::warn;
+use crate::api::{ApiConnector, ApiContractConfig};
+use crate::api::decrypt_value::parse_aes_encrypted_value;
+
+pub mod get_connector_instances;
+pub mod patch_health;
+pub mod patch_status;
+pub mod post_logs;
+
+#[derive(Debug, Deserialize)]
+pub struct ConnectorContractConfiguration {
+    pub configuration_key: String,
+    pub configuration_value: Option<String>,
+    pub configuration_is_encrypted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConnectorInstances {
+    pub connector_instance_id: String,
+    pub connector_instance_name: String,
+    pub connector_instance_hash: String,
+    pub connector_image: String,
+    pub connector_instance_current_status: String,
+    pub connector_instance_requested_status: String,
+    pub connector_instance_configurations: Vec<ConnectorContractConfiguration>,
+}
+
+impl ConnectorInstances {
+
+    pub fn to_api_connector(&self, private_key: &RsaPrivateKey )->ApiConnector {
+        let contract_configuration = self
+            .connector_instance_configurations
+            .iter()
+            .map(|c| {
+                let is_sensitive = c.configuration_is_encrypted;
+                if is_sensitive {
+                    let encrypted_value = c.configuration_value.clone().unwrap_or_default();
+                    let decoded_value_result = parse_aes_encrypted_value(private_key, encrypted_value);
+                    match decoded_value_result {
+                        Ok(decoded_value) => ApiContractConfig {
+                            key: c.configuration_key.clone(),
+                            value: decoded_value,
+                            is_sensitive: true,
+                        },
+                        Err(e) => {
+                            warn!(error = e.to_string(), "Fail to decode value");
+                            ApiContractConfig {
+                                key: c.configuration_key.clone(),
+                                value: String::new(),
+                                is_sensitive: true,
+                            }
+                        }
+                    }
+                } else {
+                    ApiContractConfig {
+                        key: c.configuration_key.clone(),
+                        value: c.configuration_value.clone().unwrap_or_default(),
+                        is_sensitive: false,
+                    }
+                }
+            })
+            .collect();
+        ApiConnector {
+            id: self.connector_instance_id.clone(),
+            name: self.connector_instance_name.clone(),
+            image: self.connector_image.clone(),
+            contract_hash: self.connector_instance_hash.clone(),
+            current_status: Some(self.connector_instance_current_status.clone()),
+            requested_status: self.connector_instance_requested_status.clone(),
+            contract_configuration,
+        }
+    }
+}

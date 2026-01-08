@@ -5,7 +5,7 @@ mod orchestrator;
 mod system;
 
 use crate::config::settings::Settings;
-use crate::engine::openbas::{openbas_alive, openbas_orchestration};
+use crate::engine::openaev::{openaev_alive, openaev_orchestration};
 use crate::engine::opencti::{opencti_alive, opencti_orchestration};
 use futures::future::join_all;
 use rolling_file::{BasicRollingFileAppender, RollingConditionBasic};
@@ -153,16 +153,16 @@ fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     }
 }
 
-// Init openbas
-fn openbas_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
+// Init openaev
+fn openaev_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     let setting = settings();
-    if setting.openbas.enable {
-        let openbas_alive = openbas_alive();
-        orchestrations.push(openbas_alive);
-        let openbas_orchestration = openbas_orchestration();
-        orchestrations.push(openbas_orchestration);
+    if setting.openaev.enable {
+        let openaev_alive = openaev_alive();
+        orchestrations.push(openaev_alive);
+        let openaev_orchestration = openaev_orchestration();
+        orchestrations.push(openaev_orchestration);
     } else {
-        info!("OpenBAS connectors orchestration disabled");
+        info!("OpenAEV connectors orchestration disabled");
     }
 }
 
@@ -176,7 +176,7 @@ async fn main() {
     // Start orchestration threads
     let mut orchestrations = Vec::new();
     opencti_orchestrate(&mut orchestrations);
-    openbas_orchestrate(&mut orchestrations);
+    openaev_orchestrate(&mut orchestrations);
     // Wait for threads to terminate
     join_all(orchestrations).await;
 }
