@@ -13,12 +13,12 @@ pub fn parse_aes_encrypted_value(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let encrypted_bytes = general_purpose::STANDARD.decode(encrypted_value)?;
 
-    let version = *encrypted_bytes.get(0)
-        .ok_or("Encrypted value is empty")?;
-
     if encrypted_bytes.len() < 513 {
         return Err("Encrypted value too short".into());
     }
+
+    let version = *encrypted_bytes.get(0)
+        .ok_or("Encrypted value is empty")?;
 
     let aes_key_iv_encrypted_bytes = &encrypted_bytes[1..=512];
     let aes_key_iv_decrypted_bytes = match version {
