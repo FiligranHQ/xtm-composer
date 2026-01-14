@@ -34,7 +34,7 @@ pub async fn health(
     started_at: String,
     is_in_reboot_loop: bool,
     api: &ApiOpenCTI,
-) -> Option<cynic::Id> {
+) -> Option<String> {
     use cynic::MutationBuilder;
     
     let vars = UpdateConnectorHealthVariables {
@@ -53,7 +53,7 @@ pub async fn health(
                 response,
                 "update_connector_health",
                 "OpenCTI backend does not support XTM composer health updates. The connector will continue to run but health metrics won't be sent to OpenCTI."
-            ).map(|data| data.update_connector_health)
+            ).map(|data| data.update_connector_health.inner().to_string())
         }
         Err(e) => {
             error!(error = e.to_string(), "Fail to push health metrics");

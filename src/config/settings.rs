@@ -77,7 +77,7 @@ pub struct OpenCTI {
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
-pub struct OpenBAS {
+pub struct OpenAEV {
     pub enable: bool,
     pub url: String,
     pub token: String,
@@ -136,7 +136,7 @@ pub struct Docker {
 pub struct Settings {
     pub manager: Manager,
     pub opencti: OpenCTI,
-    pub openbas: OpenBAS,
+    pub openaev: OpenAEV,
 }
 
 impl Settings {

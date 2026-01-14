@@ -1,4 +1,4 @@
-pub mod openbas;
+pub mod openaev;
 pub mod opencti;
 
 use crate::api::ComposerApi;
