@@ -37,7 +37,7 @@ opencti:
     #   username: "your-username"
     #   password: "your-password"
     #   email: "your-email@example.com"
-    selector: kubernetes
+    selector: docker
     kubernetes:
       # Image pull policy for K8s containers created by xtmcomposer
       # Valid values: Always, IfNotPresent, Never  
@@ -67,7 +67,7 @@ openaev:
     #   username: "your-username"
     #   password: "your-password"
     #   email: "your-email@example.com"
-    selector: portainer
+    selector: docker
     kubernetes:
       # Image pull policy for K8s containers created by xtmcomposer
       # Valid values: Always, IfNotPresent, Never  
