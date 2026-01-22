@@ -67,7 +67,7 @@ openaev:
     #   username: "your-username"
     #   password: "your-password"
     #   email: "your-email@example.com"
-    selector: portainer
+    selector: kubernetes
     kubernetes:
       # Image pull policy for K8s containers created by xtmcomposer
       # Valid values: Always, IfNotPresent, Never  
