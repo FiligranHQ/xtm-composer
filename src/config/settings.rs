@@ -59,6 +59,7 @@ pub struct Daemon {
     pub portainer: Option<Portainer>,
     pub kubernetes: Option<Kubernetes>,
     pub docker: Option<Docker>,
+    pub swarm: Option<Swarm>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -129,6 +130,23 @@ pub struct Docker {
     pub shm_size: Option<i64>,
     pub sysctls: Option<std::collections::HashMap<String, String>>,
     pub ulimits: Option<Vec<std::collections::HashMap<String, serde_json::Value>>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct Swarm {
+    pub network: Option<String>,
+    pub placement_constraints: Option<Vec<String>>,
+    pub update_parallelism: Option<i64>,
+    pub update_delay: Option<i64>,
+    pub restart_condition: Option<String>,
+    pub restart_max_attempts: Option<i64>,
+    pub dns: Option<Vec<String>>,
+    pub dns_search: Option<Vec<String>>,
+    pub hosts: Option<Vec<String>>,
+    pub cap_add: Option<Vec<String>>,
+    pub cap_drop: Option<Vec<String>>,
+    pub sysctls: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

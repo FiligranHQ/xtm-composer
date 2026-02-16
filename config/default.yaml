@@ -51,6 +51,24 @@ opencti:
       env_id: 3
       env_type: docker
       api_version: v1.44
+    # swarm:
+    #   network: my-overlay-network
+    #   placement_constraints:
+    #     - "node.role==worker"
+    #   update_parallelism: 1
+    #   update_delay: 5000000000 # nanoseconds (5s)
+    #   restart_condition: any # none, on-failure, any
+    #   restart_max_attempts: 3
+    #   dns:
+    #     - "8.8.8.8"
+    #   dns_search:
+    #     - "example.com"
+    #   hosts:
+    #     - "myhost:10.0.0.1"
+    #   cap_add:
+    #     - "NET_ADMIN"
+    #   cap_drop:
+    #     - "MKNOD"
 
 openaev:
   enable: false
@@ -83,3 +101,5 @@ openaev:
       env_type: docker
       stack: opencti-dev
       network_mode: opencti-dev_default
+    # swarm:
+    #   network: my-overlay-network
