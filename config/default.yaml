@@ -51,6 +51,42 @@ opencti:
       env_id: 3
       env_type: docker
       api_version: v1.44
+    # swarm:
+    #   network: my-overlay-network # Overlay network to attach services to
+    #   extra_hosts: # Extra host entries (host:ip)
+    #     - "host.docker.internal:host-gateway"
+    #   dns: # DNS servers
+    #     - "8.8.8.8"
+    #   dns_search: # DNS search domains
+    #     - "example.com"
+    #   cap_add: # Add Linux capabilities
+    #     - "NET_ADMIN"
+    #   cap_drop: # Drop Linux capabilities
+    #     - "MKNOD"
+    #   sysctls: # Kernel parameters
+    #     net.core.somaxconn: "1024"
+    #   ulimits: # Resource limits
+    #     - name: nofile
+    #       soft: 65536
+    #       hard: 65536
+    #   hostname: my-connector           # Container hostname
+    #   user: "1000:1000"                # User to run as (uid:gid)
+    #   read_only: false                 # Read-only root filesystem
+    #   init: true                       # Run an init process
+    #   stop_grace_period: 10000000000   # Stop grace period in nanoseconds (10s)
+    #   resources:                       # CPU/Memory limits and reservations
+    #     cpu_limit: 1000000000          # CPU limit in nano CPUs (1 CPU = 1e9)
+    #     memory_limit: 536870912        # Memory limit in bytes (512MB)
+    #     cpu_reservation: 500000000     # CPU reservation in nano CPUs (0.5 CPU)
+    #     memory_reservation: 268435456  # Memory reservation in bytes (256MB)
+    #   placement_constraints:           # Node placement constraints
+    #     - "node.role==worker"
+    #     - "node.labels.type==connector"
+    #   placement_preferences:           # Placement spread preferences
+    #     - "node.labels.zone"
+    #   restart_condition: any # Restart policy: none, on-failure, any
+    #   restart_delay: 5000000000 # Delay between restarts in nanoseconds (5s)
+    #   restart_max_attempts: 3 # Maximum restart attempts (0 = unlimited)
 
 openaev:
   enable: false
@@ -83,3 +119,6 @@ openaev:
       env_type: docker
       stack: opencti-dev
       network_mode: opencti-dev_default
+    # swarm:
+    #   network: my-overlay-network # Overlay network to attach services to
+    #   # See opencti.daemon.swarm above for all available options
