@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 slug = { version = "0.1" }
 rsa = { version = "0.9.9" }
-bollard = { version = "0.19.4" }
+bollard = { version = "0.20.0" }
 chrono = { version = "0.4.42" }
 futures = { version = "0.3.31" }
 rolling-file = { version = " 0.2.0" }
