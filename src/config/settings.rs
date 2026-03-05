@@ -59,6 +59,7 @@ pub struct Daemon {
     pub portainer: Option<Portainer>,
     pub kubernetes: Option<Kubernetes>,
     pub docker: Option<Docker>,
+    pub swarm: Option<Swarm>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -129,6 +130,39 @@ pub struct Docker {
     pub shm_size: Option<i64>,
     pub sysctls: Option<std::collections::HashMap<String, String>>,
     pub ulimits: Option<Vec<std::collections::HashMap<String, serde_json::Value>>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct SwarmResources {
+    pub cpu_limit: Option<i64>,
+    pub memory_limit: Option<i64>,
+    pub cpu_reservation: Option<i64>,
+    pub memory_reservation: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct Swarm {
+    pub network: Option<String>,
+    pub extra_hosts: Option<Vec<String>>,
+    pub dns: Option<Vec<String>>,
+    pub dns_search: Option<Vec<String>>,
+    pub cap_add: Option<Vec<String>>,
+    pub cap_drop: Option<Vec<String>>,
+    pub sysctls: Option<std::collections::HashMap<String, String>>,
+    pub ulimits: Option<Vec<std::collections::HashMap<String, serde_json::Value>>>,
+    pub hostname: Option<String>,
+    pub user: Option<String>,
+    pub read_only: Option<bool>,
+    pub init: Option<bool>,
+    pub stop_grace_period: Option<i64>,
+    pub resources: Option<SwarmResources>,
+    pub placement_constraints: Option<Vec<String>>,
+    pub placement_preferences: Option<Vec<String>>,
+    pub restart_condition: Option<String>,
+    pub restart_delay: Option<i64>,
+    pub restart_max_attempts: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
