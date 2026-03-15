@@ -1,4 +1,4 @@
-FROM rust:1.92.0-alpine AS builder
+FROM rust:1.94.0-alpine AS builder
 
 WORKDIR /opt/xtm-composer
 COPY . .
