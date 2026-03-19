@@ -9,6 +9,7 @@ pub mod docker;
 pub mod image;
 pub mod kubernetes;
 pub mod portainer;
+pub mod swarm;
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all(deserialize = "PascalCase"))]

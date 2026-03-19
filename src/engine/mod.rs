@@ -5,6 +5,7 @@ use crate::api::ComposerApi;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::portainer::docker::PortainerDockerOrchestrator;
+use crate::orchestrator::swarm::SwarmOrchestrator;
 use crate::orchestrator::{Orchestrator, composer};
 use crate::settings;
 use crate::system::signals;
@@ -30,6 +31,10 @@ async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
                 None => panic!("Missing kubernetes configuration"),
             },
             "docker" => Box::new(DockerOrchestrator::new()),
+            "swarm" => match daemon_configuration.swarm.clone() {
+                Some(config) => Box::new(SwarmOrchestrator::new(config)),
+                None => panic!("Missing swarm configuration"),
+            },
             def => panic!("Invalid daemon configuration: {}", def),
         };
     // Init scheduler interval
