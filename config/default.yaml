@@ -79,7 +79,7 @@ opencti:
     #     memory_limit: 536870912        # Memory limit in bytes (512MB)
     #     cpu_reservation: 500000000     # CPU reservation in nano CPUs (0.5 CPU)
     #     memory_reservation: 268435456  # Memory reservation in bytes (256MB)
-    #   placement_constraints:           # Node placement constraints
+    #   placement_constraints:           # Optional - Node placement constraints
     #     - "node.role==worker"
     #     - "node.labels.type==connector"
     #   placement_preferences:           # Placement spread preferences
