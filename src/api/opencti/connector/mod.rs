@@ -75,6 +75,7 @@ impl ManagedConnector {
             .collect();
         ApiConnector {
             id: self.id.clone().into_inner(),
+            platform: "opencti".to_string(),
             name: self.name.clone(),
             image: self.manager_contract_image.clone().unwrap(),
             contract_hash: self.manager_contract_hash.clone().unwrap(),

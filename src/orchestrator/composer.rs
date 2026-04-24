@@ -161,8 +161,16 @@ pub async fn orchestrate(
             .iter()
             .map(|n| (n.id.clone(), n.clone()))
             .collect();
+        let platform = api.platform();
         let existing_containers = orchestrator.list().await;
         for container in existing_containers {
+            let container_platform = container
+                .labels
+                .get("opencti-platform")
+                .map(|value| value.as_str());
+            if container_platform != Some(platform) {
+                continue;
+            }
             let connector_id = container.extract_opencti_id();
             if !connectors_by_id.contains_key(&connector_id) {
                 orchestrator.remove(&container).await;

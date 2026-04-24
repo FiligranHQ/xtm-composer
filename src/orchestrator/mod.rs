@@ -56,6 +56,7 @@ pub trait Orchestrator {
         let mut labels: HashMap<String, String> = HashMap::new();
         labels.insert("opencti-manager".into(), settings.manager.id.clone());
         labels.insert("opencti-connector-id".into(), connector.id.clone());
+        labels.insert("opencti-platform".into(), connector.platform.clone());
         labels
     }
 
