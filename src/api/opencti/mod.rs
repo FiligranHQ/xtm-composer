@@ -77,6 +77,10 @@ impl ComposerApi for ApiOpenCTI {
         &self.daemon
     }
 
+    fn platform(&self) -> &'static str {
+        "opencti"
+    }
+
     fn post_logs_schedule(&self) -> Duration {
         Duration::from_secs(self.logs_schedule)
     }
