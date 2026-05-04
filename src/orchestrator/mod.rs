@@ -49,15 +49,18 @@ impl OrchestratorContainer {
     }
 }
 
+pub fn build_labels(manager_id: &str, connector: &ApiConnector) -> HashMap<String, String> {
+    let mut labels: HashMap<String, String> = HashMap::new();
+    labels.insert("opencti-manager".into(), manager_id.to_string());
+    labels.insert("opencti-connector-id".into(), connector.id.clone());
+    labels.insert("opencti-platform".into(), connector.platform.clone());
+    labels
+}
+
 #[async_trait]
 pub trait Orchestrator {
     fn labels(&self, connector: &ApiConnector) -> HashMap<String, String> {
-        let settings = crate::settings();
-        let mut labels: HashMap<String, String> = HashMap::new();
-        labels.insert("opencti-manager".into(), settings.manager.id.clone());
-        labels.insert("opencti-connector-id".into(), connector.id.clone());
-        labels.insert("opencti-platform".into(), connector.platform.clone());
-        labels
+        build_labels(&crate::settings().manager.id, connector)
     }
 
     async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer>;
@@ -81,4 +84,29 @@ pub trait Orchestrator {
     ) -> Option<Vec<String>>;
 
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_include_platform_discriminator() {
+        let connector = ApiConnector {
+            id: "connector-1".to_string(),
+            platform: "opencti".to_string(),
+            name: String::new(),
+            image: String::new(),
+            contract_hash: String::new(),
+            current_status: None,
+            requested_status: String::new(),
+            contract_configuration: vec![],
+        };
+
+        let labels = build_labels("test-manager", &connector);
+
+        assert_eq!(labels.get("opencti-connector-id"), Some(&connector.id));
+        assert_eq!(labels.get("opencti-platform"), Some(&connector.platform));
+        assert_eq!(labels.get("opencti-manager"), Some(&"test-manager".to_string()));
+    }
 }
