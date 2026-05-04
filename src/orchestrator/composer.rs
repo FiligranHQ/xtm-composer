@@ -168,7 +168,8 @@ pub async fn orchestrate(
                 .labels
                 .get("opencti-platform")
                 .map(|value| value.as_str());
-            if container_platform != Some(platform) {
+            // Only skip containers explicitly belonging to another platform
+            if container_platform.is_some() && container_platform != Some(platform) {
                 continue;
             }
             let connector_id = container.extract_opencti_id();

@@ -199,6 +199,25 @@ fn managed_container(id: &str, platform: &str) -> OrchestratorContainer {
     }
 }
 
+fn legacy_container(id: &str) -> OrchestratorContainer {
+    let mut labels = HashMap::new();
+    labels.insert("opencti-manager".to_string(), "shared-manager".to_string());
+    labels.insert("opencti-connector-id".to_string(), id.to_string());
+
+    let mut envs = HashMap::new();
+    envs.insert("OPENCTI_CONFIG_HASH".to_string(), format!("hash-{id}"));
+
+    OrchestratorContainer {
+        id: format!("container-{id}"),
+        name: format!("connector-{id}"),
+        state: "exited".to_string(),
+        labels,
+        envs,
+        restart_count: 0,
+        started_at: None,
+    }
+}
+
 struct FakeApi {
     connectors: Vec<ApiConnector>,
 }
@@ -365,7 +384,53 @@ async fn cleanup_removes_only_orphans_for_current_platform() {
     assert_eq!(removed, vec!["D".to_string()]);
 }
 
+#[tokio::test]
+async fn cleanup_removes_legacy_orphan_without_platform_label() {
+    let all_containers = vec![
+        managed_container("A", "opencti"),
+        legacy_container("Z"),
+    ];
 
+    let removed_ids = Arc::new(Mutex::new(Vec::new()));
+    let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+        Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
+    let api: Box<dyn ComposerApi + Send + Sync> =
+        Box::new(FakeApi::new(vec![connector("A")]));
 
+    let mut tick = Instant::now();
+    let mut health_tick = Instant::now();
 
+    orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+
+    let removed = removed_ids
+        .lock()
+        .expect("mutex should not be poisoned")
+        .clone();
+    assert_eq!(removed, vec!["Z".to_string()]);
+}
+
+#[tokio::test]
+async fn cleanup_keeps_legacy_container_with_active_connector() {
+    let all_containers = vec![
+        managed_container("A", "opencti"),
+        legacy_container("B"),
+    ];
+
+    let removed_ids = Arc::new(Mutex::new(Vec::new()));
+    let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+        Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
+    let api: Box<dyn ComposerApi + Send + Sync> =
+        Box::new(FakeApi::new(vec![connector("A"), connector("B")]));
+
+    let mut tick = Instant::now();
+    let mut health_tick = Instant::now();
+
+    orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+
+    let removed = removed_ids
+        .lock()
+        .expect("mutex should not be poisoned")
+        .clone();
+    assert!(removed.is_empty(), "active legacy container should not be removed: {removed:?}");
+}
 
