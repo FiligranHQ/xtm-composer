@@ -64,6 +64,7 @@ impl ConnectorInstances {
             .collect();
         ApiConnector {
             id: self.connector_instance_id.clone(),
+            platform: "openaev".to_string(),
             name: self.connector_instance_name.clone(),
             image: self.connector_image.clone(),
             contract_hash: self.connector_instance_hash.clone(),

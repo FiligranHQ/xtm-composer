@@ -161,12 +161,312 @@ pub async fn orchestrate(
             .iter()
             .map(|n| (n.id.clone(), n.clone()))
             .collect();
+        let platform = api.platform();
         let existing_containers = orchestrator.list().await;
         for container in existing_containers {
+            let container_platform = container
+                .labels
+                .get("opencti-platform")
+                .map(|value| value.as_str());
+            // Only skip containers explicitly belonging to another platform
+            if container_platform.is_some() && container_platform != Some(platform) {
+                continue;
+            }
             let connector_id = container.extract_opencti_id();
             if !connectors_by_id.contains_key(&connector_id) {
                 orchestrator.remove(&container).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::ApiContractConfig;
+    use crate::config::settings::Daemon;
+    use std::sync::{Arc, Mutex};
+
+    fn connector(id: &str) -> ApiConnector {
+        ApiConnector {
+            id: id.to_string(),
+            platform: "opencti".to_string(),
+            name: format!("connector-{id}"),
+            image: "ghcr.io/acme/test:latest".to_string(),
+            contract_hash: format!("hash-{id}"),
+            current_status: Some("stopped".to_string()),
+            requested_status: "stopping".to_string(),
+            contract_configuration: Vec::<ApiContractConfig>::new(),
+        }
+    }
+
+    fn managed_container(id: &str, platform: &str) -> OrchestratorContainer {
+        let mut labels = HashMap::new();
+        labels.insert("opencti-manager".to_string(), "shared-manager".to_string());
+        labels.insert("opencti-connector-id".to_string(), id.to_string());
+        labels.insert("opencti-platform".to_string(), platform.to_string());
+
+        let mut envs = HashMap::new();
+        envs.insert("OPENCTI_CONFIG_HASH".to_string(), format!("hash-{id}"));
+
+        OrchestratorContainer {
+            id: format!("container-{id}"),
+            name: format!("connector-{id}"),
+            state: "exited".to_string(),
+            labels,
+            envs,
+            restart_count: 0,
+            started_at: None,
+        }
+    }
+
+    fn legacy_container(id: &str) -> OrchestratorContainer {
+        let mut labels = HashMap::new();
+        labels.insert("opencti-manager".to_string(), "shared-manager".to_string());
+        labels.insert("opencti-connector-id".to_string(), id.to_string());
+
+        let mut envs = HashMap::new();
+        envs.insert("OPENCTI_CONFIG_HASH".to_string(), format!("hash-{id}"));
+
+        OrchestratorContainer {
+            id: format!("container-{id}"),
+            name: format!("connector-{id}"),
+            state: "exited".to_string(),
+            labels,
+            envs,
+            restart_count: 0,
+            started_at: None,
+        }
+    }
+
+    struct FakeApi {
+        connectors: Vec<ApiConnector>,
+    }
+
+    impl FakeApi {
+        fn new(connectors: Vec<ApiConnector>) -> Self {
+            Self { connectors }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ComposerApi for FakeApi {
+        fn daemon(&self) -> &Daemon {
+            unimplemented!()
+        }
+
+        fn platform(&self) -> &'static str {
+            "opencti"
+        }
+
+        fn post_logs_schedule(&self) -> Duration {
+            Duration::from_secs(3600)
+        }
+
+        async fn version(&self) -> Option<String> {
+            unimplemented!()
+        }
+
+        async fn ping_alive(&self) -> Option<String> {
+            unimplemented!()
+        }
+
+        async fn register(&self) -> () {
+            unimplemented!()
+        }
+
+        async fn connectors(&self) -> Option<Vec<ApiConnector>> {
+            Some(self.connectors.clone())
+        }
+
+        async fn patch_status(&self, _id: String, _status: ConnectorStatus) -> Option<ApiConnector> {
+            None
+        }
+
+        async fn patch_logs(&self, _id: String, _logs: Vec<String>) -> Option<String> {
+            None
+        }
+
+        async fn patch_health(
+            &self,
+            _id: String,
+            _restart_count: u32,
+            _started_at: String,
+            _is_in_reboot_loop: bool,
+        ) -> Option<String> {
+            None
+        }
+    }
+
+    struct FakeOrchestrator {
+        containers: Vec<OrchestratorContainer>,
+        removed_ids: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl FakeOrchestrator {
+        fn new(containers: Vec<OrchestratorContainer>, removed_ids: Arc<Mutex<Vec<String>>>) -> Self {
+            Self {
+                containers,
+                removed_ids,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Orchestrator for FakeOrchestrator {
+        async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+            self.containers
+                .iter()
+                .find(|container| container.labels.get("opencti-connector-id") == Some(&connector.id))
+                .cloned()
+        }
+
+        async fn list(&self) -> Vec<OrchestratorContainer> {
+            self.containers.clone()
+        }
+
+        async fn start(&self, _container: &OrchestratorContainer, _connector: &ApiConnector) -> () {}
+
+        async fn stop(&self, _container: &OrchestratorContainer, _connector: &ApiConnector) -> () {}
+
+        async fn remove(&self, container: &OrchestratorContainer) -> () {
+            self.removed_ids
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(container.extract_opencti_id());
+        }
+
+        async fn refresh(&self, _connector: &ApiConnector) -> Option<OrchestratorContainer> {
+            None
+        }
+
+        async fn deploy(&self, _connector: &ApiConnector) -> Option<OrchestratorContainer> {
+            None
+        }
+
+        async fn logs(
+            &self,
+            _container: &OrchestratorContainer,
+            _connector: &ApiConnector,
+        ) -> Option<Vec<String>> {
+            None
+        }
+
+        fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
+            if container.state == "running" {
+                ConnectorStatus::Started
+            } else {
+                ConnectorStatus::Stopped
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_does_not_delete_other_platform_connectors_in_shared_mode() {
+        let all_containers = vec![
+            managed_container("A", "opencti"),
+            managed_container("B", "opencti"),
+            managed_container("C", "opencti"),
+            managed_container("X", "openaev"),
+            managed_container("Y", "openaev"),
+        ];
+
+        let removed_ids = Arc::new(Mutex::new(Vec::new()));
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+            Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
+        let api: Box<dyn ComposerApi + Send + Sync> =
+            Box::new(FakeApi::new(vec![connector("A"), connector("B"), connector("C")]));
+
+        let mut tick = Instant::now();
+        let mut health_tick = Instant::now();
+
+        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+
+        let removed = removed_ids
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone();
+        assert!(
+            removed.is_empty(),
+            "cleanup removed connectors from another platform: {removed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_only_orphans_for_current_platform() {
+        let all_containers = vec![
+            managed_container("A", "opencti"),
+            managed_container("B", "opencti"),
+            managed_container("C", "opencti"),
+            managed_container("D", "opencti"),
+            managed_container("X", "openaev"),
+        ];
+
+        let removed_ids = Arc::new(Mutex::new(Vec::new()));
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+            Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
+        let api: Box<dyn ComposerApi + Send + Sync> =
+            Box::new(FakeApi::new(vec![connector("A"), connector("B"), connector("C")]));
+
+        let mut tick = Instant::now();
+        let mut health_tick = Instant::now();
+
+        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+
+        let removed = removed_ids
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone();
+        assert_eq!(removed, vec!["D".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_legacy_orphan_without_platform_label() {
+        let all_containers = vec![
+            managed_container("A", "opencti"),
+            legacy_container("Z"),
+        ];
+
+        let removed_ids = Arc::new(Mutex::new(Vec::new()));
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+            Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
+        let api: Box<dyn ComposerApi + Send + Sync> =
+            Box::new(FakeApi::new(vec![connector("A")]));
+
+        let mut tick = Instant::now();
+        let mut health_tick = Instant::now();
+
+        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+
+        let removed = removed_ids
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone();
+        assert_eq!(removed, vec!["Z".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn cleanup_keeps_legacy_container_with_active_connector() {
+        let all_containers = vec![
+            managed_container("A", "opencti"),
+            legacy_container("B"),
+        ];
+
+        let removed_ids = Arc::new(Mutex::new(Vec::new()));
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+            Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
+        let api: Box<dyn ComposerApi + Send + Sync> =
+            Box::new(FakeApi::new(vec![connector("A"), connector("B")]));
+
+        let mut tick = Instant::now();
+        let mut health_tick = Instant::now();
+
+        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+
+        let removed = removed_ids
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone();
+        assert!(removed.is_empty(), "active legacy container should not be removed: {removed:?}");
     }
 }

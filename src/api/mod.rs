@@ -27,6 +27,7 @@ pub struct ApiContractConfig {
 #[derive(Debug, Clone)]
 pub struct ApiConnector {
     pub id: String,
+    pub platform: String,
     pub name: String,
     pub image: String,
     pub contract_hash: String,
@@ -165,6 +166,8 @@ impl ApiConnector {
 #[async_trait]
 pub trait ComposerApi {
     fn daemon(&self) -> &Daemon;
+
+    fn platform(&self) -> &'static str;
 
     fn post_logs_schedule(&self) -> Duration;
 
