@@ -306,18 +306,19 @@ impl Orchestrator for KubeOrchestrator {
     }
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
-        let lp = &ListParams::default().labels(&format!(
-            "opencti-connector-id={}",
-            container.extract_opencti_id()
-        ));
         let dp = &DeleteParams::default();
-        let delete_response = self.deployments.delete_collection(dp, lp).await;
+        let delete_response = self.deployments.delete(&container.name, dp).await;
         match delete_response {
             Ok(_) => info!(
+                name = container.name,
                 id = container.extract_opencti_id(),
                 "Deployment successfully deleted"
             ),
-            Err(err) => error!(error = err.to_string(), "Fail removing the deployments"),
+            Err(err) => error!(
+                name = container.name,
+                error = err.to_string(),
+                "Fail removing the deployment"
+            ),
         }
     }
 

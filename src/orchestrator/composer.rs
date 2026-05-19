@@ -173,8 +173,20 @@ pub async fn orchestrate(
                 continue;
             }
             let connector_id = container.extract_opencti_id();
-            if !connectors_by_id.contains_key(&connector_id) {
-                orchestrator.remove(&container).await;
+            match connectors_by_id.get(&connector_id) {
+                None => {
+                    // Connector no longer exists — remove the orphaned container
+                    orchestrator.remove(&container).await;
+                }
+                Some(connector) => {
+                    // Connector still exists but the deployment name may be stale
+                    // (e.g. after a platform rename). Remove the old deployment so
+                    // the next orchestration cycle deploys with the correct name.
+                    let expected_name = connector.container_name();
+                    if container.name != expected_name {
+                        orchestrator.remove(&container).await;
+                    }
+                }
             }
         }
     }
@@ -211,7 +223,7 @@ mod tests {
 
         OrchestratorContainer {
             id: format!("container-{id}"),
-            name: format!("connector-{id}"),
+            name: format!("connector-{}", id.to_lowercase()),
             state: "exited".to_string(),
             labels,
             envs,
@@ -230,7 +242,7 @@ mod tests {
 
         OrchestratorContainer {
             id: format!("container-{id}"),
-            name: format!("connector-{id}"),
+            name: format!("connector-{}", id.to_lowercase()),
             state: "exited".to_string(),
             labels,
             envs,
@@ -468,5 +480,66 @@ mod tests {
             .expect("mutex should not be poisoned")
             .clone();
         assert!(removed.is_empty(), "active legacy container should not be removed: {removed:?}");
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_stale_named_container_after_connector_rename() {
+        // Simulates OpenAEV 2.4.0 scenario: connector ID stays the same but the
+        // name changes (e.g. "connector-A" → "connector-a-0f2a85c1").
+        // The old deployment should be removed as orphaned.
+        let mut stale_container = managed_container("A", "opencti");
+        stale_container.name = "connector-a-old-name".to_string();
+
+        let all_containers = vec![
+            stale_container,
+            managed_container("B", "opencti"),
+        ];
+
+        let removed_ids = Arc::new(Mutex::new(Vec::new()));
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+            Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
+        let api: Box<dyn ComposerApi + Send + Sync> =
+            Box::new(FakeApi::new(vec![connector("A"), connector("B")]));
+
+        let mut tick = Instant::now();
+        let mut health_tick = Instant::now();
+
+        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+
+        let removed = removed_ids
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone();
+        assert_eq!(
+            removed,
+            vec!["A".to_string()],
+            "stale-named container should be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_keeps_correctly_named_container() {
+        // When the container name matches the expected container_name(), it should be kept.
+        let all_containers = vec![
+            managed_container("A", "opencti"),
+            managed_container("B", "opencti"),
+        ];
+
+        let removed_ids = Arc::new(Mutex::new(Vec::new()));
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+            Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
+        let api: Box<dyn ComposerApi + Send + Sync> =
+            Box::new(FakeApi::new(vec![connector("A"), connector("B")]));
+
+        let mut tick = Instant::now();
+        let mut health_tick = Instant::now();
+
+        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+
+        let removed = removed_ids
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone();
+        assert!(removed.is_empty(), "correctly named containers should not be removed: {removed:?}");
     }
 }
