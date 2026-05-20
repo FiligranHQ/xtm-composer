@@ -180,8 +180,9 @@ pub async fn orchestrate(
                 }
                 Some(connector) => {
                     // Connector still exists but the deployment name may be stale
-                    // (e.g. after a platform rename). Remove the old deployment so
-                    // the next orchestration cycle deploys with the correct name.
+                    // after a connector instance name change while the connector ID
+                    // remains the same. Remove the old deployment so the next
+                    // orchestration cycle deploys with the correct name.
                     let expected_name = connector.container_name();
                     if container.name != expected_name {
                         orchestrator.remove(&container).await;
