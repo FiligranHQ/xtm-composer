@@ -109,4 +109,89 @@ mod tests {
         assert_eq!(labels.get("opencti-platform"), Some(&connector.platform));
         assert_eq!(labels.get("opencti-manager"), Some(&"test-manager".to_string()));
     }
+
+    #[test]
+    fn refresh_patch_strips_selector_from_deployment_spec() {
+        // refresh() strips spec.selector from the merge patch so that
+        // the immutable field is never sent to Kubernetes.
+        use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
+        use std::collections::BTreeMap;
+
+        let deployment = Deployment {
+            spec: Some(DeploymentSpec {
+                replicas: Some(1),
+                selector: LabelSelector {
+                    match_labels: Some(BTreeMap::from([(
+                        "opencti-connector-id".to_string(),
+                        "abc-123".to_string(),
+                    )])),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mut patch_value = serde_json::to_value(&deployment).unwrap();
+        if let Some(spec) = patch_value.pointer_mut("/spec") {
+            spec.as_object_mut().unwrap().remove("selector");
+        }
+
+        let spec = patch_value.get("spec").expect("spec must exist");
+        assert!(
+            spec.get("selector").is_none(),
+            "selector should be stripped from the patch: {spec}"
+        );
+        assert_eq!(
+            spec.get("replicas").and_then(|v| v.as_i64()),
+            Some(1),
+            "other spec fields must survive"
+        );
+    }
+
+    #[test]
+    fn deploy_payload_includes_all_labels_in_selector() {
+        // deploy() sends the full Deployment including the selector with
+        // all labels so Kubernetes can match pods precisely.
+        use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
+        use std::collections::BTreeMap;
+
+        let labels: BTreeMap<String, String> = BTreeMap::from([
+            ("opencti-manager".to_string(), "test-manager".to_string()),
+            ("opencti-connector-id".to_string(), "connector-42".to_string()),
+            ("opencti-platform".to_string(), "opencti".to_string()),
+        ]);
+        let deployment = Deployment {
+            spec: Some(DeploymentSpec {
+                selector: LabelSelector {
+                    match_labels: Some(labels.clone()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(&deployment).unwrap();
+        let match_labels = json
+            .pointer("/spec/selector/matchLabels")
+            .expect("matchLabels must be present");
+        assert_eq!(
+            match_labels.get("opencti-connector-id").and_then(|v| v.as_str()),
+            Some("connector-42"),
+            "selector must contain the connector-id label"
+        );
+        assert_eq!(
+            match_labels.get("opencti-manager").and_then(|v| v.as_str()),
+            Some("test-manager"),
+            "selector must contain the manager label"
+        );
+        assert_eq!(
+            match_labels.get("opencti-platform").and_then(|v| v.as_str()),
+            Some("opencti"),
+            "selector must contain the platform label"
+        );
+    }
 }
