@@ -173,6 +173,10 @@ impl KubeOrchestrator {
         let resolver = Image::new(registry_config);
         let auth = resolver.get_credentials();
         let image = resolver.build_name(connector.image.clone());
+        let selector = LabelSelector {
+            match_labels: Some(deployment_labels.clone()),
+            ..Default::default()
+        };
         let target_deployment = Deployment {
             metadata: ObjectMeta {
                 name: Some(connector.container_name()),
@@ -186,10 +190,7 @@ impl KubeOrchestrator {
             },
             spec: Some(DeploymentSpec {
                 replicas: Some(if is_starting { 1 } else { 0 }),
-                selector: LabelSelector {
-                    match_labels: Some(deployment_labels.clone()),
-                    ..Default::default()
-                },
+                selector,
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
                         labels: Some(deployment_labels.clone()),
@@ -325,7 +326,13 @@ impl Orchestrator for KubeOrchestrator {
     async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let labels = self.labels(connector);
         let deployment_patch = self.build_configuration(connector, labels);
-        let patch = Patch::Merge(&deployment_patch);
+        // spec.selector is immutable after creation — strip it from the merge
+        // patch so Kubernetes leaves the existing selector untouched.
+        let mut patch_value = serde_json::to_value(&deployment_patch).unwrap();
+        if let Some(spec) = patch_value.pointer_mut("/spec") {
+            spec.as_object_mut().unwrap().remove("selector");
+        }
+        let patch = Patch::Merge(&patch_value);
         let name = connector.container_name();
         let deployment_result = self
             .deployments
