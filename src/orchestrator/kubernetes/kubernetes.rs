@@ -234,6 +234,16 @@ impl KubeOrchestrator {
         base_deployment
     }
 
+    pub fn build_refresh_patch(deployment: &Deployment) -> serde_json::Value {
+        // spec.selector is immutable after creation — strip it from the merge
+        // patch so Kubernetes leaves the existing selector untouched.
+        let mut patch_value = serde_json::to_value(deployment).unwrap();
+        if let Some(spec) = patch_value.pointer_mut("/spec") {
+            spec.as_object_mut().unwrap().remove("selector");
+        }
+        patch_value
+    }
+
     // Enrich container with pod information
     fn enrich_container_from_pod(&self, container: &mut OrchestratorContainer, pod: Pod) {
         let container_status = pod
@@ -326,12 +336,7 @@ impl Orchestrator for KubeOrchestrator {
     async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let labels = self.labels(connector);
         let deployment_patch = self.build_configuration(connector, labels);
-        // spec.selector is immutable after creation — strip it from the merge
-        // patch so Kubernetes leaves the existing selector untouched.
-        let mut patch_value = serde_json::to_value(&deployment_patch).unwrap();
-        if let Some(spec) = patch_value.pointer_mut("/spec") {
-            spec.as_object_mut().unwrap().remove("selector");
-        }
+        let patch_value = Self::build_refresh_patch(&deployment_patch);
         let patch = Patch::Merge(&patch_value);
         let name = connector.container_name();
         let deployment_result = self

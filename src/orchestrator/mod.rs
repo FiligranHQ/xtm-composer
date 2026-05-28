@@ -89,6 +89,7 @@ pub trait Orchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orchestrator::kubernetes::KubeOrchestrator;
 
     #[test]
     fn labels_include_platform_discriminator() {
@@ -192,6 +193,42 @@ mod tests {
             match_labels.get("opencti-platform").and_then(|v| v.as_str()),
             Some("opencti"),
             "selector must contain the platform label"
+        );
+    }
+
+    #[test]
+    fn build_refresh_patch_strips_selector() {
+        // This test calls KubeOrchestrator::build_refresh_patch directly.
+        use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
+        use std::collections::BTreeMap;
+
+        let deployment = Deployment {
+            spec: Some(DeploymentSpec {
+                replicas: Some(2),
+                selector: LabelSelector {
+                    match_labels: Some(BTreeMap::from([(
+                        "opencti-connector-id".to_string(),
+                        "abc-123".to_string(),
+                    )])),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let patch = KubeOrchestrator::build_refresh_patch(&deployment);
+
+        let spec = patch.get("spec").expect("spec must be present");
+        assert!(
+            spec.get("selector").is_none(),
+            "build_refresh_patch() must strip spec.selector — got: {spec}"
+        );
+        assert_eq!(
+            spec.get("replicas").and_then(|v: &serde_json::Value| v.as_i64()),
+            Some(2),
+            "other spec fields must survive"
         );
     }
 }
