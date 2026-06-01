@@ -102,3 +102,30 @@ jobs:
       - name: Inspect image
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
+
+  deploy:
+    name: deploy
+    needs: [merge]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install AWX CLI
+        run: pip install awxkit
+
+      - name: Deploy via AWX
+        run: |
+          awx --conf.host ${{ secrets.AWX_URL }} \
+            --conf.username ${{ secrets.AWX_USER }} \
+            --conf.password ${{ secrets.AWX_PASSWORD }} \
+            job_templates launch 'Rollout restart an instance resources' \
+            --inventory aws-staging \
+            --extra_vars '{"solution":"xtm-composer", "customer":"main-oaev"}' \
+            --wait \
+            -f human
+          awx --conf.host ${{ secrets.AWX_URL }} \
+            --conf.username ${{ secrets.AWX_USER }} \
+            --conf.password ${{ secrets.AWX_PASSWORD }} \
+            job_templates launch 'Rollout restart an instance resources' \
+            --inventory eu-west-staging \
+            --extra_vars '{"solution":"xtm-composer", "customer":"testing-octi"}' \
+            --wait \
+            -f human
