@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 use rsa::RsaPrivateKey;
+use tracing::info;
 
 pub mod connector;
 pub mod manager;
@@ -20,11 +21,10 @@ pub mod opencti {}
 
 pub struct ApiOpenCTI {
     api_uri: String,
+    http_client: reqwest::Client,
     bearer: String,
     daemon: Daemon,
     logs_schedule: u64,
-    request_timeout: u64,
-    connect_timeout: u64,
     private_key: RsaPrivateKey,
 }
 
@@ -39,13 +39,34 @@ impl ApiOpenCTI {
         let connect_timeout = settings.opencti.connect_timeout;
         // Use the singleton private key
         let private_key = crate::private_key().clone();
+
+        // Build HTTP client with proxy and TLS settings
+        let mut client_builder = reqwest::Client::builder()
+            .timeout(Duration::from_secs(request_timeout))
+            .connect_timeout(Duration::from_secs(connect_timeout))
+            .danger_accept_invalid_certs(settings.opencti.unsecured_certificate);
+
+        if settings.opencti.with_proxy {
+            if let Some(proxy_url) = &settings.opencti.proxy_url {
+                info!(proxy_url = proxy_url.as_str(), "OpenCTI using explicit proxy");
+                let proxy = reqwest::Proxy::all(proxy_url)
+                    .expect("Invalid proxy URL in opencti.proxy_url");
+                client_builder = client_builder.proxy(proxy);
+            }
+            // If with_proxy is true but no proxy_url, reqwest uses system proxies by default
+        } else {
+            // Disable all proxy usage (ignore system env vars)
+            client_builder = client_builder.no_proxy();
+        }
+
+        let http_client = client_builder.build().unwrap();
+
         Self {
             api_uri,
+            http_client,
             bearer,
             daemon,
             logs_schedule,
-            request_timeout,
-            connect_timeout,
             private_key
         }
     }
@@ -59,11 +80,7 @@ impl ApiOpenCTI {
         R: DeserializeOwned + 'static,
     {
         use cynic::http::ReqwestExt;
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(self.request_timeout))
-            .connect_timeout(Duration::from_secs(self.connect_timeout))
-            .build()
-            .unwrap()
+        self.http_client
             .post(self.api_uri.clone())
             .header(AUTHORIZATION_HEADER, self.bearer.clone().as_str())
             .run_graphql(query)

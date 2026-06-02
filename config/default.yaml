@@ -28,6 +28,7 @@ opencti:
   token: ChangeMe
   unsecured_certificate: false
   with_proxy: false
+  # proxy_url: http://my-proxy:8080 # Explicit proxy URL (used only when with_proxy is true)
   logs_schedule: 10 # report logs every 10 seconds maximum
   request_timeout: 30 # HTTP request timeout in seconds (default: 30)
   connect_timeout: 10 # TCP connection timeout in seconds (default: 10)
@@ -94,6 +95,7 @@ openaev:
   token: ChangeMe
   unsecured_certificate: false
   with_proxy: false
+  # proxy_url: http://my-proxy:8080 # Explicit proxy URL (used only when with_proxy is true)
   logs_schedule: 10 # report logs every 10 seconds maximum
   request_timeout: 30 # HTTP request timeout in seconds (default: 30)
   connect_timeout: 10 # TCP connection timeout in seconds (default: 10)

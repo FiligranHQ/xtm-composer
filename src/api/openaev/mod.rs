@@ -7,6 +7,7 @@ use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use std::time::Duration;
 use rsa::RsaPrivateKey;
+use tracing::info;
 
 const BEARER: &str = "Bearer";
 const AUTHORIZATION_HEADER: &str = "Authorization";
@@ -30,11 +31,26 @@ impl ApiOpenAEV {
         let request_timeout = settings.openaev.request_timeout;
         let connect_timeout = settings.openaev.connect_timeout;
 
-        let http_client = reqwest::Client::builder()
+        // Build HTTP client with proxy and TLS settings
+        let mut client_builder = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(connect_timeout))
             .timeout(Duration::from_secs(request_timeout))
-            .build()
-            .unwrap(); // or handle the error appropriately
+            .danger_accept_invalid_certs(settings.openaev.unsecured_certificate);
+
+        if settings.openaev.with_proxy {
+            if let Some(proxy_url) = &settings.openaev.proxy_url {
+                info!(proxy_url = proxy_url.as_str(), "OpenAEV using explicit proxy");
+                let proxy = reqwest::Proxy::all(proxy_url)
+                    .expect("Invalid proxy URL in openaev.proxy_url");
+                client_builder = client_builder.proxy(proxy);
+            }
+            // If with_proxy is true but no proxy_url, reqwest uses system proxies by default
+        } else {
+            // Disable all proxy usage (ignore system env vars)
+            client_builder = client_builder.no_proxy();
+        }
+
+        let http_client = client_builder.build().unwrap();
 
         let private_key = crate::private_key().clone();
 
