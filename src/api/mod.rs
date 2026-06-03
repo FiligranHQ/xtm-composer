@@ -10,6 +10,43 @@ pub mod openaev;
 pub mod opencti;
 mod decrypt_value;
 
+/// Configuration for building an HTTP client with proxy and TLS settings.
+pub struct HttpClientConfig {
+    pub request_timeout: u64,
+    pub connect_timeout: u64,
+    pub unsecured_certificate: bool,
+    pub with_proxy: bool,
+    pub proxy_url: Option<String>,
+    pub platform_name: &'static str,
+}
+
+/// Build a reqwest HTTP client configured with proxy and TLS settings.
+///
+/// - `with_proxy: false` → disables all proxies (ignores system env vars).
+/// - `with_proxy: true` + `proxy_url: Some(url)` → uses the explicit proxy.
+/// - `with_proxy: true` + `proxy_url: None` → uses system proxies (HTTP_PROXY/HTTPS_PROXY).
+pub fn build_http_client(config: &HttpClientConfig) -> reqwest::Client {
+    let mut client_builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.request_timeout))
+        .connect_timeout(Duration::from_secs(config.connect_timeout))
+        .danger_accept_invalid_certs(config.unsecured_certificate);
+
+    if config.with_proxy {
+        if let Some(proxy_url) = &config.proxy_url {
+            info!(proxy_url = proxy_url.as_str(), platform = config.platform_name, "Using explicit proxy");
+            let proxy = reqwest::Proxy::all(proxy_url)
+                .expect("Invalid proxy URL configuration");
+            client_builder = client_builder.proxy(proxy);
+        }
+        // If with_proxy is true but no proxy_url, reqwest uses system proxies by default
+    } else {
+        // Disable all proxy usage (ignore system env vars)
+        client_builder = client_builder.no_proxy();
+    }
+
+    client_builder.build().unwrap()
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct EnvVariable {
     pub key: String,
@@ -191,3 +228,195 @@ pub trait ComposerApi {
         is_in_reboot_loop: bool,
     ) -> Option<String>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio::io::AsyncReadExt;
+
+    fn base_config() -> HttpClientConfig {
+        HttpClientConfig {
+            request_timeout: 5,
+            connect_timeout: 2,
+            unsecured_certificate: false,
+            with_proxy: false,
+            proxy_url: None,
+            platform_name: "test",
+        }
+    }
+
+    #[test]
+    fn build_client_with_proxy_disabled() {
+        let config = HttpClientConfig {
+            with_proxy: false,
+            proxy_url: None,
+            ..base_config()
+        };
+        let client = build_http_client(&config);
+        // Client builds successfully with no proxy
+        drop(client);
+    }
+
+    #[test]
+    fn build_client_with_proxy_enabled_no_url() {
+        let config = HttpClientConfig {
+            with_proxy: true,
+            proxy_url: None,
+            ..base_config()
+        };
+        let client = build_http_client(&config);
+        // Client builds successfully using system proxies
+        drop(client);
+    }
+
+    #[test]
+    fn build_client_with_explicit_proxy_url() {
+        let config = HttpClientConfig {
+            with_proxy: true,
+            proxy_url: Some("http://127.0.0.1:9999".to_string()),
+            ..base_config()
+        };
+        let client = build_http_client(&config);
+        // Client builds successfully with explicit proxy
+        drop(client);
+    }
+
+    #[test]
+    fn build_client_with_unsecured_certificate() {
+        let config = HttpClientConfig {
+            unsecured_certificate: true,
+            ..base_config()
+        };
+        let client = build_http_client(&config);
+        // Client builds successfully accepting invalid certs
+        drop(client);
+    }
+
+    #[test]
+    fn build_client_with_various_proxy_urls() {
+        // All these should build successfully
+        let urls = vec![
+            "http://proxy.example.com:8080",
+            "https://secure-proxy.local:443",
+            "http://user:pass@proxy.internal:3128",
+            "http://127.0.0.1:1080",
+        ];
+        for url in urls {
+            let config = HttpClientConfig {
+                with_proxy: true,
+                proxy_url: Some(url.to_string()),
+                ..base_config()
+            };
+            let client = build_http_client(&config);
+            drop(client);
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_enabled_with_unreachable_proxy_fails_request() {
+        // Configure proxy to an address where nothing listens
+        let config = HttpClientConfig {
+            with_proxy: true,
+            proxy_url: Some("http://127.0.0.1:1".to_string()),
+            request_timeout: 1,
+            connect_timeout: 1,
+            ..base_config()
+        };
+        let client = build_http_client(&config);
+
+        // Request should fail because the proxy is unreachable
+        let result = client.get("http://example.com").send().await;
+        assert!(
+            result.is_err(),
+            "Request through unreachable proxy should fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_enabled_routes_traffic_through_proxy() {
+        // Start a local TCP listener acting as a fake proxy
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+
+        let config = HttpClientConfig {
+            with_proxy: true,
+            proxy_url: Some(format!("http://{}", proxy_addr)),
+            request_timeout: 2,
+            connect_timeout: 2,
+            ..base_config()
+        };
+        let client = build_http_client(&config);
+
+        // Send a request in the background
+        let request_handle = tokio::spawn(async move {
+            // We don't care about the result — just that the proxy receives the connection
+            let _ = client.get("http://fake-target.local/test").send().await;
+        });
+
+        // Accept the connection on our fake proxy — proves traffic was routed
+        let accept_result = tokio::time::timeout(
+            Duration::from_secs(3),
+            listener.accept(),
+        ).await;
+
+        assert!(
+            accept_result.is_ok(),
+            "Proxy listener should have received a connection"
+        );
+
+        let (mut stream, _) = accept_result.unwrap().unwrap();
+        let mut buf = [0u8; 512];
+        let n = stream.read(&mut buf).await.unwrap_or(0);
+        let request_line = String::from_utf8_lossy(&buf[..n]);
+        // HTTP proxy requests contain the full target URL or a CONNECT method
+        assert!(
+            request_line.contains("fake-target.local") || request_line.contains("CONNECT"),
+            "Proxy should receive request targeting fake-target.local, got: {}",
+            request_line
+        );
+
+        request_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn proxy_disabled_does_not_route_through_proxy() {
+        // Start a local TCP listener
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+
+        // Even though we set the system proxy env var, with_proxy: false should ignore it
+        // SAFETY: acceptable in single-threaded test context
+        unsafe { std::env::set_var("HTTP_PROXY", format!("http://{}", proxy_addr)); }
+
+        let config = HttpClientConfig {
+            with_proxy: false,
+            proxy_url: None,
+            request_timeout: 1,
+            connect_timeout: 1,
+            ..base_config()
+        };
+        let client = build_http_client(&config);
+
+        // Send a request — it should NOT go through the proxy
+        let _request_handle = tokio::spawn(async move {
+            let _ = client.get("http://fake-target.local/test").send().await;
+        });
+
+        // The proxy should NOT receive any connection
+        let accept_result = tokio::time::timeout(
+            Duration::from_secs(2),
+            listener.accept(),
+        ).await;
+
+        assert!(
+            accept_result.is_err(),
+            "Proxy listener should NOT have received a connection when with_proxy is false"
+        );
+
+        // Clean up env var
+        // SAFETY: acceptable in single-threaded test context
+        unsafe { std::env::remove_var("HTTP_PROXY"); }
+    }
+}
+
