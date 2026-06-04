@@ -232,8 +232,11 @@ pub trait ComposerApi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::TcpListener;
+    use std::sync::Mutex;
     use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn base_config() -> HttpClientConfig {
         HttpClientConfig {
