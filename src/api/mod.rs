@@ -402,7 +402,7 @@ mod tests {
         let client = build_http_client(&config);
 
         // Send a request — it should NOT go through the proxy
-        let _request_handle = tokio::spawn(async move {
+        let request_handle = tokio::spawn(async move {
             let _ = client.get("http://fake-target.local/test").send().await;
         });
 
@@ -417,9 +417,10 @@ mod tests {
             "Proxy listener should NOT have received a connection when with_proxy is false"
         );
 
+        request_handle.abort();
+
         // Clean up env var
-        // SAFETY: acceptable in single-threaded test context
+        // SAFETY: guarded by ENV_LOCK and acceptable in current_thread runtime
         unsafe { std::env::remove_var("HTTP_PROXY"); }
-    }
 }
 
