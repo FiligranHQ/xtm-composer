@@ -382,14 +382,14 @@ mod tests {
         request_handle.abort();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn proxy_disabled_does_not_route_through_proxy() {
         // Start a local TCP listener
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let proxy_addr = listener.local_addr().unwrap();
 
+        let _env_guard = ENV_LOCK.lock().unwrap();
         // Even though we set the system proxy env var, with_proxy: false should ignore it
-        // SAFETY: acceptable in single-threaded test context
         unsafe { std::env::set_var("HTTP_PROXY", format!("http://{}", proxy_addr)); }
 
         let config = HttpClientConfig {
