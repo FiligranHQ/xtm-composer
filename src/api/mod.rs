@@ -110,6 +110,38 @@ impl FromStr for RequestedStatus {
     }
 }
 
+/// Append proxy environment variables (HTTP_PROXY, HTTPS_PROXY, NO_PROXY)
+/// to the connector container env list when proxy is enabled.
+fn append_proxy_envs(
+    envs: &mut Vec<EnvVariable>,
+    with_proxy: bool,
+    proxy_url: Option<&str>,
+    no_proxy: Option<&str>,
+) {
+    if !with_proxy {
+        return;
+    }
+    if let Some(url) = proxy_url {
+        envs.push(EnvVariable {
+            key: "HTTP_PROXY".into(),
+            value: url.to_string(),
+            is_sensitive: false,
+        });
+        envs.push(EnvVariable {
+            key: "HTTPS_PROXY".into(),
+            value: url.to_string(),
+            is_sensitive: false,
+        });
+    }
+    if let Some(no_proxy_val) = no_proxy {
+        envs.push(EnvVariable {
+            key: "NO_PROXY".into(),
+            value: no_proxy_val.to_string(),
+            is_sensitive: false,
+        });
+    }
+}
+
 impl ApiConnector {
     pub fn container_name(&self) -> String {
         self.name
@@ -150,6 +182,22 @@ impl ApiConnector {
             value: self.contract_hash.clone(),
             is_sensitive: false,
         });
+
+        // Inject proxy environment variables into the connector container
+        let (with_proxy, proxy_url, no_proxy) = match self.platform.as_str() {
+            "openaev" => (
+                settings.openaev.with_proxy,
+                settings.openaev.proxy_url.clone(),
+                settings.openaev.no_proxy.clone(),
+            ),
+            _ => (
+                settings.opencti.with_proxy,
+                settings.opencti.proxy_url.clone(),
+                settings.opencti.no_proxy.clone(),
+            ),
+        };
+        append_proxy_envs(&mut envs, with_proxy, proxy_url.as_deref(), no_proxy.as_deref());
+
         envs
     }
 
@@ -413,5 +461,87 @@ mod tests {
         // SAFETY: guarded by ENV_LOCK and acceptable in current_thread runtime
         unsafe { std::env::remove_var("HTTP_PROXY"); }
     }
-}
 
+    // --- Tests for connector proxy env injection ---
+
+    #[test]
+    fn append_proxy_envs_injects_http_and_https_proxy() {
+        let mut envs = Vec::new();
+        append_proxy_envs(&mut envs, true, Some("http://proxy:8080"), None);
+
+        assert_eq!(envs.len(), 2);
+        assert_eq!(envs[0].key, "HTTP_PROXY");
+        assert_eq!(envs[0].value, "http://proxy:8080");
+        assert_eq!(envs[1].key, "HTTPS_PROXY");
+        assert_eq!(envs[1].value, "http://proxy:8080");
+    }
+
+    #[test]
+    fn append_proxy_envs_injects_no_proxy() {
+        let mut envs = Vec::new();
+        append_proxy_envs(
+            &mut envs,
+            true,
+            Some("http://proxy:3128"),
+            Some("localhost,127.0.0.1,.internal"),
+        );
+
+        assert_eq!(envs.len(), 3);
+        assert_eq!(envs[0].key, "HTTP_PROXY");
+        assert_eq!(envs[1].key, "HTTPS_PROXY");
+        assert_eq!(envs[2].key, "NO_PROXY");
+        assert_eq!(envs[2].value, "localhost,127.0.0.1,.internal");
+    }
+
+    #[test]
+    fn append_proxy_envs_no_injection_when_proxy_disabled() {
+        let mut envs = Vec::new();
+        append_proxy_envs(
+            &mut envs,
+            false,
+            Some("http://proxy:8080"),
+            Some("localhost"),
+        );
+
+        assert!(
+            envs.is_empty(),
+            "No proxy env vars should be injected when with_proxy is false"
+        );
+    }
+
+    #[test]
+    fn append_proxy_envs_no_injection_when_enabled_but_no_urls() {
+        let mut envs = Vec::new();
+        append_proxy_envs(&mut envs, true, None, None);
+
+        assert!(
+            envs.is_empty(),
+            "No proxy env vars should be injected when with_proxy is true but no URLs are set"
+        );
+    }
+
+    #[test]
+    fn append_proxy_envs_only_no_proxy_when_no_proxy_url() {
+        let mut envs = Vec::new();
+        append_proxy_envs(&mut envs, true, None, Some("localhost,.local"));
+
+        assert_eq!(envs.len(), 1);
+        assert_eq!(envs[0].key, "NO_PROXY");
+        assert_eq!(envs[0].value, "localhost,.local");
+    }
+
+    #[test]
+    fn append_proxy_envs_does_not_mark_as_sensitive() {
+        let mut envs = Vec::new();
+        append_proxy_envs(
+            &mut envs,
+            true,
+            Some("http://user:pass@proxy:8080"),
+            Some("internal"),
+        );
+
+        for env in &envs {
+            assert!(!env.is_sensitive, "Proxy env vars should not be marked sensitive");
+        }
+    }
+}
