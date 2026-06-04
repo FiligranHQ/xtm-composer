@@ -33,7 +33,7 @@ pub fn build_http_client(config: &HttpClientConfig) -> reqwest::Client {
 
     if config.with_proxy {
         if let Some(proxy_url) = &config.proxy_url {
-            info!(proxy_url = proxy_url.as_str(), platform = config.platform_name, "Using explicit proxy");
+            info!(platform = config.platform_name, "Using explicit proxy");
             let proxy = reqwest::Proxy::all(proxy_url)
                 .expect("Invalid proxy URL configuration");
             client_builder = client_builder.proxy(proxy);
