@@ -233,7 +233,6 @@ pub trait ComposerApi {
 mod tests {
     use super::*;
     use std::sync::Mutex;
-    use tokio::io::AsyncReadExt;
     use tokio::net::TcpListener;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -413,5 +412,6 @@ mod tests {
         // Clean up env var
         // SAFETY: guarded by ENV_LOCK and acceptable in current_thread runtime
         unsafe { std::env::remove_var("HTTP_PROXY"); }
+    }
 }
 
