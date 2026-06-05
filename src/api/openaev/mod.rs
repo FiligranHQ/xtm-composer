@@ -33,7 +33,8 @@ impl ApiOpenAEV {
             connect_timeout: settings.openaev.connect_timeout,
             unsecured_certificate: settings.openaev.unsecured_certificate,
             with_proxy: settings.openaev.with_proxy,
-            proxy_url: settings.openaev.proxy_url.clone(),
+            http_proxy: settings.openaev.http_proxy.clone(),
+            https_proxy: settings.openaev.https_proxy.clone(),
             platform_name: "openaev",
         });
 

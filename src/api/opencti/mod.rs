@@ -42,7 +42,8 @@ impl ApiOpenCTI {
             connect_timeout: settings.opencti.connect_timeout,
             unsecured_certificate: settings.opencti.unsecured_certificate,
             with_proxy: settings.opencti.with_proxy,
-            proxy_url: settings.opencti.proxy_url.clone(),
+            http_proxy: settings.opencti.http_proxy.clone(),
+            https_proxy: settings.opencti.https_proxy.clone(),
             platform_name: "opencti",
         });
 
