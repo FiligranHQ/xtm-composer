@@ -1,8 +1,8 @@
 ---
 name: Feature request
-about: Ask for a new feature to be implemented in XTM Composer
+about: Suggest a new feature or capability for XTM Composer
 title: 'feat: '
-labels: enhancement, needs triage
+labels: needs triage, feature
 assignees: ''
 type: feature
 
@@ -10,35 +10,20 @@ type: feature
 
 ## Use case
 
-<!-- Please describe the use case for which you need a solution -->
+<!-- Please describe the use case for which you need a solution. -->
 
-## Current Workaround
+## Current workaround
 
-<!-- Please describe how you currently solve or work around this problem, given XTM Composer's limitation. -->
+<!-- Please describe how you currently solve or work around this problem. -->
 
-## Proposed Solution
+## Proposed solution
 
-<!-- Please describe the solution you would like XTM Composer to provide, to solve the problem above. -->
+<!-- Please describe the solution you would like to be provided. -->
 
-## Implementation Details (Optional)
+## Additional information
 
-<!-- If you have specific implementation ideas, please share them here -->
-
-### Affected Components
-<!-- Check all that apply -->
-- [ ] Configuration management
-- [ ] OpenCTI API integration
-- [ ] Docker orchestration
-- [ ] Kubernetes orchestration
-- [ ] Portainer integration
-- [ ] Connector management
-- [ ] Documentation
-- [ ] Other (please specify)
-
-## Additional Information
-
-<!-- Any additional information, including logs, configuration examples, or screenshots if you have any. -->
+<!-- Any additional information, including logs or screenshots if you have any. -->
 
 ## If the feature request is approved, would you be willing to submit a PR?
 
-Yes / No (Help can be provided if you need assistance submitting a PR)
+Yes / No (help can be provided if you need assistance submitting a PR)

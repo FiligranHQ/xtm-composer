@@ -2,8 +2,9 @@
 name: Bug report
 about: Create a bug report to help us improve XTM Composer
 title: 'fix: '
-labels: bug, needs triage
+labels: needs triage, bug
 assignees: ''
+type: bug
 
 ---
 
@@ -13,48 +14,25 @@ assignees: ''
 
 ## Environment
 
-1. OS (where XTM Composer runs): { e.g. Mac OS 10, Windows 10, Ubuntu 22.04, etc. }
-2. XTM Composer version: { e.g. XTM Composer 0.1.0 }
-3. Rust version: { e.g. 1.70.0 }
-4. Orchestrator: { e.g. Docker, Kubernetes, Portainer }
-5. OpenCTI version: { e.g. OpenCTI 6.0.0 }
-6. Other environment details:
+1. OS: { e.g. macOS 14, Windows 11, Ubuntu 22.04, etc. }
+2. Version: { e.g. 1.2.3 }
+3. Other environment details:
 
-## Reproducible Steps
+## Reproducible steps
 
 Steps to create the smallest reproducible scenario:
-1. { e.g. Configure XTM Composer with ... }
-2. { e.g. Run command ... }
-3. { e.g. Error occurs ... }
+1. { e.g. Run ... }
+2. { e.g. Click ... }
+3. { e.g. Error ... }
 
-## Expected Output
+## Expected output
 
 <!-- Please describe what you expected to happen. -->
 
-## Actual Output
+## Actual output
 
 <!-- Please describe what actually happened. -->
-
-## Configuration
-
-<!-- Please provide your configuration file (with sensitive data removed) -->
-
-```yaml
-# config/default.yaml or relevant configuration
-```
-
-## Logs
-
-<!-- Please provide relevant log output -->
-
-```
-# Log output here
-```
 
 ## Additional information
 
 <!-- Any additional information, including logs or screenshots if you have any. -->
-
-## Screenshots (optional)
-
-<!-- If applicable, add screenshots to help explain your problem. -->
