@@ -1,7 +1,7 @@
 ---
 name: Feature request
 about: Ask for a new feature to be implemented in XTM Composer
-title: ''
+title: 'feat: '
 labels: enhancement, needs triage
 assignees: ''
 type: feature

@@ -91,3 +91,40 @@ If you need support or wish to engage in a discussion about XTM Composer, feel f
 - Open a [GitHub issue](https://github.com/OpenCTI-Platform/xtm-composer/issues) with the "question" label
 
 We're always happy to help and discuss improvements to the project!
+
+
+<!-- filigran-conventions:start -->
+## Commit, pull request & issue conventions
+
+To keep the backlog consistent and searchable across all Filigran projects, this
+repository follows a shared title and label convention. The full taxonomy lives
+in [`.github/LABELS.md`](.github/LABELS.md). In short:
+
+* **Titles** — All commit, pull request and issue titles follow the
+  [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
+  specification with a GitHub issue reference:
+  `type(scope?)!?: description (#issue)` (e.g.
+  `feat(api): add bulk export endpoint (#1234)`). The description starts with a
+  lowercase letter and has no trailing period; preserve acronyms and proper
+  nouns. Types: `feat`, `fix`, `chore`, `docs`, `style`, `refactor`, `perf`,
+  `test`, `build`, `ci`, `revert`.
+
+* **No more bracket prefixes** — The old `[backend]` / `[frontend]` /
+  `[component]` prefixes are **discontinued**; use a Conventional Commits scope
+  instead (e.g. `fix(backend): ...`).
+
+* **GitHub reference** — Pull request titles **must** end with the related issue
+  reference, e.g. `(#1234)` (the PR title becomes the squash-merge commit). Every
+  pull request must be linked to an issue. Enforcement is preventive and applied
+  at the organization level; **Renovate** pull requests are exempt.
+
+* **Signed commits** — All commits must be signed. See the
+  [GitHub documentation on signing commits](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits).
+
+* **Labels** — Every issue carries one primary type label matching its title
+  prefix (`feature` for `feat:`, `bug` for `fix:`, `documentation` for `docs:`)
+  plus optional area labels. Do not use the deprecated `enhancement` /
+  `feature request` labels — use `feature`. See
+  [`.github/LABELS.md`](.github/LABELS.md) for the shared palette
+  ([`.github/labels.yml`](.github/labels.yml)).
+<!-- filigran-conventions:end -->
