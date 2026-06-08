@@ -35,8 +35,9 @@ impl ApiOpenAEV {
             with_proxy: settings.openaev.with_proxy,
             http_proxy: settings.openaev.http_proxy.clone(),
             https_proxy: settings.openaev.https_proxy.clone(),
-            platform_name: "openaev",
-        });
+            platform_name: "openaev".into(),
+        })
+        .unwrap_or_else(|e| panic!("Failed to build HTTP client for platform 'openaev': {}", e));
 
         let private_key = crate::private_key().clone();
 

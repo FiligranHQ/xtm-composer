@@ -18,7 +18,7 @@ pub struct HttpClientConfig {
     pub with_proxy: bool,
     pub http_proxy: Option<String>,
     pub https_proxy: Option<String>,
-    pub platform_name: &'static str,
+    pub platform_name: String,
 }
 
 /// Build a reqwest HTTP client configured with proxy and TLS settings.
@@ -26,7 +26,7 @@ pub struct HttpClientConfig {
 /// - `with_proxy: false` → disables all proxies (ignores system env vars).
 /// - `with_proxy: true` + explicit `http_proxy`/`https_proxy` → uses configured proxies.
 /// - `with_proxy: true` + no explicit proxy → uses system proxies (HTTP_PROXY/HTTPS_PROXY env vars).
-pub fn build_http_client(config: &HttpClientConfig) -> reqwest::Client {
+pub fn build_http_client(config: &HttpClientConfig) -> Result<reqwest::Client, reqwest::Error> {
     let mut client_builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(config.request_timeout))
         .connect_timeout(Duration::from_secs(config.connect_timeout))
@@ -34,15 +34,15 @@ pub fn build_http_client(config: &HttpClientConfig) -> reqwest::Client {
 
     if config.with_proxy {
         if let Some(http_proxy) = &config.http_proxy {
-            info!(platform = config.platform_name, proxy = %http_proxy, "Using explicit HTTP proxy");
+            info!(platform = %config.platform_name, "Using explicit HTTP proxy");
             let proxy = reqwest::Proxy::http(http_proxy)
-                .expect("Invalid HTTP proxy URL configuration");
+                .unwrap_or_else(|e| panic!("Invalid http_proxy for platform '{}': {}", config.platform_name, e));
             client_builder = client_builder.proxy(proxy);
         }
         if let Some(https_proxy) = &config.https_proxy {
-            info!(platform = config.platform_name, proxy = %https_proxy, "Using explicit HTTPS proxy");
+            info!(platform = %config.platform_name, "Using explicit HTTPS proxy");
             let proxy = reqwest::Proxy::https(https_proxy)
-                .expect("Invalid HTTPS proxy URL configuration");
+                .unwrap_or_else(|e| panic!("Invalid https_proxy for platform '{}': {}", config.platform_name, e));
             client_builder = client_builder.proxy(proxy);
         }
         // If with_proxy is true but no explicit proxies, reqwest uses system proxies by default
@@ -51,7 +51,7 @@ pub fn build_http_client(config: &HttpClientConfig) -> reqwest::Client {
         client_builder = client_builder.no_proxy();
     }
 
-    client_builder.build().unwrap()
+    client_builder.build()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -157,14 +157,14 @@ fn append_proxy_envs(
         envs.push(EnvVariable {
             key: "HTTP_PROXY".into(),
             value: url,
-            is_sensitive: false,
+            is_sensitive: true, // may contain credentials (e.g. http://user:pass@proxy:8080)
         });
     }
     if let Some(url) = resolved_https {
         envs.push(EnvVariable {
             key: "HTTPS_PROXY".into(),
             value: url,
-            is_sensitive: false,
+            is_sensitive: true, // may contain credentials (e.g. http://user:pass@proxy:8080)
         });
     }
     if let Some(val) = resolved_no_proxy {
@@ -218,27 +218,30 @@ impl ApiConnector {
         });
 
         // Inject proxy environment variables into the connector container
-        let (with_proxy, http_proxy, https_proxy, no_proxy) = match self.platform.as_str() {
-            "openaev" => (
-                settings.openaev.with_proxy,
-                settings.openaev.http_proxy.clone(),
-                settings.openaev.https_proxy.clone(),
-                settings.openaev.no_proxy.clone(),
-            ),
-            _ => (
+        let proxy_config = match self.platform.as_str() {
+            "opencti" => Some((
                 settings.opencti.with_proxy,
                 settings.opencti.http_proxy.clone(),
                 settings.opencti.https_proxy.clone(),
                 settings.opencti.no_proxy.clone(),
-            ),
+            )),
+            "openaev" => Some((
+                settings.openaev.with_proxy,
+                settings.openaev.http_proxy.clone(),
+                settings.openaev.https_proxy.clone(),
+                settings.openaev.no_proxy.clone(),
+            )),
+            _ => None,
         };
-        append_proxy_envs(
-            &mut envs,
-            with_proxy,
-            http_proxy.as_deref(),
-            https_proxy.as_deref(),
-            no_proxy.as_deref(),
-        );
+        if let Some((with_proxy, http_proxy, https_proxy, no_proxy)) = proxy_config {
+            append_proxy_envs(
+                &mut envs,
+                with_proxy,
+                http_proxy.as_deref(),
+                https_proxy.as_deref(),
+                no_proxy.as_deref(),
+            );
+        }
 
         envs
     }
@@ -335,7 +338,7 @@ mod tests {
             with_proxy: false,
             http_proxy: None,
             https_proxy: None,
-            platform_name: "test",
+            platform_name: "test".into(),
         }
     }
 
@@ -345,7 +348,7 @@ mod tests {
             with_proxy: false,
             ..base_config()
         };
-        let client = build_http_client(&config);
+        let client = build_http_client(&config).unwrap();
         // Client builds successfully with no proxy
         drop(client);
     }
@@ -356,7 +359,7 @@ mod tests {
             with_proxy: true,
             ..base_config()
         };
-        let client = build_http_client(&config);
+        let client = build_http_client(&config).unwrap();
         // Client builds successfully using system proxies
         drop(client);
     }
@@ -369,7 +372,7 @@ mod tests {
             https_proxy: Some("http://127.0.0.1:9999".to_string()),
             ..base_config()
         };
-        let client = build_http_client(&config);
+        let client = build_http_client(&config).unwrap();
         // Client builds successfully with explicit proxy
         drop(client);
     }
@@ -380,7 +383,7 @@ mod tests {
             unsecured_certificate: true,
             ..base_config()
         };
-        let client = build_http_client(&config);
+        let client = build_http_client(&config).unwrap();
         // Client builds successfully accepting invalid certs
         drop(client);
     }
@@ -401,7 +404,7 @@ mod tests {
                 https_proxy: Some(url.to_string()),
                 ..base_config()
             };
-            let client = build_http_client(&config);
+            let client = build_http_client(&config).unwrap();
             drop(client);
         }
     }
@@ -417,7 +420,7 @@ mod tests {
             connect_timeout: 1,
             ..base_config()
         };
-        let client = build_http_client(&config);
+        let client = build_http_client(&config).unwrap();
 
         // Request should fail because the proxy is unreachable
         let result = client.get("http://example.com").send().await;
@@ -441,7 +444,7 @@ mod tests {
             connect_timeout: 2,
             ..base_config()
         };
-        let client = build_http_client(&config);
+        let client = build_http_client(&config).unwrap();
 
         // Send a request in the background
         let request_handle = tokio::spawn(async move {
@@ -481,7 +484,7 @@ mod tests {
             connect_timeout: 1,
             ..base_config()
         };
-        let client = build_http_client(&config);
+        let client = build_http_client(&config).unwrap();
 
         // Send a request — it should NOT go through the proxy
         let request_handle = tokio::spawn(async move {
@@ -696,7 +699,7 @@ mod tests {
     }
 
     #[test]
-    fn append_proxy_envs_does_not_mark_as_sensitive() {
+    fn append_proxy_envs_marks_proxy_urls_as_sensitive() {
         let _guard = ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var("HTTP_PROXY");
@@ -714,8 +717,46 @@ mod tests {
             Some("internal"),
         );
 
-        for env in &envs {
-            assert!(!env.is_sensitive, "Proxy env vars should not be marked sensitive");
+        // HTTP_PROXY and HTTPS_PROXY should be sensitive (may contain credentials)
+        assert!(envs[0].is_sensitive, "HTTP_PROXY should be marked sensitive");
+        assert!(envs[1].is_sensitive, "HTTPS_PROXY should be marked sensitive");
+        // NO_PROXY is not sensitive (just hostnames)
+        assert!(!envs[2].is_sensitive, "NO_PROXY should not be marked sensitive");
+    }
+
+    #[test]
+    fn unknown_platform_does_not_inject_proxy_envs() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // Set env vars that WOULD be injected if the platform were recognized
+        unsafe {
+            std::env::set_var("HTTP_PROXY", "http://should-not-appear:8080");
+            std::env::set_var("HTTPS_PROXY", "https://should-not-appear:8080");
+            std::env::set_var("NO_PROXY", "should-not-appear");
+        }
+
+        // Simulate the match logic from container_envs() for an unknown platform
+        let platform = "unknown_platform";
+        let proxy_config = match platform {
+            "opencti" => Some((true, Some("http://proxy:8080"), Some("https://proxy:8080"), Some("localhost"))),
+            "openaev" => Some((true, Some("http://proxy:8080"), Some("https://proxy:8080"), Some("localhost"))),
+            _ => None,
+        };
+
+        let mut envs = Vec::new();
+        if let Some((with_proxy, http_proxy, https_proxy, no_proxy)) = proxy_config {
+            append_proxy_envs(&mut envs, with_proxy, http_proxy, https_proxy, no_proxy);
+        }
+
+        assert!(
+            envs.is_empty(),
+            "Unknown platform should NOT inject any proxy env vars, got: {:?}",
+            envs
+        );
+
+        unsafe {
+            std::env::remove_var("HTTP_PROXY");
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::remove_var("NO_PROXY");
         }
     }
 }

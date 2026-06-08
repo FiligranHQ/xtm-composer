@@ -44,8 +44,9 @@ impl ApiOpenCTI {
             with_proxy: settings.opencti.with_proxy,
             http_proxy: settings.opencti.http_proxy.clone(),
             https_proxy: settings.opencti.https_proxy.clone(),
-            platform_name: "opencti",
-        });
+            platform_name: "opencti".into(),
+        })
+        .unwrap_or_else(|e| panic!("Failed to build HTTP client for platform 'opencti': {}", e));
 
         Self {
             api_uri,
