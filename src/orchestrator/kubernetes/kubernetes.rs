@@ -1,4 +1,5 @@
 use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::config::settings::Kubernetes;
 use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
@@ -7,7 +8,8 @@ use async_trait::async_trait;
 use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{
-    Container, LocalObjectReference, Secret, ContainerStatus, EnvVar, Pod, PodSpec, PodTemplateSpec, ResourceRequirements,
+    Container, ContainerStatus, EnvVar, LocalObjectReference, Pod, PodSpec, PodTemplateSpec,
+    ResourceRequirements, Secret, SecretVolumeSource, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use kube::api::{DeleteParams, LogParams, Patch, PatchParams};
@@ -15,6 +17,7 @@ use kube::{
     Client,
     api::{Api, ListParams, PostParams, ResourceExt},
 };
+use std::fs;
 use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, error, info, warn};
 
@@ -28,6 +31,7 @@ impl KubeOrchestrator {
         Self {
             pods,
             deployments,
+            secrets,
             config,
         }
     }
@@ -87,6 +91,62 @@ impl KubeOrchestrator {
                 DEFAULT_POLICY.to_string()
             }
             None => DEFAULT_POLICY.to_string(),
+        }
+    }
+
+    fn proxy_ca_secret_name(name: &str) -> String {
+        let mut base = format!("{}-proxy-ca", name);
+        if base.len() > 63 {
+            base.truncate(63);
+        }
+        base
+    }
+
+    async fn upsert_proxy_ca_secret(&self, connector: &ApiConnector) -> Option<String> {
+        let ca_path = connector.proxy_ca_host_filepath()?;
+        let cert = match fs::read_to_string(&ca_path) {
+            Ok(content) => content,
+            Err(err) => {
+                error!(
+                    connector_id = connector.id,
+                    path = ca_path,
+                    error = err.to_string(),
+                    "Failed to read HTTPS proxy CA file for Kubernetes secret"
+                );
+                return None;
+            }
+        };
+        let secret_name = Self::proxy_ca_secret_name(&connector.container_name());
+
+        let _ = self
+            .secrets
+            .delete(secret_name.as_str(), &DeleteParams::default())
+            .await;
+
+        let proxy_secret = Secret {
+            metadata: ObjectMeta {
+                name: Some(secret_name.clone()),
+                ..Default::default()
+            },
+            string_data: Some(BTreeMap::from([("ca.crt".to_string(), cert)])),
+            type_: Some("Opaque".to_string()),
+            ..Default::default()
+        };
+
+        match self
+            .secrets
+            .create(&PostParams::default(), &proxy_secret)
+            .await
+        {
+            Ok(_) => Some(secret_name),
+            Err(err) => {
+                error!(
+                    connector_id = connector.id,
+                    error = err.to_string(),
+                    "Failed to create proxy CA secret"
+                );
+                None
+            }
         }
     }
 
@@ -164,6 +224,7 @@ impl KubeOrchestrator {
         &self,
         connector: &ApiConnector,
         labels: HashMap<String, String>,
+        proxy_ca_secret_name: Option<String>,
     ) -> Deployment {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(connector);
@@ -177,6 +238,33 @@ impl KubeOrchestrator {
             match_labels: Some(deployment_labels.clone()),
             ..Default::default()
         };
+        let mut container = Container {
+            name: connector.container_name(),
+            image: Some(image.clone()),
+            env: Some(pod_env),
+            image_pull_policy: Some(self.get_image_pull_policy()),
+            resources: self.get_image_resources(),
+            ..Default::default()
+        };
+        let mut volumes: Option<Vec<Volume>> = None;
+        if let Some(secret_name) = proxy_ca_secret_name {
+            container.volume_mounts = Some(vec![VolumeMount {
+                name: "proxy-ca-cert".to_string(),
+                mount_path: PROXY_CA_CERT_MOUNT_PATH.to_string(),
+                sub_path: Some("ca.crt".to_string()),
+                read_only: Some(true),
+                ..Default::default()
+            }]);
+            volumes = Some(vec![Volume {
+                name: "proxy-ca-cert".to_string(),
+                secret: Some(SecretVolumeSource {
+                    secret_name: Some(secret_name),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }]);
+        }
+
         let target_deployment = Deployment {
             metadata: ObjectMeta {
                 name: Some(connector.container_name()),
@@ -202,14 +290,8 @@ impl KubeOrchestrator {
                                 name: resolver.get_kubernetes_secret_name().unwrap(),
                             }]
                         }),
-                        containers: vec![Container {
-                            name: connector.container_name(),
-                            image: Some(image.clone()),
-                            env: Some(pod_env),
-                            image_pull_policy: Some(self.get_image_pull_policy()),
-                            resources: self.get_image_resources(),
-                            ..Default::default()
-                        }],
+                        containers: vec![container],
+                        volumes,
                         ..Default::default()
                     }),
                     ..Default::default()
@@ -331,11 +413,18 @@ impl Orchestrator for KubeOrchestrator {
                 "Fail removing the deployment"
             ),
         }
+
+        let proxy_secret_name = Self::proxy_ca_secret_name(&container.name);
+        let _ = self
+            .secrets
+            .delete(proxy_secret_name.as_str(), &DeleteParams::default())
+            .await;
     }
 
     async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let labels = self.labels(connector);
-        let deployment_patch = self.build_configuration(connector, labels);
+        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(connector).await;
+        let deployment_patch = self.build_configuration(connector, labels, proxy_ca_secret_name);
         let patch_value = Self::build_refresh_patch(&deployment_patch);
         let patch = Patch::Merge(&patch_value);
         let name = connector.container_name();
@@ -358,7 +447,9 @@ impl Orchestrator for KubeOrchestrator {
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let labels = self.labels(connector);
-        let deployment_creation = self.build_configuration(connector, labels);
+        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(connector).await;
+        let deployment_creation =
+            self.build_configuration(connector, labels, proxy_ca_secret_name);
         match self
             .deployments
             .create(&PostParams::default(), &deployment_creation)

@@ -10,6 +10,18 @@ pub mod openaev;
 pub mod opencti;
 mod decrypt_value;
 
+pub const PROXY_CA_CERT_MOUNT_PATH: &str = "/etc/ssl/certs/xtm-proxy-ca.crt";
+
+#[derive(Debug, Clone)]
+struct PlatformProxyConfig {
+    with_proxy: bool,
+    http_proxy: Option<String>,
+    https_proxy: Option<String>,
+    no_proxy: Option<String>,
+    https_proxy_ca: Option<String>,
+    https_proxy_reject_unauthorized: bool,
+}
+
 /// Configuration for building an HTTP client with proxy and TLS settings.
 pub struct HttpClientConfig {
     pub request_timeout: u64,
@@ -176,7 +188,78 @@ fn append_proxy_envs(
     }
 }
 
+/// Append commonly-supported TLS CA env vars so connector runtimes can trust
+/// an injected corporate proxy root certificate.
+fn append_proxy_ca_envs(envs: &mut Vec<EnvVariable>, with_proxy: bool, has_proxy_ca: bool) {
+    if !with_proxy || !has_proxy_ca {
+        return;
+    }
+
+    for key in [
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "CURL_CA_BUNDLE",
+    ] {
+        envs.push(EnvVariable {
+            key: key.to_string(),
+            value: PROXY_CA_CERT_MOUNT_PATH.to_string(),
+            is_sensitive: false,
+        });
+    }
+}
+
+fn append_proxy_tls_policy_envs(
+    envs: &mut Vec<EnvVariable>,
+    with_proxy: bool,
+    https_proxy_reject_unauthorized: bool,
+) {
+    if with_proxy && !https_proxy_reject_unauthorized {
+        envs.push(EnvVariable {
+            key: "NODE_TLS_REJECT_UNAUTHORIZED".to_string(),
+            value: "0".to_string(),
+            is_sensitive: false,
+        });
+    }
+}
+
 impl ApiConnector {
+    fn platform_proxy_config(&self) -> Option<PlatformProxyConfig> {
+        let settings = crate::settings();
+        match self.platform.as_str() {
+            "opencti" => Some(PlatformProxyConfig {
+                with_proxy: settings.opencti.with_proxy,
+                http_proxy: settings.opencti.http_proxy.clone(),
+                https_proxy: settings.opencti.https_proxy.clone(),
+                no_proxy: settings.opencti.no_proxy.clone(),
+                https_proxy_ca: settings.opencti.https_proxy_ca.clone(),
+                https_proxy_reject_unauthorized: settings
+                    .opencti
+                    .https_proxy_reject_unauthorized,
+            }),
+            "openaev" => Some(PlatformProxyConfig {
+                with_proxy: settings.openaev.with_proxy,
+                http_proxy: settings.openaev.http_proxy.clone(),
+                https_proxy: settings.openaev.https_proxy.clone(),
+                no_proxy: settings.openaev.no_proxy.clone(),
+                https_proxy_ca: settings.openaev.https_proxy_ca.clone(),
+                https_proxy_reject_unauthorized: settings
+                    .openaev
+                    .https_proxy_reject_unauthorized,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Return the configured host file path for the HTTPS proxy CA certificate.
+    pub fn proxy_ca_host_filepath(&self) -> Option<String> {
+        let config = self.platform_proxy_config()?;
+        if !config.with_proxy {
+            return None;
+        }
+        config.https_proxy_ca
+    }
+
     pub fn container_name(&self) -> String {
         self.name
             .clone()
@@ -218,28 +301,23 @@ impl ApiConnector {
         });
 
         // Inject proxy environment variables into the connector container
-        let proxy_config = match self.platform.as_str() {
-            "opencti" => Some((
-                settings.opencti.with_proxy,
-                settings.opencti.http_proxy.clone(),
-                settings.opencti.https_proxy.clone(),
-                settings.opencti.no_proxy.clone(),
-            )),
-            "openaev" => Some((
-                settings.openaev.with_proxy,
-                settings.openaev.http_proxy.clone(),
-                settings.openaev.https_proxy.clone(),
-                settings.openaev.no_proxy.clone(),
-            )),
-            _ => None,
-        };
-        if let Some((with_proxy, http_proxy, https_proxy, no_proxy)) = proxy_config {
+        if let Some(proxy_config) = self.platform_proxy_config() {
             append_proxy_envs(
                 &mut envs,
-                with_proxy,
-                http_proxy.as_deref(),
-                https_proxy.as_deref(),
-                no_proxy.as_deref(),
+                proxy_config.with_proxy,
+                proxy_config.http_proxy.as_deref(),
+                proxy_config.https_proxy.as_deref(),
+                proxy_config.no_proxy.as_deref(),
+            );
+            append_proxy_ca_envs(
+                &mut envs,
+                proxy_config.with_proxy,
+                proxy_config.https_proxy_ca.is_some(),
+            );
+            append_proxy_tls_policy_envs(
+                &mut envs,
+                proxy_config.with_proxy,
+                proxy_config.https_proxy_reject_unauthorized,
             );
         }
 
@@ -722,6 +800,50 @@ mod tests {
         assert!(envs[1].is_sensitive, "HTTPS_PROXY should be marked sensitive");
         // NO_PROXY is not sensitive (just hostnames)
         assert!(!envs[2].is_sensitive, "NO_PROXY should not be marked sensitive");
+    }
+
+    #[test]
+    fn append_proxy_ca_envs_injects_tls_ca_env_vars() {
+        let mut envs = Vec::new();
+        append_proxy_ca_envs(&mut envs, true, true);
+
+        assert_eq!(envs.len(), 4);
+        assert_eq!(envs[0].key, "SSL_CERT_FILE");
+        assert_eq!(envs[0].value, PROXY_CA_CERT_MOUNT_PATH);
+        assert_eq!(envs[1].key, "REQUESTS_CA_BUNDLE");
+        assert_eq!(envs[1].value, PROXY_CA_CERT_MOUNT_PATH);
+        assert_eq!(envs[2].key, "NODE_EXTRA_CA_CERTS");
+        assert_eq!(envs[2].value, PROXY_CA_CERT_MOUNT_PATH);
+        assert_eq!(envs[3].key, "CURL_CA_BUNDLE");
+        assert_eq!(envs[3].value, PROXY_CA_CERT_MOUNT_PATH);
+    }
+
+    #[test]
+    fn append_proxy_ca_envs_skips_when_disabled_or_missing_ca() {
+        let mut envs = Vec::new();
+        append_proxy_ca_envs(&mut envs, false, true);
+        append_proxy_ca_envs(&mut envs, true, false);
+        assert!(
+            envs.is_empty(),
+            "TLS CA env vars should not be injected without active proxy CA config"
+        );
+    }
+
+    #[test]
+    fn append_proxy_tls_policy_envs_sets_node_tls_when_reject_disabled() {
+        let mut envs = Vec::new();
+        append_proxy_tls_policy_envs(&mut envs, true, false);
+        assert_eq!(envs.len(), 1);
+        assert_eq!(envs[0].key, "NODE_TLS_REJECT_UNAUTHORIZED");
+        assert_eq!(envs[0].value, "0");
+    }
+
+    #[test]
+    fn append_proxy_tls_policy_envs_skips_when_reject_enabled_or_proxy_disabled() {
+        let mut envs = Vec::new();
+        append_proxy_tls_policy_envs(&mut envs, true, true);
+        append_proxy_tls_policy_envs(&mut envs, false, false);
+        assert!(envs.is_empty());
     }
 
     #[test]

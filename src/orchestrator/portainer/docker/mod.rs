@@ -9,6 +9,7 @@ pub mod portainer;
 #[serde(rename_all(serialize = "PascalCase"))]
 struct PortainerDeployHostConfig {
     network_mode: Option<String>,
+    binds: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]

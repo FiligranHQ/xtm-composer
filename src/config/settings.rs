@@ -6,6 +6,10 @@ use std::env;
 
 const ENV_PRODUCTION: &str = "production";
 
+fn default_https_proxy_reject_unauthorized() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Logger {
@@ -73,6 +77,9 @@ pub struct OpenCTI {
     pub http_proxy: Option<String>,
     pub https_proxy: Option<String>,
     pub no_proxy: Option<String>,
+    pub https_proxy_ca: Option<String>,
+    #[serde(default = "default_https_proxy_reject_unauthorized")]
+    pub https_proxy_reject_unauthorized: bool,
     pub logs_schedule: u64,
     pub request_timeout: u64,
     pub connect_timeout: u64,
@@ -90,6 +97,9 @@ pub struct OpenAEV {
     pub http_proxy: Option<String>,
     pub https_proxy: Option<String>,
     pub no_proxy: Option<String>,
+    pub https_proxy_ca: Option<String>,
+    #[serde(default = "default_https_proxy_reject_unauthorized")]
+    pub https_proxy_reject_unauthorized: bool,
     pub logs_schedule: u64,
     pub request_timeout: u64,
     pub connect_timeout: u64,

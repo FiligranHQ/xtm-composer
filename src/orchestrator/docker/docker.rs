@@ -1,6 +1,8 @@
 use crate::api::{ApiConnector, ConnectorStatus};
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::image::Image;
+use crate::api::PROXY_CA_CERT_MOUNT_PATH;
+use crate::orchestrator::ensure_proxy_ca_file;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use bollard::Docker;
@@ -278,6 +280,15 @@ impl Orchestrator for DockerOrchestrator {
                             host_config.ulimits = Some(ulimits_vec);
                         }
                     }
+                }
+
+                if let Some(proxy_ca_host_path) = ensure_proxy_ca_file(connector) {
+                    let mut binds = host_config.binds.unwrap_or_default();
+                    binds.push(format!(
+                        "{}:{}:ro",
+                        proxy_ca_host_path, PROXY_CA_CERT_MOUNT_PATH
+                    ));
+                    host_config.binds = Some(binds);
                 }
 
                 let config = ContainerCreateBody {

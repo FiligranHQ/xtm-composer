@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::Path;
+use tracing::warn;
 
 pub mod composer;
 pub mod docker;
@@ -55,6 +57,20 @@ pub fn build_labels(manager_id: &str, connector: &ApiConnector) -> HashMap<Strin
     labels.insert("opencti-connector-id".into(), connector.id.clone());
     labels.insert("opencti-platform".into(), connector.platform.clone());
     labels
+}
+
+pub fn ensure_proxy_ca_file(connector: &ApiConnector) -> Option<String> {
+    let filepath = connector.proxy_ca_host_filepath()?;
+    if Path::new(&filepath).exists() {
+        Some(filepath)
+    } else {
+        warn!(
+            connector_id = connector.id,
+            path = filepath,
+            "HTTPS proxy CA file does not exist on host"
+        );
+        None
+    }
 }
 
 #[async_trait]

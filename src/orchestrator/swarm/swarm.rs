@@ -1,11 +1,14 @@
 use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::orchestrator::image::Image;
 use crate::orchestrator::swarm::SwarmOrchestrator;
+use crate::orchestrator::ensure_proxy_ca_file;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use bollard::auth::DockerCredentials;
 use bollard::models::{
-    Limit, NetworkAttachmentConfig, ResourceObject, ResourcesUlimits, ServiceSpec,
+    Limit, Mount, MountTypeEnum, NetworkAttachmentConfig, ResourceObject, ResourcesUlimits,
+    ServiceSpec,
     ServiceSpecMode, ServiceSpecModeReplicated, TaskSpec, TaskSpecContainerSpec,
     TaskSpecContainerSpecDnsConfig, TaskSpecPlacement, TaskSpecPlacementPreferences,
     TaskSpecPlacementSpread, TaskSpecResources, TaskSpecRestartPolicy,
@@ -352,6 +355,18 @@ impl Orchestrator for SwarmOrchestrator {
                 }
                 if let Some(stop_grace_period) = swarm_opts.stop_grace_period {
                     container_spec.stop_grace_period = Some(stop_grace_period);
+                }
+
+                if let Some(proxy_ca_host_path) = ensure_proxy_ca_file(connector) {
+                    let mut mounts = container_spec.mounts.unwrap_or_default();
+                    mounts.push(Mount {
+                        typ: Some(MountTypeEnum::BIND),
+                        source: Some(proxy_ca_host_path),
+                        target: Some(PROXY_CA_CERT_MOUNT_PATH.to_string()),
+                        read_only: Some(true),
+                        ..Default::default()
+                    });
+                    container_spec.mounts = Some(mounts);
                 }
 
                 // Build network attachments
