@@ -17,7 +17,6 @@ use kube::{
     Client,
     api::{Api, ListParams, PostParams, ResourceExt},
 };
-use std::fs;
 use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, error, info, warn};
 
@@ -103,19 +102,7 @@ impl KubeOrchestrator {
     }
 
     async fn upsert_proxy_ca_secret(&self, connector: &ApiConnector) -> Option<String> {
-        let ca_path = connector.proxy_ca_host_filepath()?;
-        let cert = match fs::read_to_string(&ca_path) {
-            Ok(content) => content,
-            Err(err) => {
-                error!(
-                    connector_id = connector.id,
-                    path = ca_path,
-                    error = err.to_string(),
-                    "Failed to read HTTPS proxy CA file for Kubernetes secret"
-                );
-                return None;
-            }
-        };
+        let cert = connector.proxy_ca_bundle()?;
         let secret_name = Self::proxy_ca_secret_name(&connector.container_name());
 
         let _ = self

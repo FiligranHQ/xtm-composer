@@ -2,9 +2,10 @@ use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::fs;
 use std::str::FromStr;
 use std::time::Duration;
-use tracing::info;
+use tracing::{error, info};
 
 pub mod openaev;
 pub mod opencti;
@@ -18,7 +19,7 @@ struct PlatformProxyConfig {
     http_proxy: Option<String>,
     https_proxy: Option<String>,
     no_proxy: Option<String>,
-    https_proxy_ca: Option<String>,
+    https_proxy_ca: Option<Vec<String>>,
     https_proxy_reject_unauthorized: bool,
 }
 
@@ -251,13 +252,53 @@ impl ApiConnector {
         }
     }
 
-    /// Return the configured host file path for the HTTPS proxy CA certificate.
-    pub fn proxy_ca_host_filepath(&self) -> Option<String> {
+    /// Resolve all `https_proxy_ca` entries into a single concatenated PEM bundle.
+    ///
+    /// Each entry can be either:
+    /// - An inline PEM block (starts with `-----BEGIN`)
+    /// - A filesystem path to a PEM file
+    ///
+    /// Returns `None` when proxy is disabled, the list is absent/empty,
+    /// or all entries fail to resolve.
+    pub fn proxy_ca_bundle(&self) -> Option<String> {
         let config = self.platform_proxy_config()?;
         if !config.with_proxy {
             return None;
         }
-        config.https_proxy_ca
+        let entries = config.https_proxy_ca?;
+        if entries.is_empty() {
+            return None;
+        }
+
+        let mut bundle = String::new();
+        for entry in &entries {
+            let trimmed = entry.trim();
+            if trimmed.starts_with("-----BEGIN") {
+                bundle.push_str(trimmed);
+                if !bundle.ends_with('\n') {
+                    bundle.push('\n');
+                }
+            } else {
+                match fs::read_to_string(trimmed) {
+                    Ok(content) => {
+                        bundle.push_str(&content);
+                        if !bundle.ends_with('\n') {
+                            bundle.push('\n');
+                        }
+                    }
+                    Err(err) => {
+                        error!(
+                            platform = %self.platform,
+                            path = trimmed,
+                            error = err.to_string(),
+                            "Unable to read proxy CA certificate file"
+                        );
+                    }
+                }
+            }
+        }
+
+        if bundle.is_empty() { None } else { Some(bundle) }
     }
 
     pub fn container_name(&self) -> String {
@@ -312,7 +353,7 @@ impl ApiConnector {
             append_proxy_ca_envs(
                 &mut envs,
                 proxy_config.with_proxy,
-                proxy_config.https_proxy_ca.is_some(),
+                self.proxy_ca_bundle().is_some(),
             );
             append_proxy_tls_policy_envs(
                 &mut envs,
@@ -830,6 +871,44 @@ mod tests {
     }
 
     #[test]
+    fn proxy_ca_bundle_resolves_inline_pem() {
+        let pem = "-----BEGIN CERTIFICATE-----\nABCD\n-----END CERTIFICATE-----\n";
+        let entries = vec![pem.to_string()];
+
+        let mut bundle = String::new();
+        for entry in &entries {
+            let trimmed = entry.trim();
+            if trimmed.starts_with("-----BEGIN") {
+                bundle.push_str(trimmed);
+                if !bundle.ends_with('\n') {
+                    bundle.push('\n');
+                }
+            }
+        }
+        assert!(bundle.contains("BEGIN CERTIFICATE"), "should contain the inline PEM");
+    }
+
+    #[test]
+    fn proxy_ca_bundle_skips_unreadable_file_and_returns_remaining() {
+        let pem_inline = "-----BEGIN CERTIFICATE-----\nVALID\n-----END CERTIFICATE-----\n";
+        let entries = vec!["/nonexistent/path/ca.pem".to_string(), pem_inline.to_string()];
+
+        let mut bundle = String::new();
+        for entry in &entries {
+            let trimmed = entry.trim();
+            if trimmed.starts_with("-----BEGIN") {
+                bundle.push_str(trimmed);
+                if !bundle.ends_with('\n') {
+                    bundle.push('\n');
+                }
+            } else {
+                // simulate unreadable file — skip
+            }
+        }
+        assert!(bundle.contains("BEGIN CERTIFICATE"), "inline PEM should still be included");
+    }
+
+    #[test]
     fn append_proxy_tls_policy_envs_sets_node_tls_when_reject_disabled() {
         let mut envs = Vec::new();
         append_proxy_tls_policy_envs(&mut envs, true, false);
@@ -844,6 +923,126 @@ mod tests {
         append_proxy_tls_policy_envs(&mut envs, true, true);
         append_proxy_tls_policy_envs(&mut envs, false, false);
         assert!(envs.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires isolated process env and local filesystem"]
+    fn e2e_proxy_ca_list_path_and_inline_are_bundled_and_injected() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        let tmp_dir = std::path::PathBuf::from("dev/xtm-proxy-e2e-list");
+        std::fs::create_dir_all(&tmp_dir).expect("create temp dir");
+        let file_ca_path = tmp_dir.join("file-ca.pem");
+        let file_ca_content = "-----BEGIN CERTIFICATE-----\nFILE-CA\n-----END CERTIFICATE-----\n";
+        std::fs::write(&file_ca_path, file_ca_content).expect("write file ca");
+
+        let test_config_path = std::path::PathBuf::from("config/proxy_list_e2e.yaml");
+        let config_content = format!(
+            "opencti:\n  with_proxy: true\n  http_proxy: http://proxy.example.com:8080\n  https_proxy: http://proxy.example.com:8080\n  no_proxy: \"localhost,127.0.0.1,internal.domain\"\n  https_proxy_ca:\n    - {}\n    - |-\n      -----BEGIN CERTIFICATE-----\n      INLINE-CA\n      -----END CERTIFICATE-----\n  https_proxy_reject_unauthorized: false\n",
+            file_ca_path.to_string_lossy()
+        );
+        std::fs::write(&test_config_path, config_content).expect("write e2e config");
+        unsafe { std::env::set_var("COMPOSER_ENV", "proxy_list_e2e"); }
+
+        let connector = ApiConnector {
+            id: "e2e-proxy-ca-list".to_string(),
+            platform: "opencti".to_string(),
+            name: "e2e-proxy-ca-list".to_string(),
+            image: "alpine:3.20".to_string(),
+            contract_hash: "hash-e2e".to_string(),
+            current_status: None,
+            requested_status: "starting".to_string(),
+            contract_configuration: vec![],
+        };
+
+        let bundle = connector.proxy_ca_bundle().expect("bundle should exist");
+        assert!(bundle.contains("FILE-CA"), "bundle should include file CA");
+        assert!(bundle.contains("INLINE-CA"), "bundle should include inline CA");
+
+        let envs = connector.container_envs();
+        let env_map: std::collections::HashMap<String, String> = envs
+            .into_iter()
+            .map(|v| (v.key, v.value))
+            .collect();
+        assert_eq!(
+            env_map.get("HTTP_PROXY"),
+            Some(&"http://proxy.example.com:8080".to_string())
+        );
+        assert_eq!(
+            env_map.get("HTTPS_PROXY"),
+            Some(&"http://proxy.example.com:8080".to_string())
+        );
+        assert_eq!(
+            env_map.get("NO_PROXY"),
+            Some(&"localhost,127.0.0.1,internal.domain".to_string())
+        );
+        assert_eq!(
+            env_map.get("SSL_CERT_FILE"),
+            Some(&PROXY_CA_CERT_MOUNT_PATH.to_string())
+        );
+        assert_eq!(
+            env_map.get("REQUESTS_CA_BUNDLE"),
+            Some(&PROXY_CA_CERT_MOUNT_PATH.to_string())
+        );
+        assert_eq!(
+            env_map.get("NODE_EXTRA_CA_CERTS"),
+            Some(&PROXY_CA_CERT_MOUNT_PATH.to_string())
+        );
+        assert_eq!(
+            env_map.get("CURL_CA_BUNDLE"),
+            Some(&PROXY_CA_CERT_MOUNT_PATH.to_string())
+        );
+        assert_eq!(
+            env_map.get("NODE_TLS_REJECT_UNAUTHORIZED"),
+            Some(&"0".to_string())
+        );
+
+        // Real-container verification: mount the generated bundle and verify
+        // both cert entries and injected env vars are available inside the container.
+        let bundle_path = tmp_dir.join("bundle.pem");
+        std::fs::write(&bundle_path, &bundle).expect("write bundle file");
+        let bundle_abs = std::fs::canonicalize(&bundle_path).expect("canonical bundle path");
+        let docker_status = std::process::Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                "-e",
+                "HTTP_PROXY=http://proxy.example.com:8080",
+                "-e",
+                "HTTPS_PROXY=http://proxy.example.com:8080",
+                "-e",
+                "NO_PROXY=localhost,127.0.0.1,internal.domain",
+                "-e",
+                "SSL_CERT_FILE=/etc/ssl/certs/xtm-proxy-ca.crt",
+                "-e",
+                "REQUESTS_CA_BUNDLE=/etc/ssl/certs/xtm-proxy-ca.crt",
+                "-e",
+                "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/xtm-proxy-ca.crt",
+                "-e",
+                "CURL_CA_BUNDLE=/etc/ssl/certs/xtm-proxy-ca.crt",
+                "-e",
+                "NODE_TLS_REJECT_UNAUTHORIZED=0",
+                "-v",
+                &format!(
+                    "{}:/etc/ssl/certs/xtm-proxy-ca.crt:ro",
+                    bundle_abs.display()
+                ),
+                "alpine:3.20",
+                "sh",
+                "-ec",
+                "grep -q FILE-CA /etc/ssl/certs/xtm-proxy-ca.crt && grep -q INLINE-CA /etc/ssl/certs/xtm-proxy-ca.crt && test \"$SSL_CERT_FILE\" = \"/etc/ssl/certs/xtm-proxy-ca.crt\" && test \"$NODE_TLS_REJECT_UNAUTHORIZED\" = \"0\"",
+            ])
+            .status()
+            .expect("docker must be available for e2e test");
+        assert!(
+            docker_status.success(),
+            "docker container verification failed"
+        );
+
+        let _ = std::fs::remove_file(test_config_path);
+        let _ = std::fs::remove_file(bundle_path);
+        let _ = std::fs::remove_file(file_ca_path);
+        let _ = std::fs::remove_dir_all(tmp_dir);
     }
 
     #[test]

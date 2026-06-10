@@ -31,7 +31,12 @@ opencti:
   # http_proxy: http://my-proxy:8080    # HTTP proxy URL (used only when with_proxy is true)
   # https_proxy: http://my-proxy:8080   # HTTPS proxy URL (used only when with_proxy is true)
   # no_proxy: "localhost,127.0.0.1,.internal" # Comma-separated hosts to exclude from proxying
-  # https_proxy_ca: /path/to/proxy-ca.crt # Optional path to CA PEM file on host
+  # https_proxy_ca:                           # Optional list of CA entries (file path or inline PEM)
+  #   - /path/to/proxy-ca.pem                # entry as a file path
+  #   - |                                    # or inline PEM content
+  #     -----BEGIN CERTIFICATE-----
+  #     ...
+  #     -----END CERTIFICATE-----
   # https_proxy_reject_unauthorized: true # Set false to inject NODE_TLS_REJECT_UNAUTHORIZED=0
   logs_schedule: 10 # report logs every 10 seconds maximum
   request_timeout: 30 # HTTP request timeout in seconds (default: 30)
@@ -102,7 +107,12 @@ openaev:
   # http_proxy: http://my-proxy:8080    # HTTP proxy URL (used only when with_proxy is true)
   # https_proxy: http://my-proxy:8080   # HTTPS proxy URL (used only when with_proxy is true)
   # no_proxy: "localhost,127.0.0.1,.internal" # Comma-separated hosts to exclude from proxying
-  # https_proxy_ca: /path/to/proxy-ca.crt # Optional path to CA PEM file on host
+  # https_proxy_ca:                           # Optional list of CA entries (file path or inline PEM)
+  #   - /path/to/proxy-ca.pem                # entry as a file path
+  #   - |                                    # or inline PEM content
+  #     -----BEGIN CERTIFICATE-----
+  #     ...
+  #     -----END CERTIFICATE-----
   # https_proxy_reject_unauthorized: true # Set false to inject NODE_TLS_REJECT_UNAUTHORIZED=0
   logs_schedule: 10 # report logs every 10 seconds maximum
   request_timeout: 30 # HTTP request timeout in seconds (default: 30)
