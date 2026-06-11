@@ -2,7 +2,7 @@ mod connector;
 mod manager;
 mod api_handler;
 
-use crate::api::{ApiConnector, ComposerApi, ConnectorStatus};
+use crate::api::{ApiConnector, ComposerApi, ConnectorStatus, HttpClientConfig, build_http_client};
 use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use std::time::Duration;
@@ -27,14 +27,17 @@ impl ApiOpenAEV {
         let api_uri = format!("{}/api", &settings.openaev.url);
         let daemon = settings.openaev.daemon.clone();
         let logs_schedule = settings.openaev.logs_schedule;
-        let request_timeout = settings.openaev.request_timeout;
-        let connect_timeout = settings.openaev.connect_timeout;
 
-        let http_client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(connect_timeout))
-            .timeout(Duration::from_secs(request_timeout))
-            .build()
-            .unwrap(); // or handle the error appropriately
+        let http_client = build_http_client(&HttpClientConfig {
+            request_timeout: settings.openaev.request_timeout,
+            connect_timeout: settings.openaev.connect_timeout,
+            unsecured_certificate: settings.openaev.unsecured_certificate,
+            with_proxy: settings.openaev.with_proxy,
+            http_proxy: settings.openaev.http_proxy.clone(),
+            https_proxy: settings.openaev.https_proxy.clone(),
+            platform_name: "openaev".into(),
+        })
+        .unwrap_or_else(|e| panic!("Failed to build HTTP client for platform 'openaev': {}", e));
 
         let private_key = crate::private_key().clone();
 

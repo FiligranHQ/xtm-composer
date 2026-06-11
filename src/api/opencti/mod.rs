@@ -1,4 +1,4 @@
-use crate::api::{ApiConnector, ComposerApi, ConnectorStatus};
+use crate::api::{ApiConnector, ComposerApi, ConnectorStatus, HttpClientConfig, build_http_client};
 use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use cynic::Operation;
@@ -20,11 +20,10 @@ pub mod opencti {}
 
 pub struct ApiOpenCTI {
     api_uri: String,
+    http_client: reqwest::Client,
     bearer: String,
     daemon: Daemon,
     logs_schedule: u64,
-    request_timeout: u64,
-    connect_timeout: u64,
     private_key: RsaPrivateKey,
 }
 
@@ -35,17 +34,26 @@ impl ApiOpenCTI {
         let api_uri = format!("{}/graphql", &settings.opencti.url);
         let daemon = settings.opencti.daemon.clone();
         let logs_schedule = settings.opencti.logs_schedule;
-        let request_timeout = settings.opencti.request_timeout;
-        let connect_timeout = settings.opencti.connect_timeout;
         // Use the singleton private key
         let private_key = crate::private_key().clone();
+
+        let http_client = build_http_client(&HttpClientConfig {
+            request_timeout: settings.opencti.request_timeout,
+            connect_timeout: settings.opencti.connect_timeout,
+            unsecured_certificate: settings.opencti.unsecured_certificate,
+            with_proxy: settings.opencti.with_proxy,
+            http_proxy: settings.opencti.http_proxy.clone(),
+            https_proxy: settings.opencti.https_proxy.clone(),
+            platform_name: "opencti".into(),
+        })
+        .unwrap_or_else(|e| panic!("Failed to build HTTP client for platform 'opencti': {}", e));
+
         Self {
             api_uri,
+            http_client,
             bearer,
             daemon,
             logs_schedule,
-            request_timeout,
-            connect_timeout,
             private_key
         }
     }
@@ -59,11 +67,7 @@ impl ApiOpenCTI {
         R: DeserializeOwned + 'static,
     {
         use cynic::http::ReqwestExt;
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(self.request_timeout))
-            .connect_timeout(Duration::from_secs(self.connect_timeout))
-            .build()
-            .unwrap()
+        self.http_client
             .post(self.api_uri.clone())
             .header(AUTHORIZATION_HEADER, self.bearer.clone().as_str())
             .run_graphql(query)

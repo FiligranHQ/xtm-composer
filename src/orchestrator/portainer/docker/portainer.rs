@@ -1,7 +1,9 @@
 use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::config::settings::Portainer;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::image::Image;
+use crate::orchestrator::ensure_proxy_ca_file;
 use crate::orchestrator::portainer::docker::{
     PortainerApiError, PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
     PortainerDockerOrchestrator, PortainerGetResponse,
@@ -212,12 +214,15 @@ impl Orchestrator for PortainerDockerOrchestrator {
             .iter()
             .map(|config| format!("{}={}", config.key, config.value))
             .collect();
+        let proxy_ca_bind = ensure_proxy_ca_file(connector)
+            .map(|host_path| format!("{}:{}:ro", host_path, PROXY_CA_CERT_MOUNT_PATH));
         let json_body = PortainerDeployPayload {
             env: container_envs,
             image,
             labels: image_labels,
             host_config: PortainerDeployHostConfig {
                 network_mode: portainer_config.network_mode,
+                binds: proxy_ca_bind.map(|bind| vec![bind]),
             },
         };
         let deploy_response = self

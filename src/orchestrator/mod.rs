@@ -3,6 +3,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use tracing::error;
 
 pub mod composer;
 pub mod docker;
@@ -55,6 +58,40 @@ pub fn build_labels(manager_id: &str, connector: &ApiConnector) -> HashMap<Strin
     labels.insert("opencti-connector-id".into(), connector.id.clone());
     labels.insert("opencti-platform".into(), connector.platform.clone());
     labels
+}
+
+pub fn ensure_proxy_ca_file(connector: &ApiConnector) -> Option<String> {
+    let cert_content = connector.proxy_ca_bundle()?;
+
+    let base_dir: PathBuf = std::env::temp_dir().join("xtm-composer-proxy-ca");
+    if let Err(err) = fs::create_dir_all(&base_dir) {
+        error!(
+            path = %base_dir.display(),
+            error = err.to_string(),
+            "Unable to create temporary directory for proxy CA bundle"
+        );
+        return None;
+    }
+
+    let normalized_id: String = connector
+        .id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let target_path = base_dir.join(format!(
+        "{}-{}-proxy-ca.crt",
+        connector.platform, normalized_id
+    ));
+    if let Err(err) = fs::write(&target_path, &cert_content) {
+        error!(
+            path = %target_path.display(),
+            error = err.to_string(),
+            "Unable to write proxy CA bundle to temporary file"
+        );
+        return None;
+    }
+
+    Some(target_path.to_string_lossy().to_string())
 }
 
 #[async_trait]

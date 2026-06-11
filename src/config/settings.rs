@@ -2,9 +2,71 @@ use config::{Config, ConfigError, Environment, File};
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::ResourceRequirements;
 use serde::Deserialize;
+use serde::de::{self, Deserializer};
+use std::collections::BTreeMap;
 use std::env;
 
 const ENV_PRODUCTION: &str = "production";
+
+fn default_https_proxy_reject_unauthorized() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ProxyCaRaw {
+    List(Vec<String>),
+    String(String),
+    IndexedMap(BTreeMap<String, String>),
+}
+
+fn deserialize_https_proxy_ca<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<ProxyCaRaw>::deserialize(deserializer)?;
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+
+    let entries = match raw {
+        ProxyCaRaw::List(list) => list,
+        ProxyCaRaw::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.starts_with('[') {
+                serde_json::from_str::<Vec<String>>(trimmed)
+                    .map_err(|e| de::Error::custom(format!("invalid https_proxy_ca JSON array: {e}")))?
+            } else {
+                vec![s]
+            }
+        }
+        ProxyCaRaw::IndexedMap(map) => {
+            let mut indexed: Vec<(usize, String)> = Vec::new();
+            let mut non_indexed: Vec<(String, String)> = Vec::new();
+            for (k, v) in map {
+                if let Ok(idx) = k.parse::<usize>() {
+                    indexed.push((idx, v));
+                } else {
+                    non_indexed.push((k, v));
+                }
+            }
+            indexed.sort_by_key(|(idx, _)| *idx);
+            non_indexed.sort_by(|a, b| a.0.cmp(&b.0));
+
+            indexed
+                .into_iter()
+                .map(|(_, v)| v)
+                .chain(non_indexed.into_iter().map(|(_, v)| v))
+                .collect()
+        }
+    };
+
+    if entries.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(entries))
+    }
+}
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
@@ -70,6 +132,13 @@ pub struct OpenCTI {
     pub token: String,
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
+    pub http_proxy: Option<String>,
+    pub https_proxy: Option<String>,
+    pub no_proxy: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_https_proxy_ca")]
+    pub https_proxy_ca: Option<Vec<String>>,
+    #[serde(default = "default_https_proxy_reject_unauthorized")]
+    pub https_proxy_reject_unauthorized: bool,
     pub logs_schedule: u64,
     pub request_timeout: u64,
     pub connect_timeout: u64,
@@ -84,6 +153,13 @@ pub struct OpenAEV {
     pub token: String,
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
+    pub http_proxy: Option<String>,
+    pub https_proxy: Option<String>,
+    pub no_proxy: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_https_proxy_ca")]
+    pub https_proxy_ca: Option<Vec<String>>,
+    #[serde(default = "default_https_proxy_reject_unauthorized")]
+    pub https_proxy_reject_unauthorized: bool,
     pub logs_schedule: u64,
     pub request_timeout: u64,
     pub connect_timeout: u64,
@@ -189,3 +265,64 @@ impl Settings {
             .try_deserialize()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Deserialize)]
+    struct ProxyCaOnly {
+        #[serde(default, deserialize_with = "deserialize_https_proxy_ca")]
+        https_proxy_ca: Option<Vec<String>>,
+    }
+
+    #[test]
+    fn deserialize_https_proxy_ca_from_sequence() {
+        let input = r#"https_proxy_ca = ["/ca/a.pem", "/ca/b.pem"]"#;
+        let cfg: ProxyCaOnly = config::Config::builder()
+            .add_source(config::File::from_str(input, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(
+            cfg.https_proxy_ca,
+            Some(vec!["/ca/a.pem".to_string(), "/ca/b.pem".to_string()])
+        );
+    }
+
+    #[test]
+    fn deserialize_https_proxy_ca_from_json_array_string() {
+        let input = r#"https_proxy_ca = "[\"/ca/a.pem\",\"/ca/b.pem\"]""#;
+        let cfg: ProxyCaOnly = config::Config::builder()
+            .add_source(config::File::from_str(input, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(
+            cfg.https_proxy_ca,
+            Some(vec!["/ca/a.pem".to_string(), "/ca/b.pem".to_string()])
+        );
+    }
+
+    #[test]
+    fn deserialize_https_proxy_ca_from_indexed_map() {
+        let input = r#"
+            [https_proxy_ca]
+            1 = "/ca/b.pem"
+            0 = "/ca/a.pem"
+        "#;
+        let cfg: ProxyCaOnly = config::Config::builder()
+            .add_source(config::File::from_str(input, config::FileFormat::Toml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(
+            cfg.https_proxy_ca,
+            Some(vec!["/ca/a.pem".to_string(), "/ca/b.pem".to_string()])
+        );
+    }
+}
+
