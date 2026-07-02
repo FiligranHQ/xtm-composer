@@ -336,7 +336,7 @@ impl KubeOrchestrator {
             .as_ref()
             .and_then(|state| state.running.as_ref())
             .and_then(|running| running.started_at.as_ref())
-            .map(|timestamp| timestamp.0.to_rfc3339())
+            .map(|timestamp| timestamp.0.to_string())
     }
 }
 
