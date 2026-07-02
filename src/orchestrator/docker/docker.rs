@@ -186,7 +186,7 @@ impl Orchestrator for DockerOrchestrator {
                     "{} {:?} {:?} pulling...",
                     image,
                     info.status.as_deref(),
-                    info.progress.as_deref()
+                    info.progress_detail.as_ref()
                 );
                 future::ok(())
             })
