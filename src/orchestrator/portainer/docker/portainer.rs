@@ -14,7 +14,7 @@ use base64::Engine;
 use base64::engine::general_purpose;
 use bollard::models::ContainerSummary;
 use header::HeaderValue;
-use k8s_openapi::serde_json;
+use serde_json;
 use reqwest::header::HeaderMap;
 use reqwest::{Client, header};
 use std::collections::HashMap;
