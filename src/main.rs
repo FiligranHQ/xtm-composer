@@ -19,6 +19,7 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Registry, layer::SubscriberExt};
 use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
+use rustls::crypto::CryptoProvider;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -168,6 +169,10 @@ fn openaev_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
 
 #[tokio::main]
 async fn main() {
+    // Install the rustls CryptoProvider before any TLS client is created.
+    // Required since reqwest 0.13 switched from native-tls to rustls.
+    // Ignore error if a provider was already installed by another dependency.
+    let _ = CryptoProvider::install_default(rustls::crypto::aws_lc_rs::default_provider());
     // Initialize the global logging system
     init_logger();
     // Log the start

@@ -25,6 +25,7 @@ k8s-openapi = { version = "0.28.0", features = ["v1_32"] }
 base64 = "0.22.1"
 aes-gcm = "0.10.3"
 sha2 = "0.10.8"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 
 [build-dependencies]
 cynic-codegen = { version = "3" }
