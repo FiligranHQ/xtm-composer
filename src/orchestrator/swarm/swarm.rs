@@ -7,7 +7,7 @@ use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use async_trait::async_trait;
 use bollard::auth::DockerCredentials;
 use bollard::models::{
-    Limit, Mount, MountTypeEnum, NetworkAttachmentConfig, ResourceObject, ResourcesUlimits,
+    Limit, Mount, MountType, NetworkAttachmentConfig, ResourceObject, ResourcesUlimits,
     ServiceSpec,
     ServiceSpecMode, ServiceSpecModeReplicated, TaskSpec, TaskSpecContainerSpec,
     TaskSpecContainerSpecDnsConfig, TaskSpecPlacement, TaskSpecPlacementPreferences,
@@ -276,7 +276,7 @@ impl Orchestrator for SwarmOrchestrator {
                     "{} {:?} {:?} pulling...",
                     image,
                     info.status.as_deref(),
-                    info.progress.as_deref()
+                    info.progress_detail.as_ref()
                 );
                 future::ok(())
             })
@@ -360,7 +360,7 @@ impl Orchestrator for SwarmOrchestrator {
                 if let Some(proxy_ca_host_path) = ensure_proxy_ca_file(connector) {
                     let mut mounts = container_spec.mounts.unwrap_or_default();
                     mounts.push(Mount {
-                        typ: Some(MountTypeEnum::BIND),
+                        typ: Some(MountType::BIND),
                         source: Some(proxy_ca_host_path),
                         target: Some(PROXY_CA_CERT_MOUNT_PATH.to_string()),
                         read_only: Some(true),
@@ -401,6 +401,8 @@ impl Orchestrator for SwarmOrchestrator {
                     TaskSpecResources {
                         limits,
                         reservations,
+                        memory_swappiness: None,
+                        swap_bytes: None,
                     }
                 });
 
