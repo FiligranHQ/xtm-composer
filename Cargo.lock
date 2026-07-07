@@ -3810,7 +3810,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtm-composer"
-version = "3.260609.0"
+version = "3.260707.0"
 dependencies = [
  "aes-gcm",
  "async-trait",
