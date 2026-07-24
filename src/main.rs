@@ -5,8 +5,8 @@ mod orchestrator;
 mod system;
 
 use crate::config::settings::Settings;
-use crate::engine::openaev::{openaev_alive, openaev_orchestration};
-use crate::engine::opencti::{opencti_alive, opencti_orchestration};
+use crate::engine::openaev::{openaev_alive, openaev_orchestration, openaev_ready};
+use crate::engine::opencti::{opencti_alive, opencti_orchestration, opencti_ready};
 use futures::future::join_all;
 use rolling_file::{BasicRollingFileAppender, RollingConditionBasic};
 use std::str::FromStr;
@@ -145,9 +145,10 @@ fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     if setting.opencti.enable {
         // Initialize private key singleton
         let _ = private_key();
-        let opencti_alive = opencti_alive();
+        let (ready_sender, ready_receiver) = opencti_ready();
+        let opencti_alive = opencti_alive(ready_sender);
         orchestrations.push(opencti_alive);
-        let opencti_orchestration = opencti_orchestration();
+        let opencti_orchestration = opencti_orchestration(ready_receiver);
         orchestrations.push(opencti_orchestration);
     } else {
         info!("OpenCTI connectors orchestration disabled");
@@ -158,9 +159,10 @@ fn opencti_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
 fn openaev_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     let setting = settings();
     if setting.openaev.enable {
-        let openaev_alive = openaev_alive();
+        let (ready_sender, ready_receiver) = openaev_ready();
+        let openaev_alive = openaev_alive(ready_sender);
         orchestrations.push(openaev_alive);
-        let openaev_orchestration = openaev_orchestration();
+        let openaev_orchestration = openaev_orchestration(ready_receiver);
         orchestrations.push(openaev_orchestration);
     } else {
         info!("OpenAEV connectors orchestration disabled");
