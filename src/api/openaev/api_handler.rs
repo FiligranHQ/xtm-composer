@@ -42,7 +42,12 @@ pub async fn handle_api_empty_response(
     operation_name: &str,
 ) -> Option<()> {
     match response {
-        Ok(resp) if resp.status().is_success() => Some(()),
+        Ok(resp) if resp.status().is_success() => {
+            // Drain the (empty) body so the underlying connection
+            // can be returned to the pool and reused.
+            let _ = resp.bytes().await;
+            Some(())
+        }
         Ok(resp) => {
             error!(
                 status = resp.status().as_u16(),
