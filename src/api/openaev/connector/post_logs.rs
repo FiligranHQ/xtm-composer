@@ -1,6 +1,5 @@
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::JSON;
 use serde::Serialize;
-use crate::api::openaev::api_handler::handle_api_response;
+use crate::api::openaev::api_handler::handle_api_empty_response;
 use crate::api::openaev::ApiOpenAEV;
 
 #[derive(Serialize)]
@@ -18,8 +17,9 @@ pub async fn add_logs(id: String, logs: Vec<String>, api: &ApiOpenAEV)-> Option<
         .send()
         .await;
 
-    // Discard the result
-    let _ = handle_api_response::<JSON>(
+    // The OpenAEV logs endpoint returns an empty body on success:
+    // only check the HTTP status instead of parsing JSON.
+    let _ = handle_api_empty_response(
         add_logs_response,
         "push logs for connector instance"
     ).await;

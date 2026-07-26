@@ -421,6 +421,34 @@ impl Orchestrator for KubeOrchestrator {
             .await;
         match deployment_result {
             Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
+            Err(kube::Error::Api(ae)) if ae.code == 422 => {
+                // The deployment was created with a label set that no longer matches
+                // the current configuration (spec.selector is immutable), so every
+                // update attempt is rejected and the composer would retry forever.
+                // Self-heal by deleting the stale deployment: the next orchestration
+                // cycle redeploys it with a coherent selector/labels pair.
+                warn!(
+                    name = name,
+                    error = ae.to_string(),
+                    "Deployment update rejected as invalid, deleting stale deployment for redeploy"
+                );
+                match self
+                    .deployments
+                    .delete(name.as_str(), &DeleteParams::default())
+                    .await
+                {
+                    Ok(_) => info!(
+                        name = name,
+                        "Stale deployment deleted, it will be redeployed on the next cycle"
+                    ),
+                    Err(err) => error!(
+                        name = name,
+                        error = err.to_string(),
+                        "Failed to delete stale deployment"
+                    ),
+                }
+                None
+            }
             Err(kube::Error::Api(ae)) => {
                 error!(error = ae.to_string(), "Kubernetes update api error");
                 None
