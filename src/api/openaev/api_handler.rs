@@ -1,5 +1,5 @@
 use serde::de::DeserializeOwned;
-use tracing::error;
+use tracing::{debug, error};
 
 pub async fn handle_api_response<T>(
     response: Result<reqwest::Response, reqwest::Error>,
@@ -46,9 +46,15 @@ pub async fn handle_api_status_response(
 ) -> Option<()> {
     match response {
         Ok(resp) if resp.status().is_success() => {
-            // Drain the body so the underlying connection
-            // can be returned to the pool and reused.
-            let _ = resp.bytes().await;
+            // Drain the body so the underlying connection can be returned to
+            // the pool and reused. The 2xx status already acknowledged the
+            // operation, so a drain failure only affects connection reuse.
+            if let Err(err) = resp.bytes().await {
+                debug!(
+                    error = err.to_string(),
+                    "Failed to drain response body for {}", operation_name
+                );
+            }
             Some(())
         }
         Ok(resp) => {

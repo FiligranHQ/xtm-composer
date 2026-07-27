@@ -22,8 +22,10 @@ pub async fn add_logs(id: String, logs: Vec<String>, api: &ApiOpenAEV) -> Option
         .await;
 
     // OpenAEV may return an empty or non-JSON body for this endpoint:
-    // only check the HTTP status instead of parsing JSON.
-    let _ = handle_api_status_response(add_logs_response, "push logs for connector instance").await;
-
-    Some(id)
+    // only check the HTTP status instead of parsing JSON. Propagate the
+    // outcome so callers can detect delivery failures, like the OpenCTI
+    // logs push does.
+    handle_api_status_response(add_logs_response, "push logs for connector instance")
+        .await
+        .map(|_| id)
 }
