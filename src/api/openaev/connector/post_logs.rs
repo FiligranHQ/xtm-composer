@@ -1,28 +1,31 @@
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::JSON;
-use serde::Serialize;
-use crate::api::openaev::api_handler::handle_api_response;
 use crate::api::openaev::ApiOpenAEV;
+use crate::api::openaev::api_handler::handle_api_status_response;
+use serde::Serialize;
 
 #[derive(Serialize)]
 struct InstanceConnectorLogsInput {
     connector_instance_logs: Vec<String>,
 }
 
-pub async fn add_logs(id: String, logs: Vec<String>, api: &ApiOpenAEV)-> Option<String> {
-    let logs_input = InstanceConnectorLogsInput{
-        connector_instance_logs: logs
+pub async fn add_logs(id: String, logs: Vec<String>, api: &ApiOpenAEV) -> Option<String> {
+    let logs_input = InstanceConnectorLogsInput {
+        connector_instance_logs: logs,
     };
     let settings = crate::settings();
-    let add_logs_response = api.post(&format!("/xtm-composer/{}/connector-instances/{}/logs",settings.manager.id, id))
+    let add_logs_response = api
+        .post(&format!(
+            "/xtm-composer/{}/connector-instances/{}/logs",
+            settings.manager.id, id
+        ))
         .json(&logs_input)
         .send()
         .await;
 
-    // Discard the result
-    let _ = handle_api_response::<JSON>(
-        add_logs_response,
-        "push logs for connector instance"
-    ).await;
-
-    Some(id)
+    // OpenAEV may return an empty or non-JSON body for this endpoint:
+    // only check the HTTP status instead of parsing JSON. Propagate the
+    // outcome so callers can detect delivery failures, like the OpenCTI
+    // logs push does.
+    handle_api_status_response(add_logs_response, "push logs for connector instance")
+        .await
+        .map(|_| id)
 }

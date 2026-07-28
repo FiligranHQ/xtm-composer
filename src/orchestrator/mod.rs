@@ -234,6 +234,44 @@ mod tests {
     }
 
     #[test]
+    fn selector_immutability_conflict_matches_kubernetes_message() {
+        // Real message emitted by the Kubernetes API when the immutable
+        // spec.selector no longer matches the new template labels.
+        let mismatch = "Deployment.apps \"nmap--the-network-mapper-83257074\" is invalid: \
+            spec.template.metadata.labels: Invalid value: \
+            map[string]string{\"app\":\"connector\"}: \
+            `selector` does not match template `labels`";
+        assert!(KubeOrchestrator::is_selector_immutability_conflict(
+            mismatch
+        ));
+
+        let immutable = "Deployment.apps \"x\" is invalid: spec.selector: \
+            Invalid value: v1.LabelSelector{...}: field is immutable";
+        assert!(KubeOrchestrator::is_selector_immutability_conflict(
+            immutable
+        ));
+    }
+
+    #[test]
+    fn selector_immutability_conflict_ignores_other_422_errors() {
+        // Unrelated validation failures must not trigger the self-heal
+        // deletion of a possibly-healthy deployment.
+        let bad_env = "Deployment.apps \"x\" is invalid: \
+            spec.template.spec.containers[0].env[0].name: Invalid value: \
+            \"BAD NAME\": a valid environment variable name must consist of...";
+        assert!(!KubeOrchestrator::is_selector_immutability_conflict(
+            bad_env
+        ));
+
+        let bad_quantity = "Deployment.apps \"x\" is invalid: \
+            spec.template.spec.containers[0].resources.limits[memory]: \
+            Invalid value: \"10Gx\": unable to parse quantity's suffix";
+        assert!(!KubeOrchestrator::is_selector_immutability_conflict(
+            bad_quantity
+        ));
+    }
+
+    #[test]
     fn build_refresh_patch_strips_selector() {
         // This test calls KubeOrchestrator::build_refresh_patch directly.
         use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};

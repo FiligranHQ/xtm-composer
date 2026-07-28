@@ -313,6 +313,16 @@ impl KubeOrchestrator {
         patch_value
     }
 
+    /// Returns true when a 422 rejection is caused by the immutable
+    /// `spec.selector` no longer matching the new template labels (e.g.
+    /// "`selector` does not match template `labels`" or "field is immutable").
+    /// Other 422 validation errors must not trigger the self-heal deletion.
+    pub fn is_selector_immutability_conflict(message: &str) -> bool {
+        message.contains("selector")
+            && (message.contains("does not match template")
+                || message.contains("field is immutable"))
+    }
+
     // Enrich container with pod information
     fn enrich_container_from_pod(&self, container: &mut OrchestratorContainer, pod: Pod) {
         let container_status = pod
@@ -421,6 +431,38 @@ impl Orchestrator for KubeOrchestrator {
             .await;
         match deployment_result {
             Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
+            Err(kube::Error::Api(ae))
+                if ae.code == 422 && Self::is_selector_immutability_conflict(&ae.message) =>
+            {
+                // The deployment was created with a label set that no longer matches
+                // the current configuration (spec.selector is immutable), so every
+                // update attempt is rejected and the composer would retry forever.
+                // Self-heal by deleting the stale deployment: the next orchestration
+                // cycle redeploys it with a coherent selector/labels pair.
+                // Other 422 validation errors fall through to the generic error
+                // logging below instead of deleting a possibly-healthy deployment.
+                warn!(
+                    name = name,
+                    error = ae.to_string(),
+                    "Deployment update rejected on immutable selector mismatch, deleting stale deployment for redeploy"
+                );
+                match self
+                    .deployments
+                    .delete(name.as_str(), &DeleteParams::default())
+                    .await
+                {
+                    Ok(_) => info!(
+                        name = name,
+                        "Stale deployment deleted, it will be redeployed on the next cycle"
+                    ),
+                    Err(err) => error!(
+                        name = name,
+                        error = err.to_string(),
+                        "Failed to delete stale deployment"
+                    ),
+                }
+                None
+            }
             Err(kube::Error::Api(ae)) => {
                 error!(error = ae.to_string(), "Kubernetes update api error");
                 None
