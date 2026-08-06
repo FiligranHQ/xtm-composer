@@ -3,7 +3,27 @@ use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
+
+/// Detects a connector **name collision**: the container fetched by name for this
+/// connector carries an `opencti-connector-id` label that belongs to a *different*
+/// connector. This happens when two connectors share the same name (which OpenCTI is
+/// meant to forbid) — the orchestrator looks a deployment up by name and returns the
+/// wrong one, later surfacing as an obscure Kubernetes
+/// "`selector` does not match template `labels`" error.
+///
+/// Returns the mismatched connector-id found on the container when a collision is
+/// present, or `None` when the ids match or the label is absent (legacy/unlabeled
+/// containers are not treated as collisions).
+fn detect_connector_id_mismatch(
+    container: &OrchestratorContainer,
+    connector_id: &str,
+) -> Option<String> {
+    match container.labels.get("opencti-connector-id") {
+        Some(found) if found != connector_id => Some(found.clone()),
+        _ => None,
+    }
+}
 
 async fn orchestrate_missing(
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
@@ -151,6 +171,21 @@ pub async fn orchestrate(
             let container_get = orchestrator.get(connector).await;
             match container_get {
                 Some(container) => {
+                    // Surface connector name collisions clearly: if the container we
+                    // got back by name belongs to a different connector-id, two
+                    // connectors likely share the same name (OpenCTI should forbid
+                    // this). Without this, the only symptom is an obscure Kubernetes
+                    // selector-mismatch error.
+                    if let Some(found_id) =
+                        detect_connector_id_mismatch(&container, &connector.id)
+                    {
+                        error!(
+                            name = connector.name,
+                            expected_id = connector.id,
+                            found_id = found_id,
+                            "Connector name collision detected: an existing deployment with this name belongs to a different connector id (duplicate connector name?)"
+                        );
+                    }
                     orchestrate_existing(tick, health_tick, orchestrator, api, connector, container).await
                 }
                 None => orchestrate_missing(orchestrator, api, connector).await,
@@ -542,5 +577,17 @@ mod tests {
             .expect("mutex should not be poisoned")
             .clone();
         assert!(removed.is_empty(), "correctly named containers should not be removed: {removed:?}");
+    }
+
+    #[test]
+    fn detect_mismatch_returns_found_id_on_collision() {
+        let container = managed_container("A", "opencti");
+        // Same container (name-based lookup) but reconciled for a different id.
+        assert_eq!(
+            detect_connector_id_mismatch(&container, "B"),
+            Some("A".to_string())
+        );
+        // No false positive when the ids match.
+        assert_eq!(detect_connector_id_mismatch(&container, "A"), None);
     }
 }
