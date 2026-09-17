@@ -1,4 +1,4 @@
-use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::{ApiWorkload, ConnectorStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::config::settings::Portainer;
 use crate::orchestrator::docker::DockerOrchestrator;
@@ -53,7 +53,7 @@ impl PortainerDockerOrchestrator {
 
 #[async_trait]
 impl Orchestrator for PortainerDockerOrchestrator {
-    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         let get_uri = format!("{}/{}/json", self.container_uri, connector.container_name());
         let response = self.client.get(get_uri).send().await;
         let response_result: Result<Option<PortainerGetResponse>, _> = match response {
@@ -138,13 +138,13 @@ impl Orchestrator for PortainerDockerOrchestrator {
             .collect()
     }
 
-    async fn start(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+    async fn start(&self, container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
         connector.display_env_variables();
         let start_container_uri = format!("{}/{}/start", self.container_uri, container.id);
         self.client.post(start_container_uri).send().await.unwrap();
     }
 
-    async fn stop(&self, container: &OrchestratorContainer, _connector: &ApiConnector) -> () {
+    async fn stop(&self, container: &OrchestratorContainer, _connector: &ApiWorkload) -> () {
         let start_container_uri = format!("{}/{}/stop", self.container_uri, container.id);
         self.client.post(start_container_uri).send().await.unwrap();
     }
@@ -168,7 +168,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
         }
     }
 
-    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn refresh(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         // Remove the current container if needed
         let container = self.get(connector).await;
         if container.is_some() {
@@ -178,7 +178,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
         self.deploy(connector).await
     }
 
-    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn deploy(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         let settings = crate::settings();
         let registry_config = settings.opencti.daemon.registry.clone();
         let resolver = Image::new(registry_config);
@@ -254,7 +254,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
     async fn logs(
         &self,
         container: &OrchestratorContainer,
-        _connector: &ApiConnector,
+        _connector: &ApiWorkload,
     ) -> Option<Vec<String>> {
         let logs_container_uri = format!(
             "{}/{}/logs?stderr=1&stdout=1&tail=100",

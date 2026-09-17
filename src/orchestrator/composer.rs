@@ -1,4 +1,4 @@
-use crate::api::{ApiConnector, ComposerApi, ConnectorStatus, RequestedStatus};
+use crate::api::{ApiWorkload, ComposerApi, ConnectorStatus, RequestedStatus};
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -28,7 +28,7 @@ fn detect_connector_id_mismatch(
 async fn orchestrate_missing(
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
-    connector: &ApiConnector,
+    connector: &ApiWorkload,
 ) {
     // Connector is not provisioned, deploy the images
     let id = connector.id.clone();
@@ -50,7 +50,7 @@ async fn orchestrate_existing(
     health_tick: &mut Instant,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
-    connector: &ApiConnector,
+    connector: &ApiWorkload,
     container: OrchestratorContainer,
 ) {
     // Connector is provisioned
@@ -160,8 +160,8 @@ pub async fn orchestrate(
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
 ) {
-    // Get the current definition from OpenCTI
-    let connectors_response = api.connectors().await;
+    // Get the current definition from the platform
+    let connectors_response = api.workloads().await;
     if connectors_response.is_some() {
         // First round trip to instantiate and control if needed
         let connectors = connectors_response.unwrap();
@@ -192,7 +192,7 @@ pub async fn orchestrate(
             }
         }
         // Iter on each existing container to clean the containers
-        let connectors_by_id: HashMap<String, ApiConnector> = connectors
+        let connectors_by_id: HashMap<String, ApiWorkload> = connectors
             .iter()
             .map(|n| (n.id.clone(), n.clone()))
             .collect();
@@ -233,8 +233,8 @@ mod tests {
     use crate::orchestrator::{ENV_CONFIG_HASH, LABEL_MANAGER, LABEL_PLATFORM, LABEL_WORKLOAD_ID};
     use std::sync::{Arc, Mutex};
 
-    fn connector(id: &str) -> ApiConnector {
-        ApiConnector {
+    fn connector(id: &str) -> ApiWorkload {
+        ApiWorkload {
             id: id.to_string(),
             platform: "opencti".to_string(),
             name: format!("connector-{id}"),
@@ -286,11 +286,11 @@ mod tests {
     }
 
     struct FakeApi {
-        connectors: Vec<ApiConnector>,
+        connectors: Vec<ApiWorkload>,
     }
 
     impl FakeApi {
-        fn new(connectors: Vec<ApiConnector>) -> Self {
+        fn new(connectors: Vec<ApiWorkload>) -> Self {
             Self { connectors }
         }
     }
@@ -321,11 +321,11 @@ mod tests {
             unimplemented!()
         }
 
-        async fn connectors(&self) -> Option<Vec<ApiConnector>> {
+        async fn workloads(&self) -> Option<Vec<ApiWorkload>> {
             Some(self.connectors.clone())
         }
 
-        async fn patch_status(&self, _id: String, _status: ConnectorStatus) -> Option<ApiConnector> {
+        async fn patch_status(&self, _id: String, _status: ConnectorStatus) -> Option<ApiWorkload> {
             None
         }
 
@@ -360,7 +360,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Orchestrator for FakeOrchestrator {
-        async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
             self.containers
                 .iter()
                 .find(|container| container.workload_id() == Some(&connector.id))
@@ -371,9 +371,9 @@ mod tests {
             self.containers.clone()
         }
 
-        async fn start(&self, _container: &OrchestratorContainer, _connector: &ApiConnector) -> () {}
+        async fn start(&self, _container: &OrchestratorContainer, _connector: &ApiWorkload) -> () {}
 
-        async fn stop(&self, _container: &OrchestratorContainer, _connector: &ApiConnector) -> () {}
+        async fn stop(&self, _container: &OrchestratorContainer, _connector: &ApiWorkload) -> () {}
 
         async fn remove(&self, container: &OrchestratorContainer) -> () {
             self.removed_ids
@@ -382,18 +382,18 @@ mod tests {
                 .push(container.extract_workload_id());
         }
 
-        async fn refresh(&self, _connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        async fn refresh(&self, _connector: &ApiWorkload) -> Option<OrchestratorContainer> {
             None
         }
 
-        async fn deploy(&self, _connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        async fn deploy(&self, _connector: &ApiWorkload) -> Option<OrchestratorContainer> {
             None
         }
 
         async fn logs(
             &self,
             _container: &OrchestratorContainer,
-            _connector: &ApiConnector,
+            _connector: &ApiWorkload,
         ) -> Option<Vec<String>> {
             None
         }

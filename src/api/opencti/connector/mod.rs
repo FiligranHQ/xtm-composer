@@ -1,5 +1,5 @@
 use serde::Serialize;
-use crate::api::{ApiConnector, ApiContractConfig};
+use crate::api::{ApiWorkload, ApiContractConfig};
 use rsa::{RsaPrivateKey};
 use tracing::{warn};
 use std::str;
@@ -38,7 +38,7 @@ pub struct ManagedConnector {
 
 impl ManagedConnector {
 
-    pub fn to_api_connector(&self, private_key: &RsaPrivateKey) -> ApiConnector {
+    pub fn to_api_connector(&self, private_key: &RsaPrivateKey) -> ApiWorkload {
         let contract_configuration = self
             .manager_contract_configuration
             .clone()
@@ -73,7 +73,7 @@ impl ManagedConnector {
                 }
             })
             .collect();
-        ApiConnector {
+        ApiWorkload {
             id: self.id.clone().into_inner(),
             platform: "opencti".to_string(),
             name: self.name.clone(),

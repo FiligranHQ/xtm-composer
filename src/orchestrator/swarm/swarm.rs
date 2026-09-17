@@ -1,4 +1,4 @@
-use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::{ApiWorkload, ConnectorStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::orchestrator::image::Image;
 use crate::orchestrator::swarm::SwarmOrchestrator;
@@ -76,7 +76,7 @@ impl SwarmOrchestrator {
 
 #[async_trait]
 impl Orchestrator for SwarmOrchestrator {
-    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         let service_name = connector.container_name();
         let service = self
             .docker
@@ -167,7 +167,7 @@ impl Orchestrator for SwarmOrchestrator {
         by_id.into_values().collect()
     }
 
-    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
         connector.display_env_variables();
         let service_name = connector.container_name();
         if let Ok(svc) = self
@@ -202,7 +202,7 @@ impl Orchestrator for SwarmOrchestrator {
         }
     }
 
-    async fn stop(&self, _container: &OrchestratorContainer, _connector: &ApiConnector) -> () {
+    async fn stop(&self, _container: &OrchestratorContainer, _connector: &ApiWorkload) -> () {
         let service_name = _connector.container_name();
         if let Ok(svc) = self
             .docker
@@ -252,7 +252,7 @@ impl Orchestrator for SwarmOrchestrator {
         }
     }
 
-    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn refresh(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         let container = self.get(connector).await;
         if container.is_some() {
             let _ = self.remove(&container.unwrap()).await;
@@ -260,7 +260,7 @@ impl Orchestrator for SwarmOrchestrator {
         self.deploy(connector).await
     }
 
-    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn deploy(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         let settings = crate::settings();
         let registry_config = settings.opencti.daemon.registry.clone();
         let resolver = Image::new(registry_config);
@@ -517,7 +517,7 @@ impl Orchestrator for SwarmOrchestrator {
     async fn logs(
         &self,
         _container: &OrchestratorContainer,
-        connector: &ApiConnector,
+        connector: &ApiWorkload,
     ) -> Option<Vec<String>> {
         let service_name = connector.container_name();
 

@@ -1,4 +1,4 @@
-use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::{ApiWorkload, ConnectorStatus};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -95,7 +95,7 @@ impl OrchestratorContainer {
     }
 }
 
-pub fn build_labels(manager_id: &str, connector: &ApiConnector) -> HashMap<String, String> {
+pub fn build_labels(manager_id: &str, connector: &ApiWorkload) -> HashMap<String, String> {
     let mut labels: HashMap<String, String> = HashMap::new();
     labels.insert(LABEL_MANAGER.into(), manager_id.to_string());
     labels.insert(LABEL_WORKLOAD_ID.into(), connector.id.clone());
@@ -103,7 +103,7 @@ pub fn build_labels(manager_id: &str, connector: &ApiConnector) -> HashMap<Strin
     labels
 }
 
-pub fn ensure_proxy_ca_file(connector: &ApiConnector) -> Option<String> {
+pub fn ensure_proxy_ca_file(connector: &ApiWorkload) -> Option<String> {
     let cert_content = connector.proxy_ca_bundle()?;
 
     let base_dir: PathBuf = std::env::temp_dir().join("xtm-composer-proxy-ca");
@@ -139,28 +139,28 @@ pub fn ensure_proxy_ca_file(connector: &ApiConnector) -> Option<String> {
 
 #[async_trait]
 pub trait Orchestrator {
-    fn labels(&self, connector: &ApiConnector) -> HashMap<String, String> {
+    fn labels(&self, connector: &ApiWorkload) -> HashMap<String, String> {
         build_labels(&crate::settings().manager.id, connector)
     }
 
-    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer>;
+    async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer>;
 
     async fn list(&self) -> Vec<OrchestratorContainer>;
 
-    async fn start(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> ();
+    async fn start(&self, container: &OrchestratorContainer, connector: &ApiWorkload) -> ();
 
-    async fn stop(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> ();
+    async fn stop(&self, container: &OrchestratorContainer, connector: &ApiWorkload) -> ();
 
     async fn remove(&self, container: &OrchestratorContainer) -> ();
 
-    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer>;
+    async fn refresh(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer>;
 
-    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer>;
+    async fn deploy(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer>;
 
     async fn logs(
         &self,
         container: &OrchestratorContainer,
-        connector: &ApiConnector,
+        connector: &ApiWorkload,
     ) -> Option<Vec<String>>;
 
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus;
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn labels_include_platform_discriminator() {
-        let connector = ApiConnector {
+        let connector = ApiWorkload {
             id: "connector-1".to_string(),
             platform: "opencti".to_string(),
             name: String::new(),

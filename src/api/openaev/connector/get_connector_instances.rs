@@ -1,8 +1,8 @@
-use crate::api::ApiConnector;
+use crate::api::ApiWorkload;
 use crate::api::openaev::api_handler::handle_api_response;
 use crate::api::openaev::connector::ConnectorInstances;
 
-pub async fn get_connector_instances(api: &crate::api::openaev::ApiOpenAEV) -> Option<Vec<ApiConnector>> {
+pub async fn get_connector_instances(api: &crate::api::openaev::ApiOpenAEV) -> Option<Vec<ApiWorkload>> {
     let settings = crate::settings();
     let get_connectors = api.get(&format!("/xtm-composer/{}/connector-instances", settings.manager.id))
         .send()

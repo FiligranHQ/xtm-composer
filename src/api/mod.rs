@@ -82,7 +82,7 @@ pub struct ApiContractConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct ApiConnector {
+pub struct ApiWorkload {
     pub id: String,
     pub platform: String,
     pub name: String,
@@ -224,7 +224,7 @@ fn append_proxy_tls_policy_envs(
     }
 }
 
-impl ApiConnector {
+impl ApiWorkload {
     fn platform_proxy_config(&self) -> Option<PlatformProxyConfig> {
         let settings = crate::settings();
         match self.platform.as_str() {
@@ -426,9 +426,9 @@ pub trait ComposerApi {
 
     async fn register(&self) -> ();
 
-    async fn connectors(&self) -> Option<Vec<ApiConnector>>;
+    async fn workloads(&self) -> Option<Vec<ApiWorkload>>;
 
-    async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiConnector>;
+    async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiWorkload>;
 
     async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<String>;
 
@@ -944,7 +944,7 @@ mod tests {
         std::fs::write(&test_config_path, config_content).expect("write e2e config");
         unsafe { std::env::set_var("COMPOSER_ENV", "proxy_list_e2e"); }
 
-        let connector = ApiConnector {
+        let connector = ApiWorkload {
             id: "e2e-proxy-ca-list".to_string(),
             platform: "opencti".to_string(),
             name: "e2e-proxy-ca-list".to_string(),

@@ -1,7 +1,7 @@
 use rsa::{RsaPrivateKey};
 use serde::Deserialize;
 use tracing::warn;
-use crate::api::{ApiConnector, ApiContractConfig};
+use crate::api::{ApiWorkload, ApiContractConfig};
 use crate::api::decrypt_value::parse_aes_encrypted_value;
 
 pub mod get_connector_instances;
@@ -29,7 +29,7 @@ pub struct ConnectorInstances {
 
 impl ConnectorInstances {
 
-    pub fn to_api_connector(&self, private_key: &RsaPrivateKey )->ApiConnector {
+    pub fn to_api_connector(&self, private_key: &RsaPrivateKey )->ApiWorkload {
         let contract_configuration = self
             .connector_instance_configurations
             .iter()
@@ -62,7 +62,7 @@ impl ConnectorInstances {
                 }
             })
             .collect();
-        ApiConnector {
+        ApiWorkload {
             id: self.connector_instance_id.clone(),
             platform: "openaev".to_string(),
             name: self.connector_instance_name.clone(),
