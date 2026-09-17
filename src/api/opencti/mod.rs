@@ -1,4 +1,4 @@
-use crate::api::{ApiWorkload, ComposerApi, ConnectorStatus, HttpClientConfig, build_http_client};
+use crate::api::{ApiWorkload, ComposerApi, WorkloadStatus, HttpClientConfig, build_http_client};
 use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use cynic::Operation;
@@ -105,7 +105,7 @@ impl ComposerApi for ApiOpenCTI {
         connector::get_listing::list(self).await
     }
 
-    async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiWorkload> {
+    async fn patch_status(&self, id: String, status: WorkloadStatus) -> Option<ApiWorkload> {
         connector::post_status::status(id, status, self).await
     }
 

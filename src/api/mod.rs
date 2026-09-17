@@ -94,21 +94,21 @@ pub struct ApiWorkload {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ConnectorStatus {
+pub enum WorkloadStatus {
     Started,
     Stopped,
 }
 
-impl FromStr for ConnectorStatus {
+impl FromStr for WorkloadStatus {
     type Err = ();
-    fn from_str(input: &str) -> Result<ConnectorStatus, Self::Err> {
+    fn from_str(input: &str) -> Result<WorkloadStatus, Self::Err> {
         match input {
-            "created" => Ok(ConnectorStatus::Stopped),
-            "exited" => Ok(ConnectorStatus::Stopped),
-            "started" => Ok(ConnectorStatus::Started),
-            "healthy" => Ok(ConnectorStatus::Started),
-            "running" => Ok(ConnectorStatus::Started),
-            _ => Ok(ConnectorStatus::Stopped),
+            "created" => Ok(WorkloadStatus::Stopped),
+            "exited" => Ok(WorkloadStatus::Stopped),
+            "started" => Ok(WorkloadStatus::Started),
+            "healthy" => Ok(WorkloadStatus::Started),
+            "running" => Ok(WorkloadStatus::Started),
+            _ => Ok(WorkloadStatus::Stopped),
         }
     }
 }
@@ -428,7 +428,7 @@ pub trait ComposerApi {
 
     async fn workloads(&self) -> Option<Vec<ApiWorkload>>;
 
-    async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiWorkload>;
+    async fn patch_status(&self, id: String, status: WorkloadStatus) -> Option<ApiWorkload>;
 
     async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<String>;
 

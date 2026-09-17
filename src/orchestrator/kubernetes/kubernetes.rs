@@ -1,4 +1,4 @@
-use crate::api::{ApiWorkload, ConnectorStatus};
+use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::config::settings::Kubernetes;
 use crate::orchestrator::image::Image;
@@ -525,13 +525,13 @@ impl Orchestrator for KubeOrchestrator {
         }
     }
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
+    fn state_converter(&self, container: &OrchestratorContainer) -> WorkloadStatus {
         match container.state.as_str() {
-            "running" => ConnectorStatus::Started,
-            "waiting" => ConnectorStatus::Started,
-            "exited" => ConnectorStatus::Stopped,
-            "terminated" => ConnectorStatus::Stopped,
-            _ => ConnectorStatus::Stopped,
+            "running" => WorkloadStatus::Started,
+            "waiting" => WorkloadStatus::Started,
+            "exited" => WorkloadStatus::Stopped,
+            "terminated" => WorkloadStatus::Stopped,
+            _ => WorkloadStatus::Stopped,
         }
     }
 }

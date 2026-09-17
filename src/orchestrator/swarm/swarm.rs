@@ -1,4 +1,4 @@
-use crate::api::{ApiWorkload, ConnectorStatus};
+use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::orchestrator::image::Image;
 use crate::orchestrator::swarm::SwarmOrchestrator;
@@ -595,10 +595,10 @@ impl Orchestrator for SwarmOrchestrator {
         }
     }
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
+    fn state_converter(&self, container: &OrchestratorContainer) -> WorkloadStatus {
         match container.state.as_str() {
-            "running" => ConnectorStatus::Started,
-            _ => ConnectorStatus::Stopped,
+            "running" => WorkloadStatus::Started,
+            _ => WorkloadStatus::Stopped,
         }
     }
 }

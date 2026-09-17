@@ -1,4 +1,4 @@
-use crate::api::{ApiWorkload, ConnectorStatus};
+use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::config::settings::Portainer;
 use crate::orchestrator::docker::DockerOrchestrator;
@@ -265,10 +265,10 @@ impl Orchestrator for PortainerDockerOrchestrator {
         Some(text_logs.lines().map(|line| line.to_string()).collect())
     }
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
+    fn state_converter(&self, container: &OrchestratorContainer) -> WorkloadStatus {
         match container.state.as_str() {
-            "running" => ConnectorStatus::Started,
-            _ => ConnectorStatus::Stopped,
+            "running" => WorkloadStatus::Started,
+            _ => WorkloadStatus::Stopped,
         }
     }
 }

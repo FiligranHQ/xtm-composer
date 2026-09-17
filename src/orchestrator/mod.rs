@@ -1,4 +1,4 @@
-use crate::api::{ApiWorkload, ConnectorStatus};
+use crate::api::{ApiWorkload, WorkloadStatus};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -163,7 +163,7 @@ pub trait Orchestrator {
         workload: &ApiWorkload,
     ) -> Option<Vec<String>>;
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus;
+    fn state_converter(&self, container: &OrchestratorContainer) -> WorkloadStatus;
 }
 
 #[cfg(test)]

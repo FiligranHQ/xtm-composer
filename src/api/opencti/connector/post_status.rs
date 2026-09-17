@@ -1,7 +1,7 @@
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
 use crate::api::opencti::error_handler::{extract_optional_field, handle_graphql_response};
-use crate::api::{ApiWorkload, ConnectorStatus};
+use crate::api::{ApiWorkload, WorkloadStatus};
 
 use crate::api::opencti::opencti as schema;
 use cynic;
@@ -38,11 +38,11 @@ pub struct CurrentConnectorStatusInput<'a> {
 }
 //endregion
 
-pub async fn status(id: String, status: ConnectorStatus, api: &ApiOpenCTI) -> Option<ApiWorkload> {
+pub async fn status(id: String, status: WorkloadStatus, api: &ApiOpenCTI) -> Option<ApiWorkload> {
     use cynic::MutationBuilder;
 
     let update_status = match status {
-        ConnectorStatus::Started => ConnectorCurrentStatus::Started,
+        WorkloadStatus::Started => ConnectorCurrentStatus::Started,
         _ => ConnectorCurrentStatus::Stopped,
     };
 
