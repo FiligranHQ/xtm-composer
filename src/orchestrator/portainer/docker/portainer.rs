@@ -144,7 +144,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
         self.client.post(start_container_uri).send().await.unwrap();
     }
 
-    async fn stop(&self, container: &OrchestratorContainer, _connector: &ApiWorkload) -> () {
+    async fn stop(&self, container: &OrchestratorContainer, _workload: &ApiWorkload) -> () {
         let start_container_uri = format!("{}/{}/stop", self.container_uri, container.id);
         self.client.post(start_container_uri).send().await.unwrap();
     }
@@ -254,7 +254,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
     async fn logs(
         &self,
         container: &OrchestratorContainer,
-        _connector: &ApiWorkload,
+        _workload: &ApiWorkload,
     ) -> Option<Vec<String>> {
         let logs_container_uri = format!(
             "{}/{}/logs?stderr=1&stdout=1&tail=100",

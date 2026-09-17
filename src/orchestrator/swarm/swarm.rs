@@ -202,8 +202,8 @@ impl Orchestrator for SwarmOrchestrator {
         }
     }
 
-    async fn stop(&self, _container: &OrchestratorContainer, _connector: &ApiWorkload) -> () {
-        let service_name = _connector.container_name();
+    async fn stop(&self, _container: &OrchestratorContainer, _workload: &ApiWorkload) -> () {
+        let service_name = _workload.container_name();
         if let Ok(svc) = self
             .docker
             .inspect_service(&service_name, None::<InspectServiceOptions>)

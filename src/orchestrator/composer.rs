@@ -30,7 +30,7 @@ async fn orchestrate_missing(
     api: &Box<dyn ComposerApi + Send + Sync>,
     workload: &ApiWorkload,
 ) {
-    // Connector is not provisioned, deploy the images
+    // Workload is not provisioned, deploy the images
     let id = workload.id.clone();
     info!(id = id, "Deploying the container");
     let deploy_action = orchestrator.deploy(workload).await;
@@ -53,7 +53,7 @@ async fn orchestrate_existing(
     workload: &ApiWorkload,
     container: OrchestratorContainer,
 ) {
-    // Connector is provisioned
+    // Workload is provisioned
     let workload_id = workload.id.clone();
     let current_status_fetch = workload.current_status.clone().unwrap_or("stopped".into()); // Default current to created
     let workload_status = WorkloadStatus::from_str(current_status_fetch.as_str()).unwrap();
@@ -83,7 +83,7 @@ async fn orchestrate_existing(
                        workload_status == WorkloadStatus::Stopped;
     
     // Send health metrics if:
-    // - Connector just started (immediate reporting)
+    // - Workload just started (immediate reporting)
     // - OR workload is running and 30 seconds have elapsed
     let now = Instant::now();
     let should_send_health = just_started || 
@@ -111,13 +111,13 @@ async fn orchestrate_existing(
         info!(id = workload_id, "Patch status");
     }
     // In case of platform upgrade, we need to align all deployed workloads
-    let requested_connector_hash = workload.contract_hash.clone();
+    let requested_workload_hash = workload.contract_hash.clone();
     let current_container_hash = container.extract_config_hash();
-    if !requested_connector_hash.eq(current_container_hash) {
+    if !requested_workload_hash.eq(current_container_hash) {
         // Versions are not aligned
         info!(
             id = workload_id,
-            hash = requested_connector_hash,
+            hash = requested_workload_hash,
             "Refreshing"
         );
         orchestrator.refresh(workload).await;
@@ -183,7 +183,7 @@ pub async fn orchestrate(
                             name = workload.name,
                             expected_id = workload.id,
                             found_id = found_id,
-                            "Connector name collision detected: an existing deployment with this name belongs to a different connector id (duplicate connector name?)"
+                            "Workload name collision detected: an existing deployment with this name belongs to a different workload id (duplicate workload name?)"
                         );
                     }
                     orchestrate_existing(tick, health_tick, orchestrator, api, workload, container).await
@@ -207,11 +207,11 @@ pub async fn orchestrate(
             let workload_id = container.extract_workload_id();
             match workloads_by_id.get(&workload_id) {
                 None => {
-                    // Connector no longer exists — remove the orphaned container
+                    // Workload no longer exists — remove the orphaned container
                     orchestrator.remove(&container).await;
                 }
                 Some(workload) => {
-                    // Connector still exists but the deployment name may be stale
+                    // Workload still exists but the deployment name may be stale
                     // after a workload instance name change while the workload ID
                     // remains the same. Remove the old deployment so the next
                     // orchestration cycle deploys with the correct name.
@@ -371,9 +371,9 @@ mod tests {
             self.containers.clone()
         }
 
-        async fn start(&self, _container: &OrchestratorContainer, _connector: &ApiWorkload) -> () {}
+        async fn start(&self, _container: &OrchestratorContainer, _workload: &ApiWorkload) -> () {}
 
-        async fn stop(&self, _container: &OrchestratorContainer, _connector: &ApiWorkload) -> () {}
+        async fn stop(&self, _container: &OrchestratorContainer, _workload: &ApiWorkload) -> () {}
 
         async fn remove(&self, container: &OrchestratorContainer) -> () {
             self.removed_ids
@@ -382,18 +382,18 @@ mod tests {
                 .push(container.extract_workload_id());
         }
 
-        async fn refresh(&self, _connector: &ApiWorkload) -> Option<OrchestratorContainer> {
+        async fn refresh(&self, _workload: &ApiWorkload) -> Option<OrchestratorContainer> {
             None
         }
 
-        async fn deploy(&self, _connector: &ApiWorkload) -> Option<OrchestratorContainer> {
+        async fn deploy(&self, _workload: &ApiWorkload) -> Option<OrchestratorContainer> {
             None
         }
 
         async fn logs(
             &self,
             _container: &OrchestratorContainer,
-            _connector: &ApiWorkload,
+            _workload: &ApiWorkload,
         ) -> Option<Vec<String>> {
             None
         }
@@ -408,7 +408,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_does_not_delete_other_platform_connectors_in_shared_mode() {
+    async fn cleanup_does_not_delete_other_platform_workloads_in_shared_mode() {
         let all_containers = vec![
             managed_container("A", "opencti"),
             managed_container("B", "opencti"),
@@ -492,7 +492,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_keeps_legacy_container_with_active_connector() {
+    async fn cleanup_keeps_legacy_container_with_active_workload() {
         let all_containers = vec![
             managed_container("A", "opencti"),
             legacy_container("B"),
@@ -517,7 +517,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_removes_stale_named_container_after_connector_rename() {
+    async fn cleanup_removes_stale_named_container_after_workload_rename() {
         // Simulates OpenAEV 2.4.0 scenario: workload ID stays the same but the
         // name changes (e.g. "workload-A" → "workload-a-0f2a85c1").
         // The old deployment should be removed as orphaned.
