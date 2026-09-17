@@ -101,9 +101,9 @@ impl KubeOrchestrator {
         base
     }
 
-    async fn upsert_proxy_ca_secret(&self, connector: &ApiWorkload) -> Option<String> {
-        let cert = connector.proxy_ca_bundle()?;
-        let secret_name = Self::proxy_ca_secret_name(&connector.container_name());
+    async fn upsert_proxy_ca_secret(&self, workload: &ApiWorkload) -> Option<String> {
+        let cert = workload.proxy_ca_bundle()?;
+        let secret_name = Self::proxy_ca_secret_name(&workload.container_name());
 
         let _ = self
             .secrets
@@ -128,7 +128,7 @@ impl KubeOrchestrator {
             Ok(_) => Some(secret_name),
             Err(err) => {
                 error!(
-                    connector_id = connector.id,
+                    workload_id = workload.id,
                     error = err.to_string(),
                     "Failed to create proxy CA secret"
                 );
@@ -137,8 +137,8 @@ impl KubeOrchestrator {
         }
     }
 
-    pub fn container_envs(&self, connector: &ApiWorkload) -> Vec<EnvVar> {
-        let env_vars = connector.container_envs();
+    pub fn container_envs(&self, workload: &ApiWorkload) -> Vec<EnvVar> {
+        let env_vars = workload.container_envs();
         env_vars
             .iter()
             .map(|config| EnvVar {
@@ -153,7 +153,7 @@ impl KubeOrchestrator {
         labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
-    async fn set_deployment_scale(&self, connector: &ApiWorkload, scale: i32) {
+    async fn set_deployment_scale(&self, workload: &ApiWorkload, scale: i32) {
         let deployment_patch = Deployment {
             spec: Some(DeploymentSpec {
                 replicas: Some(scale),
@@ -162,7 +162,7 @@ impl KubeOrchestrator {
             ..Default::default()
         };
         let patch = Patch::Merge(&deployment_patch);
-        let name = connector.container_name();
+        let name = workload.container_name();
         self.deployments
             .patch(name.as_str(), &PatchParams::default(), &patch)
             .await
@@ -189,14 +189,14 @@ impl KubeOrchestrator {
         }
     }
 
-    async fn get_deployment_pod(&self, connector_id: String) -> Option<Pod> {
+    async fn get_deployment_pod(&self, workload_id: String) -> Option<Pod> {
         // Try the current workload label first, then fall back to the legacy one
         // so pods created by older composer versions are still found.
         for label_key in [
             crate::orchestrator::LABEL_WORKLOAD_ID,
             crate::orchestrator::LEGACY_LABEL_WORKLOAD_ID,
         ] {
-            let lp = &ListParams::default().labels(&format!("{}={}", label_key, connector_id));
+            let lp = &ListParams::default().labels(&format!("{}={}", label_key, workload_id));
             if let Ok(pods) = self.pods.list(lp).await {
                 if let Some(pod) = pods.items.into_iter().next() {
                     return Some(pod);
@@ -208,24 +208,24 @@ impl KubeOrchestrator {
 
     pub fn build_configuration(
         &self,
-        connector: &ApiWorkload,
+        workload: &ApiWorkload,
         labels: HashMap<String, String>,
         proxy_ca_secret_name: Option<String>,
     ) -> Deployment {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
-        let pod_env = self.container_envs(connector);
-        let is_starting = &connector.requested_status == "starting";
+        let pod_env = self.container_envs(workload);
+        let is_starting = &workload.requested_status == "starting";
         let settings = crate::settings();
         let registry_config = settings.opencti.daemon.registry.clone();
         let resolver = Image::new(registry_config);
         let auth = resolver.get_credentials();
-        let image = resolver.build_name(connector.image.clone());
+        let image = resolver.build_name(workload.image.clone());
         let selector = LabelSelector {
             match_labels: Some(deployment_labels.clone()),
             ..Default::default()
         };
         let mut container = Container {
-            name: connector.container_name(),
+            name: workload.container_name(),
             image: Some(image.clone()),
             env: Some(pod_env),
             image_pull_policy: Some(self.get_image_pull_policy()),
@@ -253,12 +253,12 @@ impl KubeOrchestrator {
 
         let target_deployment = Deployment {
             metadata: ObjectMeta {
-                name: Some(connector.container_name()),
+                name: Some(workload.container_name()),
                 labels: Some(deployment_labels.clone()),
                 // Specific case to let the hash config on top level
                 annotations: Some(BTreeMap::from([(
                     crate::orchestrator::ENV_CONFIG_HASH.into(),
-                    connector.contract_hash.clone(),
+                    workload.contract_hash.clone(),
                 )])),
                 ..Default::default()
             },
@@ -351,10 +351,10 @@ impl KubeOrchestrator {
 
 #[async_trait]
 impl Orchestrator for KubeOrchestrator {
-    async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
+    async fn get(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
         let deployment = match self
             .deployments
-            .get(connector.container_name().as_str())
+            .get(workload.container_name().as_str())
             .await
         {
             Ok(dep) => dep,
@@ -367,7 +367,7 @@ impl Orchestrator for KubeOrchestrator {
         let mut container = KubeOrchestrator::from_deployment(deployment);
 
         // Enrich container with pod information
-        if let Some(pod) = self.get_deployment_pod(connector.id.clone()).await {
+        if let Some(pod) = self.get_deployment_pod(workload.id.clone()).await {
             self.enrich_container_from_pod(&mut container, pod);
         }
 
@@ -392,13 +392,13 @@ impl Orchestrator for KubeOrchestrator {
         by_name.into_values().collect()
     }
 
-    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
-        connector.display_env_variables();
-        self.set_deployment_scale(connector, 1).await;
+    async fn start(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
+        workload.display_env_variables();
+        self.set_deployment_scale(workload, 1).await;
     }
 
-    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
-        self.set_deployment_scale(connector, 0).await;
+    async fn stop(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
+        self.set_deployment_scale(workload, 0).await;
     }
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
@@ -424,13 +424,13 @@ impl Orchestrator for KubeOrchestrator {
             .await;
     }
 
-    async fn refresh(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let labels = self.labels(connector);
-        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(connector).await;
-        let deployment_patch = self.build_configuration(connector, labels, proxy_ca_secret_name);
+    async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+        let labels = self.labels(workload);
+        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(workload).await;
+        let deployment_patch = self.build_configuration(workload, labels, proxy_ca_secret_name);
         let patch_value = Self::build_refresh_patch(&deployment_patch);
         let patch = Patch::Merge(&patch_value);
-        let name = connector.container_name();
+        let name = workload.container_name();
         let deployment_result = self
             .deployments
             .patch(name.as_str(), &PatchParams::default(), &patch)
@@ -480,11 +480,11 @@ impl Orchestrator for KubeOrchestrator {
         }
     }
 
-    async fn deploy(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let labels = self.labels(connector);
-        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(connector).await;
+    async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+        let labels = self.labels(workload);
+        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(workload).await;
         let deployment_creation =
-            self.build_configuration(connector, labels, proxy_ca_secret_name);
+            self.build_configuration(workload, labels, proxy_ca_secret_name);
         match self
             .deployments
             .create(&PostParams::default(), &deployment_creation)
@@ -505,9 +505,9 @@ impl Orchestrator for KubeOrchestrator {
     async fn logs(
         &self,
         _container: &OrchestratorContainer,
-        connector: &ApiWorkload,
+        workload: &ApiWorkload,
     ) -> Option<Vec<String>> {
-        let deployment_pod = self.get_deployment_pod(connector.id.clone()).await;
+        let deployment_pod = self.get_deployment_pod(workload.id.clone()).await;
         match deployment_pod {
             Some(pod) => {
                 let lp = LogParams::default();
@@ -539,7 +539,7 @@ impl Orchestrator for KubeOrchestrator {
 // region async map resolution code sample
 // let async_resolver = get_deployments
 //     .into_iter()
-//     .map(|deployment| self.get_container(deployment, connector));
+//     .map(|deployment| self.get_container(deployment, workload));
 // let deploy_to_containers = futures::stream::iter(async_resolver)
 //     .buffer_unordered(3)
 //     .collect::<Vec<_>>();

@@ -40,8 +40,8 @@ impl DockerOrchestrator {
 
 #[async_trait]
 impl Orchestrator for DockerOrchestrator {
-    async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let container_name = connector.container_name();
+    async fn get(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+        let container_name = workload.container_name();
         let opts = Some(InspectContainerOptions::default());
         let container = self
             .docker
@@ -114,17 +114,17 @@ impl Orchestrator for DockerOrchestrator {
         by_id.into_values().collect()
     }
 
-    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
-        connector.display_env_variables();
-        let container_name = connector.container_name();
+    async fn start(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
+        workload.display_env_variables();
+        let container_name = workload.container_name();
         let _ = self
             .docker
             .start_container(container_name.as_str(), None::<StartContainerOptions>)
             .await;
     }
 
-    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
-        let container_name = connector.container_name();
+    async fn stop(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
+        let container_name = workload.container_name();
         let _ = self
             .docker
             .stop_container(container_name.as_str(), None::<StopContainerOptions>)
@@ -158,22 +158,22 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
-    async fn refresh(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
+    async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
         // Remove the current container if needed
-        let container = self.get(connector).await;
+        let container = self.get(workload).await;
         if container.is_some() {
             let _ = self.remove(&container.unwrap()).await;
         }
         // Deploy the new one
-        self.deploy(connector).await
+        self.deploy(workload).await
     }
 
-    async fn deploy(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
+    async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
         let settings = crate::settings();
         let registry_config = settings.opencti.daemon.registry.clone();
         let resolver = Image::new(registry_config);
         let auth = resolver.get_credentials();
-        let image = resolver.build_name(connector.image.clone());
+        let image = resolver.build_name(workload.image.clone());
 
         let deploy_response = self
             .docker
@@ -199,12 +199,12 @@ impl Orchestrator for DockerOrchestrator {
         match deploy_response {
             Ok(_) => {
                 // Create the container
-                let container_env_variables = connector
+                let container_env_variables = workload
                     .container_envs()
                     .into_iter()
                     .map(|config| format!("{}={}", config.key, config.value))
                     .collect::<Vec<String>>();
-                let labels = self.labels(connector);
+                let labels = self.labels(workload);
 
                 // Build host config with Docker options
                 let mut host_config = HostConfig::default();
@@ -286,7 +286,7 @@ impl Orchestrator for DockerOrchestrator {
                     }
                 }
 
-                if let Some(proxy_ca_host_path) = ensure_proxy_ca_file(connector) {
+                if let Some(proxy_ca_host_path) = ensure_proxy_ca_file(workload) {
                     let mut binds = host_config.binds.unwrap_or_default();
                     binds.push(format!(
                         "{}:{}:ro",
@@ -307,7 +307,7 @@ impl Orchestrator for DockerOrchestrator {
                     .docker
                     .create_container(
                         Some(CreateContainerOptions {
-                            name: Some(connector.container_name()),
+                            name: Some(workload.container_name()),
                             ..Default::default()
                         }),
                         config,
@@ -320,12 +320,12 @@ impl Orchestrator for DockerOrchestrator {
                     }
                 }
 
-                // Get the created connector
-                let created = self.get(connector).await;
+                // Get the created workload
+                let created = self.get(workload).await;
                 // Start the container if needed
-                let is_starting = connector.requested_status.clone().eq("starting");
+                let is_starting = workload.requested_status.clone().eq("starting");
                 if is_starting {
-                    self.start(&created.clone().unwrap(), connector).await;
+                    self.start(&created.clone().unwrap(), workload).await;
                 }
                 // Return the created container
                 created
@@ -344,7 +344,7 @@ impl Orchestrator for DockerOrchestrator {
     async fn logs(
         &self,
         _container: &OrchestratorContainer,
-        connector: &ApiWorkload,
+        workload: &ApiWorkload,
     ) -> Option<Vec<String>> {
         let opts = Some(LogsOptions {
             follow: false,
@@ -353,7 +353,7 @@ impl Orchestrator for DockerOrchestrator {
             tail: "100".to_string(),
             ..Default::default()
         });
-        let logs = self.docker.logs(connector.container_name().as_str(), opts);
+        let logs = self.docker.logs(workload.container_name().as_str(), opts);
         let mut logs_content = Vec::new();
         logs.try_for_each(|log| {
             logs_content.push(log.to_string());

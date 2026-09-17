@@ -95,16 +95,16 @@ impl OrchestratorContainer {
     }
 }
 
-pub fn build_labels(manager_id: &str, connector: &ApiWorkload) -> HashMap<String, String> {
+pub fn build_labels(manager_id: &str, workload: &ApiWorkload) -> HashMap<String, String> {
     let mut labels: HashMap<String, String> = HashMap::new();
     labels.insert(LABEL_MANAGER.into(), manager_id.to_string());
-    labels.insert(LABEL_WORKLOAD_ID.into(), connector.id.clone());
-    labels.insert(LABEL_PLATFORM.into(), connector.platform.clone());
+    labels.insert(LABEL_WORKLOAD_ID.into(), workload.id.clone());
+    labels.insert(LABEL_PLATFORM.into(), workload.platform.clone());
     labels
 }
 
-pub fn ensure_proxy_ca_file(connector: &ApiWorkload) -> Option<String> {
-    let cert_content = connector.proxy_ca_bundle()?;
+pub fn ensure_proxy_ca_file(workload: &ApiWorkload) -> Option<String> {
+    let cert_content = workload.proxy_ca_bundle()?;
 
     let base_dir: PathBuf = std::env::temp_dir().join("xtm-composer-proxy-ca");
     if let Err(err) = fs::create_dir_all(&base_dir) {
@@ -116,14 +116,14 @@ pub fn ensure_proxy_ca_file(connector: &ApiWorkload) -> Option<String> {
         return None;
     }
 
-    let normalized_id: String = connector
+    let normalized_id: String = workload
         .id
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let target_path = base_dir.join(format!(
         "{}-{}-proxy-ca.crt",
-        connector.platform, normalized_id
+        workload.platform, normalized_id
     ));
     if let Err(err) = fs::write(&target_path, &cert_content) {
         error!(
@@ -139,28 +139,28 @@ pub fn ensure_proxy_ca_file(connector: &ApiWorkload) -> Option<String> {
 
 #[async_trait]
 pub trait Orchestrator {
-    fn labels(&self, connector: &ApiWorkload) -> HashMap<String, String> {
-        build_labels(&crate::settings().manager.id, connector)
+    fn labels(&self, workload: &ApiWorkload) -> HashMap<String, String> {
+        build_labels(&crate::settings().manager.id, workload)
     }
 
-    async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer>;
+    async fn get(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer>;
 
     async fn list(&self) -> Vec<OrchestratorContainer>;
 
-    async fn start(&self, container: &OrchestratorContainer, connector: &ApiWorkload) -> ();
+    async fn start(&self, container: &OrchestratorContainer, workload: &ApiWorkload) -> ();
 
-    async fn stop(&self, container: &OrchestratorContainer, connector: &ApiWorkload) -> ();
+    async fn stop(&self, container: &OrchestratorContainer, workload: &ApiWorkload) -> ();
 
     async fn remove(&self, container: &OrchestratorContainer) -> ();
 
-    async fn refresh(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer>;
+    async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer>;
 
-    async fn deploy(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer>;
+    async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer>;
 
     async fn logs(
         &self,
         container: &OrchestratorContainer,
-        connector: &ApiWorkload,
+        workload: &ApiWorkload,
     ) -> Option<Vec<String>>;
 
     fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus;
@@ -173,8 +173,8 @@ mod tests {
 
     #[test]
     fn labels_include_platform_discriminator() {
-        let connector = ApiWorkload {
-            id: "connector-1".to_string(),
+        let workload = ApiWorkload {
+            id: "workload-1".to_string(),
             platform: "opencti".to_string(),
             name: String::new(),
             image: String::new(),
@@ -184,10 +184,10 @@ mod tests {
             contract_configuration: vec![],
         };
 
-        let labels = build_labels("test-manager", &connector);
+        let labels = build_labels("test-manager", &workload);
 
-        assert_eq!(labels.get(LABEL_WORKLOAD_ID), Some(&connector.id));
-        assert_eq!(labels.get(LABEL_PLATFORM), Some(&connector.platform));
+        assert_eq!(labels.get(LABEL_WORKLOAD_ID), Some(&workload.id));
+        assert_eq!(labels.get(LABEL_PLATFORM), Some(&workload.platform));
         assert_eq!(labels.get(LABEL_MANAGER), Some(&"test-manager".to_string()));
     }
 
@@ -307,7 +307,7 @@ mod tests {
 
         let labels: BTreeMap<String, String> = BTreeMap::from([
             (LABEL_MANAGER.to_string(), "test-manager".to_string()),
-            (LABEL_WORKLOAD_ID.to_string(), "connector-42".to_string()),
+            (LABEL_WORKLOAD_ID.to_string(), "workload-42".to_string()),
             (LABEL_PLATFORM.to_string(), "opencti".to_string()),
         ]);
         let deployment = Deployment {
@@ -327,7 +327,7 @@ mod tests {
             .expect("matchLabels must be present");
         assert_eq!(
             match_labels.get(LABEL_WORKLOAD_ID).and_then(|v| v.as_str()),
-            Some("connector-42"),
+            Some("workload-42"),
             "selector must contain the workload-id label"
         );
         assert_eq!(
@@ -348,7 +348,7 @@ mod tests {
         // spec.selector no longer matches the new template labels.
         let mismatch = "Deployment.apps \"nmap--the-network-mapper-83257074\" is invalid: \
             spec.template.metadata.labels: Invalid value: \
-            map[string]string{\"app\":\"connector\"}: \
+            map[string]string{\"app\":\"workload\"}: \
             `selector` does not match template `labels`";
         assert!(KubeOrchestrator::is_selector_immutability_conflict(
             mismatch
