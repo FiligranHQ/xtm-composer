@@ -74,40 +74,44 @@ impl Orchestrator for DockerOrchestrator {
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
         let settings = crate::settings();
-        let manager_label = format!("opencti-manager={}", settings.manager.id.clone());
-        let list_container_filters: HashMap<String, Vec<String>> =
-            HashMap::from([("label".to_string(), Vec::from([manager_label]))]);
+        // Match both current and legacy manager labels so workloads deployed by
+        // older composer versions keep being listed during the transition.
+        let mut by_id: HashMap<String, OrchestratorContainer> = HashMap::new();
+        for manager_label in crate::orchestrator::manager_label_filters(&settings.manager.id) {
+            let list_container_filters: HashMap<String, Vec<String>> =
+                HashMap::from([("label".to_string(), Vec::from([manager_label]))]);
 
-        let container_result = self
-            .docker
-            .list_containers(Some(ListContainersOptions {
-                all: true,
-                filters: Some(list_container_filters),
-                ..Default::default()
-            }))
-            .await;
-        match container_result {
-            Ok(containers) => containers
-                .into_iter()
-                .map(|docker_container| {
-                    let container_name: Option<String> =
-                        docker_container.names.unwrap().first().cloned();
-                    OrchestratorContainer {
-                        id: docker_container.id.unwrap(),
-                        name: DockerOrchestrator::normalize_name(container_name),
-                        state: docker_container.state.unwrap().to_string(),
-                        envs: HashMap::new(),
-                        labels: docker_container.labels.unwrap(),
-                        restart_count: 0, // Not available in list, will be updated by get()
-                        started_at: None, // Not available in list, will be updated by get()
+            let container_result = self
+                .docker
+                .list_containers(Some(ListContainersOptions {
+                    all: true,
+                    filters: Some(list_container_filters),
+                    ..Default::default()
+                }))
+                .await;
+            match container_result {
+                Ok(containers) => {
+                    for docker_container in containers {
+                        let container_name: Option<String> =
+                            docker_container.names.unwrap().first().cloned();
+                        let container = OrchestratorContainer {
+                            id: docker_container.id.unwrap(),
+                            name: DockerOrchestrator::normalize_name(container_name),
+                            state: docker_container.state.unwrap().to_string(),
+                            envs: HashMap::new(),
+                            labels: docker_container.labels.unwrap(),
+                            restart_count: 0, // Not available in list, will be updated by get()
+                            started_at: None, // Not available in list, will be updated by get()
+                        };
+                        by_id.entry(container.id.clone()).or_insert(container);
                     }
-                })
-                .collect(),
-            Err(err) => {
-                error!(error = err.to_string(), "Error fetching containers");
-                Vec::new()
+                }
+                Err(err) => {
+                    error!(error = err.to_string(), "Error fetching containers");
+                }
             }
         }
+        by_id.into_values().collect()
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {

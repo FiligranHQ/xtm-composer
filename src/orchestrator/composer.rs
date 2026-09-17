@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 /// Detects a connector **name collision**: the container fetched by name for this
-/// connector carries an `opencti-connector-id` label that belongs to a *different*
-/// connector. This happens when two connectors share the same name (which OpenCTI is
+/// connector carries a workload-id label that belongs to a *different*
+/// connector. This happens when two connectors share the same name (which the platform is
 /// meant to forbid) — the orchestrator looks a deployment up by name and returns the
 /// wrong one, later surfacing as an obscure Kubernetes
 /// "`selector` does not match template `labels`" error.
@@ -19,7 +19,7 @@ fn detect_connector_id_mismatch(
     container: &OrchestratorContainer,
     connector_id: &str,
 ) -> Option<String> {
-    match container.labels.get("opencti-connector-id") {
+    match container.workload_id() {
         Some(found) if found != connector_id => Some(found.clone()),
         _ => None,
     }
@@ -112,7 +112,7 @@ async fn orchestrate_existing(
     }
     // In case of platform upgrade, we need to align all deployed connectors
     let requested_connector_hash = connector.contract_hash.clone();
-    let current_container_hash = container.extract_opencti_hash();
+    let current_container_hash = container.extract_config_hash();
     if !requested_connector_hash.eq(current_container_hash) {
         // Versions are not aligned
         info!(
@@ -199,15 +199,12 @@ pub async fn orchestrate(
         let platform = api.platform();
         let existing_containers = orchestrator.list().await;
         for container in existing_containers {
-            let container_platform = container
-                .labels
-                .get("opencti-platform")
-                .map(|value| value.as_str());
+            let container_platform = container.platform().map(|value| value.as_str());
             // Only skip containers explicitly belonging to another platform
             if container_platform.is_some() && container_platform != Some(platform) {
                 continue;
             }
-            let connector_id = container.extract_opencti_id();
+            let connector_id = container.extract_workload_id();
             match connectors_by_id.get(&connector_id) {
                 None => {
                     // Connector no longer exists — remove the orphaned container
@@ -233,6 +230,7 @@ mod tests {
     use super::*;
     use crate::api::ApiContractConfig;
     use crate::config::settings::Daemon;
+    use crate::orchestrator::{ENV_CONFIG_HASH, LABEL_MANAGER, LABEL_PLATFORM, LABEL_WORKLOAD_ID};
     use std::sync::{Arc, Mutex};
 
     fn connector(id: &str) -> ApiConnector {
@@ -250,12 +248,12 @@ mod tests {
 
     fn managed_container(id: &str, platform: &str) -> OrchestratorContainer {
         let mut labels = HashMap::new();
-        labels.insert("opencti-manager".to_string(), "shared-manager".to_string());
-        labels.insert("opencti-connector-id".to_string(), id.to_string());
-        labels.insert("opencti-platform".to_string(), platform.to_string());
+        labels.insert(LABEL_MANAGER.to_string(), "shared-manager".to_string());
+        labels.insert(LABEL_WORKLOAD_ID.to_string(), id.to_string());
+        labels.insert(LABEL_PLATFORM.to_string(), platform.to_string());
 
         let mut envs = HashMap::new();
-        envs.insert("OPENCTI_CONFIG_HASH".to_string(), format!("hash-{id}"));
+        envs.insert(ENV_CONFIG_HASH.to_string(), format!("hash-{id}"));
 
         OrchestratorContainer {
             id: format!("container-{id}"),
@@ -365,7 +363,7 @@ mod tests {
         async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
             self.containers
                 .iter()
-                .find(|container| container.labels.get("opencti-connector-id") == Some(&connector.id))
+                .find(|container| container.workload_id() == Some(&connector.id))
                 .cloned()
         }
 
@@ -381,7 +379,7 @@ mod tests {
             self.removed_ids
                 .lock()
                 .expect("mutex should not be poisoned")
-                .push(container.extract_opencti_id());
+                .push(container.extract_workload_id());
         }
 
         async fn refresh(&self, _connector: &ApiConnector) -> Option<OrchestratorContainer> {

@@ -128,37 +128,43 @@ impl Orchestrator for SwarmOrchestrator {
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
         let settings = crate::settings();
-        let manager_label = format!("opencti-manager={}", settings.manager.id);
-        let filters: HashMap<String, Vec<String>> =
-            HashMap::from([("label".to_string(), vec![manager_label])]);
+        // Match both current and legacy manager labels so services deployed by
+        // older composer versions keep being listed during the transition.
+        let mut by_id: HashMap<String, OrchestratorContainer> = HashMap::new();
+        for manager_label in crate::orchestrator::manager_label_filters(&settings.manager.id) {
+            let filters: HashMap<String, Vec<String>> =
+                HashMap::from([("label".to_string(), vec![manager_label])]);
 
-        let options = Some(ListServicesOptions {
-            filters: Some(filters),
-            ..Default::default()
-        });
-        match self.docker.list_services(options).await {
-            Ok(services) => services
-                .into_iter()
-                .filter_map(|svc| {
-                    let spec = svc.spec?;
-                    let name = spec.name.clone()?;
-                    let labels = spec.labels.unwrap_or_default();
-                    Some(OrchestratorContainer {
-                        id: svc.id.unwrap_or_default(),
-                        name,
-                        state: "unknown".to_string(),
-                        envs: HashMap::new(),
-                        labels,
-                        restart_count: 0,
-                        started_at: None,
-                    })
-                })
-                .collect(),
-            Err(err) => {
-                error!(error = err.to_string(), "Error fetching swarm services");
-                Vec::new()
+            let options = Some(ListServicesOptions {
+                filters: Some(filters),
+                ..Default::default()
+            });
+            match self.docker.list_services(options).await {
+                Ok(services) => {
+                    for svc in services {
+                        let Some(spec) = svc.spec else { continue };
+                        let Some(name) = spec.name.clone() else {
+                            continue;
+                        };
+                        let labels = spec.labels.unwrap_or_default();
+                        let container = OrchestratorContainer {
+                            id: svc.id.unwrap_or_default(),
+                            name,
+                            state: "unknown".to_string(),
+                            envs: HashMap::new(),
+                            labels,
+                            restart_count: 0,
+                            started_at: None,
+                        };
+                        by_id.entry(container.id.clone()).or_insert(container);
+                    }
+                }
+                Err(err) => {
+                    error!(error = err.to_string(), "Error fetching swarm services");
+                }
             }
         }
+        by_id.into_values().collect()
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {

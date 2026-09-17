@@ -190,21 +190,20 @@ impl KubeOrchestrator {
     }
 
     async fn get_deployment_pod(&self, connector_id: String) -> Option<Pod> {
-        let lp = &ListParams::default().labels(&format!("opencti-connector-id={}", connector_id));
-        let deployment_pods_response = self.pods.list(lp).await;
-        match deployment_pods_response {
-            Ok(pods) => {
-                let pod_list = pods.items;
-                match !pod_list.is_empty() {
-                    true => pod_list.into_iter().next(),
-                    false => None,
+        // Try the current workload label first, then fall back to the legacy one
+        // so pods created by older composer versions are still found.
+        for label_key in [
+            crate::orchestrator::LABEL_WORKLOAD_ID,
+            crate::orchestrator::LEGACY_LABEL_WORKLOAD_ID,
+        ] {
+            let lp = &ListParams::default().labels(&format!("{}={}", label_key, connector_id));
+            if let Ok(pods) = self.pods.list(lp).await {
+                if let Some(pod) = pods.items.into_iter().next() {
+                    return Some(pod);
                 }
             }
-            Err(err) => {
-                error!(error = err.to_string(), "Fail to get deployment pod");
-                None
-            }
         }
+        None
     }
 
     pub fn build_configuration(
@@ -258,7 +257,7 @@ impl KubeOrchestrator {
                 labels: Some(deployment_labels.clone()),
                 // Specific case to let the hash config on top level
                 annotations: Some(BTreeMap::from([(
-                    "OPENCTI_CONFIG_HASH".into(),
+                    crate::orchestrator::ENV_CONFIG_HASH.into(),
                     connector.contract_hash.clone(),
                 )])),
                 ..Default::default()
@@ -377,13 +376,20 @@ impl Orchestrator for KubeOrchestrator {
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
         let settings = crate::settings();
-        let lp = &ListParams::default()
-            .labels(&format!("opencti-manager={}", settings.manager.id.clone()));
-        let get_deployments = self.deployments.list(lp).await.unwrap();
-        get_deployments
-            .into_iter()
-            .map(|deployment| KubeOrchestrator::from_deployment(deployment))
-            .collect()
+        // Match both current and legacy manager labels so deployments created by
+        // older composer versions keep being listed during the transition.
+        let mut by_name: std::collections::HashMap<String, OrchestratorContainer> =
+            std::collections::HashMap::new();
+        for manager_label in crate::orchestrator::manager_label_filters(&settings.manager.id) {
+            let lp = &ListParams::default().labels(&manager_label);
+            if let Ok(deployments) = self.deployments.list(lp).await {
+                for deployment in deployments {
+                    let container = KubeOrchestrator::from_deployment(deployment);
+                    by_name.entry(container.name.clone()).or_insert(container);
+                }
+            }
+        }
+        by_name.into_values().collect()
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
@@ -401,7 +407,7 @@ impl Orchestrator for KubeOrchestrator {
         match delete_response {
             Ok(_) => info!(
                 name = container.name,
-                id = container.extract_opencti_id(),
+                id = container.extract_workload_id(),
                 "Deployment successfully deleted"
             ),
             Err(err) => error!(

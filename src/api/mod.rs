@@ -336,7 +336,7 @@ impl ApiConnector {
             });
         }
         envs.push(EnvVariable {
-            key: "OPENCTI_CONFIG_HASH".into(),
+            key: crate::orchestrator::ENV_CONFIG_HASH.into(),
             value: self.contract_hash.clone(),
             is_sensitive: false,
         });
