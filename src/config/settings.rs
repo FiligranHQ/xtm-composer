@@ -129,6 +129,9 @@ pub struct Daemon {
 pub struct OpenCTI {
     pub enable: bool,
     pub url: String,
+    /// URL injected into deployed workloads; falls back to `url` when unset.
+    #[serde(default)]
+    pub workload_url: Option<String>,
     pub token: String,
     pub unsecured_certificate: bool,
     pub with_proxy: bool,
@@ -150,6 +153,9 @@ pub struct OpenCTI {
 pub struct OpenAEV {
     pub enable: bool,
     pub url: String,
+    /// URL injected into deployed workloads; falls back to `url` when unset.
+    #[serde(default)]
+    pub workload_url: Option<String>,
     pub token: String,
     pub unsecured_certificate: bool,
     pub with_proxy: bool,

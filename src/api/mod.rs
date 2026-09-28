@@ -324,14 +324,22 @@ impl ApiWorkload {
         if settings.opencti.enable {
             envs.push(EnvVariable {
                 key: "OPENCTI_URL".into(),
-                value: settings.opencti.url.clone(),
+                value: settings
+                    .opencti
+                    .workload_url
+                    .clone()
+                    .unwrap_or_else(|| settings.opencti.url.clone()),
                 is_sensitive: false,
             });
         }
         if settings.openaev.enable {
             envs.push(EnvVariable {
                 key: "OPENAEV_URL".into(),
-                value: settings.openaev.url.clone(),
+                value: settings
+                    .openaev
+                    .workload_url
+                    .clone()
+                    .unwrap_or_else(|| settings.openaev.url.clone()),
                 is_sensitive: false,
             });
         }
