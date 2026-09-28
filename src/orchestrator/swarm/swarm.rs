@@ -25,9 +25,16 @@ use std::collections::HashMap;
 use tracing::{debug, error, info};
 
 impl SwarmOrchestrator {
-    pub fn new(config: crate::config::settings::Swarm) -> Self {
+    pub fn new(
+        config: crate::config::settings::Swarm,
+        registry: Option<crate::config::settings::Registry>,
+    ) -> Self {
         let docker = Docker::connect_with_socket_defaults().unwrap();
-        Self { docker, config }
+        Self {
+            docker,
+            config,
+            registry,
+        }
     }
 
     async fn get_task_info(&self, service_name: &str) -> (u32, Option<String>, String) {
@@ -261,8 +268,7 @@ impl Orchestrator for SwarmOrchestrator {
     }
 
     async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
+        let registry_config = self.registry.clone();
         let resolver = Image::new(registry_config);
         let auth = resolver.get_credentials();
         let image = resolver.build_name(workload.image.clone());

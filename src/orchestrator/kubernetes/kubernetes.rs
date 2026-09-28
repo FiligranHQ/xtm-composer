@@ -1,6 +1,6 @@
 use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
-use crate::config::settings::Kubernetes;
+use crate::config::settings::{Kubernetes, Registry};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
@@ -21,17 +21,18 @@ use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, error, info, warn};
 
 impl KubeOrchestrator {
-    pub async fn new(config: Kubernetes) -> Self {
+    pub async fn new(config: Kubernetes, registry: Option<Registry>) -> Self {
         let client = Client::try_default().await.unwrap();
         let pods: Api<Pod> = Api::default_namespaced(client.clone());
         let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
         let secrets: Api<Secret> = Api::default_namespaced(client.clone());
-        Self::register_secret(&secrets).await;
+        Self::register_secret(&secrets, &registry).await;
         Self {
             pods,
             deployments,
             secrets,
             config,
+            registry,
         }
     }
 
@@ -40,10 +41,8 @@ impl KubeOrchestrator {
     }
 
     // Validate and return image pull policy
-    async fn register_secret(secrets: &Api<Secret>) {
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
+    async fn register_secret(secrets: &Api<Secret>, registry: &Option<Registry>) {
+        let resolver = Image::new(registry.clone());
         let registry_secret = resolver.get_kubernetes_registry_secret();
         if registry_secret.is_some() {
             let secret_name = resolver.get_kubernetes_secret_name().unwrap();
@@ -215,8 +214,7 @@ impl KubeOrchestrator {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(workload);
         let is_starting = &workload.requested_status == "starting";
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
+        let registry_config = self.registry.clone();
         let resolver = Image::new(registry_config);
         let auth = resolver.get_credentials();
         let image = resolver.build_name(workload.image.clone());

@@ -1,4 +1,5 @@
 use crate::api::{ApiWorkload, WorkloadStatus};
+use crate::config::settings::Daemon;
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::image::Image;
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
@@ -18,9 +19,9 @@ use std::collections::HashMap;
 use tracing::{debug, error, info};
 
 impl DockerOrchestrator {
-    pub fn new() -> Self {
+    pub fn new(daemon: Daemon) -> Self {
         let docker = Docker::connect_with_socket_defaults().unwrap();
-        Self { docker }
+        Self { docker, daemon }
     }
 
     pub fn convert_labels(labels: Vec<String>) -> HashMap<String, String> {
@@ -169,8 +170,7 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
+        let registry_config = self.daemon.registry.clone();
         let resolver = Image::new(registry_config);
         let auth = resolver.get_credentials();
         let image = resolver.build_name(workload.image.clone());
@@ -209,9 +209,8 @@ impl Orchestrator for DockerOrchestrator {
                 // Build host config with Docker options
                 let mut host_config = HostConfig::default();
 
-                // Get settings and check for Docker options
-                let settings = crate::settings();
-                let docker_options = settings.opencti.daemon.docker.as_ref();
+                // Docker options from this platform's daemon configuration
+                let docker_options = self.daemon.docker.as_ref();
 
                 if let Some(docker_opts) = docker_options {
                     // Apply Docker options to host config
