@@ -16,7 +16,22 @@ enum ConnectorCurrentStatus {
   started
   stopped
 }
+
+enum ConnectorType {
+  EXTERNAL_IMPORT
+  INTERNAL_IMPORT_FILE
+  INTERNAL_ENRICHMENT
+  INTERNAL_ANALYSIS
+  INTERNAL_EXPORT_FILE
+  INTERNAL_HUNT
+  STREAM
+}
 ```
+
+`ConnectorType` mirrors the OpenCTI enumeration. `connector_type` is exposed as a `String` on `ManagedConnector`, and XTM
+Composer does not select it: every connector type, including the internal hunt connectors (`INTERNAL_HUNT`), is
+deployed from its contract image and configuration. When OpenCTI adds a connector type, add it to the schema copy
+`opencti.graphql`; the test `schema_copy_declares_every_opencti_connector_type` pins the list.
 
 ### Object Types
 
