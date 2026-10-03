@@ -39,9 +39,10 @@ connector type, add it to the schema copy `opencti.graphql`; the test
 ### Object Types
 
 ```graphql
-type ManagerContractConfiguration {
-  key: String
+type ConnectorContractConfiguration {
+  key: String!
   value: String
+  encrypted: Boolean
 }
 ```
 
@@ -82,8 +83,8 @@ query getCatalogs {
 type Catalog {
   id: ID!
   name: String!
-  description: String
-  contracts: [String]
+  description: String!
+  contracts: [String!]!
 }
 ```
 
@@ -125,12 +126,6 @@ type ManagedConnector {
   manager_contract_hash: String!
   manager_connector_logs: [String!]!
   manager_health_metrics: ConnectorHealthMetrics
-}
-
-type ConnectorContractConfiguration {
-  key: String!
-  value: String
-  encrypted: Boolean
 }
 ```
 
@@ -197,18 +192,15 @@ mutation addManagedConnector($input: AddManagedConnectorInput!) {
 ```graphql
 input AddManagedConnectorInput {
   name: String!
-  connector_user_id: ID
-  user_id: ID!
+  connector_user_id: ID!
   catalog_id: ID!
-  automatic_user: Boolean
-  confidence_level: String
   manager_contract_image: String!
   manager_contract_configuration: [ContractConfigInput!]!
 }
 
 input ContractConfigInput {
   key: String!
-  value: String!
+  value: [String!]
 }
 ```
 
@@ -217,17 +209,15 @@ input ContractConfigInput {
 {
   "input": {
     "name": "IpInfo Enrichment Connector",
-    "user_id": "88ec0c6a-13ce-5e39-b486-354fe4a7084f",
     "connector_user_id": "88ec0c6a-13ce-5e39-b486-354fe4a7084f",
     "catalog_id": "catalog-ipinfo-id",
-    "automatic_user": false,
     "manager_contract_image": "opencti/connector-ipinfo:latest",
     "manager_contract_configuration": [
-      { "key": "IPINFO_TOKEN", "value": "your-token-here" },
-      { "key": "IPINFO_MAX_TLP", "value": "TLP:AMBER" },
-      { "key": "IPINFO_USE_ASN_NAME", "value": "false" },
-      { "key": "CONNECTOR_SCOPE", "value": "IPv4-Addr" },
-      { "key": "CONNECTOR_AUTO", "value": "true" }
+      { "key": "IPINFO_TOKEN", "value": ["your-token-here"] },
+      { "key": "IPINFO_MAX_TLP", "value": ["TLP:AMBER"] },
+      { "key": "IPINFO_USE_ASN_NAME", "value": ["false"] },
+      { "key": "CONNECTOR_SCOPE", "value": ["IPv4-Addr"] },
+      { "key": "CONNECTOR_AUTO", "value": ["true"] }
     ]
   }
 }
@@ -268,7 +258,6 @@ mutation updateConnectorStatus($input: CurrentConnectorStatusInput!) {
   updateConnectorCurrentStatus(input: $input) {
     id
     name
-    manager_id
     manager_requested_status
     manager_current_status
   }
@@ -367,7 +356,7 @@ mutation reportConnectorHealth($input: HealthConnectorStatusInput!) {
 input HealthConnectorStatusInput {
   id: ID!
   restart_count: Int!
-  started_at: DateTime!
+  started_at: String!
   is_in_reboot_loop: Boolean!
 }
 ```
@@ -412,9 +401,10 @@ mutation deleteConnector($id: ID!) {
 ## Usage Notes
 
 1. All mutations require authentication via Bearer token in the Authorization header
-2. The `manager_id` should match the configured XTM Composer manager ID
+2. The `id` sent to `registerConnectorsManager` and `updateConnectorManagerStatus` is the configured XTM Composer
+   manager ID
 3. The `connector_user_id` is the OpenCTI user ID that will own the connector
-4. Configuration values are encrypted using the manager's public key
+4. Sensitive configuration values (`encrypted: true`) are encrypted using the manager's public key
 5. Logs are sent as an array of strings and stored for debugging
 6. Health metrics help track connector stability and restart patterns
 

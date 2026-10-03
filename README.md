@@ -34,8 +34,10 @@ Sentinel or Elastic Security. Before deploying one, make sure that:
 - the container can reach the API of the hunted platform in addition to OpenCTI;
 - the platform credentials only grant read-only search permissions; they are entered in the OpenCTI catalog form and
   reach XTM Composer encrypted, like every sensitive value;
-- the OpenCTI platform provides hunts: a hunt connector stops at start when the platform or its pycti does not know the
-  type, which shows as a restart loop in the connector health.
+- the OpenCTI platform provides hunts, and the connector image ships a pycti version that knows the hunt contract. A
+  hunt connector stops at start in both cases - an OpenCTI platform without hunts refuses its registration, and a
+  connector image with an older pycti stops before registering - which shows as a restart loop in the connector
+  health. Upgrade the OpenCTI platform in the first case, and the connector image in the second.
 
 ## Orchestration
 
