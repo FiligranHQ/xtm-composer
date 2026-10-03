@@ -28,10 +28,13 @@ enum ConnectorType {
 }
 ```
 
-`ConnectorType` mirrors the OpenCTI enumeration. `connector_type` is exposed as a `String` on `ManagedConnector`, and XTM
-Composer does not select it: every connector type, including the internal hunt connectors (`INTERNAL_HUNT`), is
-deployed from its contract image and configuration. When OpenCTI adds a connector type, add it to the schema copy
-`opencti.graphql`; the test `schema_copy_declares_every_opencti_connector_type` pins the list.
+`ConnectorType` mirrors the OpenCTI enumeration. `ManagedConnector` has no connector type field: the type reaches XTM
+Composer as the `CONNECTOR_TYPE` entry of `manager_contract_configuration` (for example
+`{ "key": "CONNECTOR_TYPE", "value": "INTERNAL_HUNT", "encrypted": false }`), and XTM Composer passes it to the
+container environment unchanged without reading it. Every connector type, including the internal hunt connectors
+(`INTERNAL_HUNT`), is therefore deployed the same way, from its contract image and configuration. When OpenCTI adds a
+connector type, add it to the schema copy `opencti.graphql`; the test
+`schema_copy_declares_every_opencti_connector_type` pins the list.
 
 ### Object Types
 
@@ -93,22 +96,15 @@ Returns the list of available catalogs and their connector contracts in OpenCTI.
 query connectorsForManagers {
   connectorsForManagers {
     id
-    standard_id
     name
-    connector_type
-    connector_scope
-    connector_state
-    connector_user_id
-    catalog_id
-    manager_id
-    manager_contract_image
-    manager_requested_status
-    manager_current_status
-    manager_connector_logs
     manager_contract_hash
+    manager_contract_image
+    manager_current_status
+    manager_requested_status
     manager_contract_configuration {
       key
       value
+      encrypted
     }
   }
 }
@@ -120,20 +116,27 @@ type ManagedConnector {
   id: ID!
   standard_id: String!
   name: String!
-  connector_type: String
-  connector_scope: [String]
-  connector_state: String
-  connector_user_id: String
-  catalog_id: String
-  manager_id: String
-  manager_contract_image: String
-  manager_requested_status: ConnectorRequestStatus
-  manager_current_status: ConnectorCurrentStatus
-  manager_connector_logs: String
-  manager_contract_hash: String
-  manager_contract_configuration: [ManagerContractConfiguration]
+  connector_user_id: ID
+  connector_state_timestamp: DateTime
+  manager_contract_image: String!
+  manager_current_status: String
+  manager_requested_status: String!
+  manager_contract_configuration: [ConnectorContractConfiguration!]!
+  manager_contract_hash: String!
+  manager_connector_logs: [String!]!
+  manager_health_metrics: ConnectorHealthMetrics
+}
+
+type ConnectorContractConfiguration {
+  key: String!
+  value: String
+  encrypted: Boolean
 }
 ```
+
+The connector type, the scope and every other setting of the connector arrive as entries of
+`manager_contract_configuration` (`CONNECTOR_TYPE`, `CONNECTOR_SCOPE`, ...). Entries with `encrypted: true` are
+decrypted with the manager private key and stay flagged as sensitive in the container definition.
 
 ## Mutations
 
@@ -177,10 +180,7 @@ mutation addManagedConnector($input: AddManagedConnectorInput!) {
     id
     standard_id
     name
-    connector_type
     connector_user_id
-    catalog_id
-    manager_id
     manager_contract_image
     manager_contract_hash
     manager_requested_status
