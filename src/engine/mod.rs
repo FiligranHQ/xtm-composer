@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tokio::time::interval;
+use tokio::time::{MissedTickBehavior, interval};
 
 /// Exponential backoff with jitter: base * 2^attempt, capped at max, plus deterministic jitter.
 /// Jitter is attempt-based (not truly random) to avoid adding a `rand` dependency.
@@ -70,6 +70,8 @@ async fn orchestration_loop(
     schedule: Duration,
 ) {
     let mut interval = interval(schedule);
+    // After waiting for readiness, run once then a full period later (no catch-up burst)
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     // Start scheduling
     tokio::select! {
         _ = signals::handle_stop_signals() => {}
@@ -77,12 +79,10 @@ async fn orchestration_loop(
             let mut log_ticks = HashMap::new();
             let mut health_tick = Instant::now();
             loop {
-                // Wait until alive signals readiness before first orchestration tick
-                loop {
-                    ready.changed().await.expect("alive watch sender dropped unexpectedly");
-                    if *ready.borrow_and_update() {
-                        break;
-                    }
+                // Wait until alive signals readiness (returns immediately while ready);
+                // stop cleanly if alive is gone
+                if ready.wait_for(|is_ready| *is_ready).await.is_err() {
+                    return;
                 }
                 interval.tick().await; // Wait for period
                 composer::orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
@@ -177,6 +177,7 @@ mod tests {
         version_calls: Arc<AtomicUsize>,
         register_calls: Arc<AtomicUsize>,
         ping_calls: Arc<AtomicUsize>,
+        connectors_calls: Arc<AtomicUsize>,
         daemon: Daemon,
     }
 
@@ -201,6 +202,7 @@ mod tests {
                 version_calls: Arc::new(AtomicUsize::new(0)),
                 register_calls: Arc::new(AtomicUsize::new(0)),
                 ping_calls: Arc::new(AtomicUsize::new(0)),
+                connectors_calls: Arc::new(AtomicUsize::new(0)),
                 daemon,
             }
         }
@@ -238,6 +240,7 @@ mod tests {
         }
 
         async fn connectors(&self) -> Option<Vec<ApiConnector>> {
+            self.connectors_calls.fetch_add(1, Ordering::SeqCst);
             Some(vec![])
         }
 
@@ -267,73 +270,102 @@ mod tests {
         ))
     }
 
-    /// Given: alive succeeds immediately
-    /// When: alive and orchestration run concurrently with a shared watch channel
-    /// Then: orchestration does not proceed until ready is true
-    #[tokio::test]
-    async fn orchestration_waits_for_alive_signal() {
+    const SCHEDULE: Duration = Duration::from_secs(10);
+
+    /// Fake API whose connector-list requests are counted, plus that counter.
+    fn counting_api() -> (Box<dyn ComposerApi + Send + Sync>, Arc<AtomicUsize>) {
+        let api = EngineFakeApi::new(vec![], vec![], vec![]);
+        let connectors_calls = api.connectors_calls.clone();
+        (Box::new(api), connectors_calls)
+    }
+
+    /// Given: the composer is connected and registered
+    /// When: three orchestration periods elapse without any connectivity change
+    /// Then: the connector list has been requested at least three times
+    #[tokio::test(start_paused = true)]
+    async fn orchestration_keeps_running_while_ready() {
+        let (api, connectors_calls) = counting_api();
         let (ready_sender, ready_receiver) = watch::channel(false);
+        // Readiness is signalled before orchestration starts running
+        ready_sender.send(true).expect("receiver alive");
+        let handle = tokio::spawn(orchestration_loop(api, fake_orchestrator(), ready_receiver, SCHEDULE));
 
-        // Initially not ready
-        assert!(!*ready_receiver.borrow(), "ready should start as false");
+        tokio::time::sleep(SCHEDULE * 3 + SCHEDULE / 2).await;
+        let calls = connectors_calls.load(Ordering::SeqCst);
+        handle.abort();
 
-        // Spawn a watcher that records when ready flips
-        let ready_transitions: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
-        let transitions_clone = ready_transitions.clone();
-        let watcher_receiver = ready_receiver.clone();
-        let watcher = tokio::spawn(async move {
-            let mut watcher_receiver = watcher_receiver;
-            let mut last_val = *watcher_receiver.borrow();
-            transitions_clone.lock().await.push(last_val);
-            loop {
-                if watcher_receiver.changed().await.is_ok() {
-                    let new_val = *watcher_receiver.borrow();
-                    if new_val != last_val {
-                        last_val = new_val;
-                        transitions_clone.lock().await.push(new_val);
-                    }
-                }
-            }
-        });
+        assert!(
+            calls >= 3,
+            "orchestration should run every period while ready, got {calls} connector requests over 3 periods"
+        );
+    }
 
-        let api_clone: Box<dyn ComposerApi + Send + Sync> = Box::new(EngineFakeApi::new(
-            vec![Some("1.0".to_string())],
-            vec![Some("1.0".to_string()); 5],
-            vec![true],
-        ));
+    /// Given: orchestration is waiting for the composer to become ready
+    /// When: the connectivity monitor stops (readiness sender dropped)
+    /// Then: orchestration stops without a crash
+    #[tokio::test(start_paused = true)]
+    async fn orchestration_stops_cleanly_when_alive_stops() {
+        let (api, _connectors_calls) = counting_api();
+        let (ready_sender, ready_receiver) = watch::channel(false);
+        let handle = tokio::spawn(orchestration_loop(api, fake_orchestrator(), ready_receiver, SCHEDULE));
+        // Let orchestration start waiting for readiness
+        tokio::task::yield_now().await;
 
-        // Start alive
-        let alive_handle = alive(api_clone, ready_sender.clone()).await;
+        drop(ready_sender);
 
-        // Give alive a moment to connect
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let outcome = tokio::time::timeout(SCHEDULE, handle)
+            .await
+            .expect("orchestration should finish once alive stops");
+        if let Err(join_error) = outcome {
+            assert!(
+                !join_error.is_panic(),
+                "orchestration crashed when alive stopped: {join_error}"
+            );
+        }
+    }
 
-        // Now ready should be true
-        assert!(*ready_receiver.borrow(), "ready should be true after alive connects");
+    /// Given: the composer has not yet connected and registered
+    /// When: several orchestration periods elapse
+    /// Then: the composer has not requested the connector list
+    #[tokio::test(start_paused = true)]
+    async fn orchestration_does_not_fetch_connectors_before_ready() {
+        let (api, connectors_calls) = counting_api();
+        let (_ready_sender, ready_receiver) = watch::channel(false);
+        let handle = tokio::spawn(orchestration_loop(api, fake_orchestrator(), ready_receiver, SCHEDULE));
 
-        // Start orchestration
-        let orch_api: Box<dyn ComposerApi + Send + Sync> = Box::new(EngineFakeApi::new(
-            vec![Some("1.0".to_string())],
-            vec![Some("1.0".to_string()); 5],
-            vec![true],
-        ));
-        let orch_ready = ready_receiver.clone();
-        let orch_handle = tokio::spawn(async move {
-            orchestration_loop(orch_api, fake_orchestrator(), orch_ready, Duration::from_secs(1)).await;
-        });
+        tokio::time::sleep(SCHEDULE * 5 + SCHEDULE / 2).await;
+        let calls = connectors_calls.load(Ordering::SeqCst);
+        handle.abort();
 
-        // Let orchestration run briefly
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(calls, 0, "connector list must not be requested before readiness");
+    }
 
-        // Verify transitions: false -> true
-        let transitions = ready_transitions.lock().await;
-        assert!(transitions.contains(&false), "should start as false");
-        assert!(transitions.contains(&true), "should transition to true");
+    /// Given: orchestration waited for readiness for many orchestration periods
+    /// When: the composer becomes ready
+    /// Then: at most one orchestration runs immediately, the next one only after a full period
+    #[tokio::test(start_paused = true)]
+    async fn orchestration_does_not_burst_after_long_wait() {
+        let (api, connectors_calls) = counting_api();
+        let (ready_sender, ready_receiver) = watch::channel(false);
+        let handle = tokio::spawn(orchestration_loop(api, fake_orchestrator(), ready_receiver, SCHEDULE));
+        tokio::time::sleep(SCHEDULE * 10).await;
 
-        // Clean up
-        alive_handle.abort();
-        orch_handle.abort();
-        watcher.abort();
+        ready_sender.send(true).expect("receiver alive");
+        tokio::time::sleep(SCHEDULE / 10).await;
+        let after_ready = connectors_calls.load(Ordering::SeqCst);
+        tokio::time::sleep(SCHEDULE).await;
+        let after_one_period = connectors_calls.load(Ordering::SeqCst);
+        handle.abort();
+
+        assert!(
+            after_ready <= 1,
+            "at most one orchestration should run right after readiness, got {after_ready}"
+        );
+        assert!(
+            after_one_period - after_ready <= 1,
+            "at most one orchestration per period, got {} in one period",
+            after_one_period - after_ready
+        );
     }
 
     /// Given: version fails twice then succeeds
