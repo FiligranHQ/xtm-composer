@@ -424,7 +424,8 @@ pub trait ComposerApi {
 
     async fn ping_alive(&self) -> Option<String>;
 
-    async fn register(&self) -> ();
+    /// Register the composer as a manager; returns true only when the platform accepted it.
+    async fn register(&self) -> bool;
 
     async fn connectors(&self) -> Option<Vec<ApiConnector>>;
 

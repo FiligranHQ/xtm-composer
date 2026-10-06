@@ -358,7 +358,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn register(&self) -> () {
+        async fn register(&self) -> bool {
             unimplemented!()
         }
 

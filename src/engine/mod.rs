@@ -116,11 +116,14 @@ async fn alive_loop(
             let mut retry_attempt: u32 = 0;
             // Infinite retry loop for initial connection
             loop {
-                let version = api.version().await;
+                // Connected only when the version answers and registration succeeds
+                let version = match api.version().await {
+                    Some(version) => api.register().await.then_some(version),
+                    None => None,
+                };
                 match version {
                     Some(version) => {
-                        // Connection successful - register and start ping loop
-                        api.register().await;
+                        // Connection and registration successful - start ping loop
                         // Signal readiness
                         let _ = ready.clone().send(true);
                         let mut detected_version: String = version.clone();
@@ -132,7 +135,7 @@ async fn alive_loop(
                                 Some(platform_version) => {
                                     // Register when version changes
                                     if platform_version != detected_version {
-                                        api.register().await;
+                                        let _ = api.register().await;
                                         detected_version = platform_version;
                                     }
                                 }
@@ -146,7 +149,7 @@ async fn alive_loop(
                         }
                     },
                     None => {
-                        // Connection failed - exponential backoff then retry
+                        // Connection or registration failed - exponential backoff then retry
                         let delay = backoff_delay(retry_attempt, 1, backoff_max);
                         retry_attempt = retry_attempt.saturating_add(1);
                         tokio::time::sleep(delay).await;
@@ -234,9 +237,11 @@ mod tests {
             resp.pop().unwrap_or(Some("1.0".to_string()))
         }
 
-        async fn register(&self) {
+        async fn register(&self) -> bool {
             self.register_calls.fetch_add(1, Ordering::SeqCst);
-            let _ = self.register_responses.lock().await.pop();
+            // Yield so readiness observers see each transition before the next send
+            tokio::task::yield_now().await;
+            self.register_responses.lock().await.pop().unwrap_or(true)
         }
 
         async fn connectors(&self) -> Option<Vec<ApiConnector>> {
@@ -368,6 +373,56 @@ mod tests {
         );
     }
 
+    const PING_INTERVAL: Duration = Duration::from_secs(10);
+    const BACKOFF_MAX: u64 = 30;
+
+    /// Spawn a watcher recording each observed readiness value with the
+    /// number of registrations performed when it was observed.
+    fn record_ready(
+        mut ready: watch::Receiver<bool>,
+        register_calls: Arc<AtomicUsize>,
+    ) -> (Arc<std::sync::Mutex<Vec<(bool, usize)>>>, JoinHandle<()>) {
+        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = observed.clone();
+        let watcher = tokio::spawn(async move {
+            while ready.changed().await.is_ok() {
+                let value = *ready.borrow_and_update();
+                let mut sink = sink.lock().expect("mutex should not be poisoned");
+                // Repeated sends of the same value are not transitions
+                if sink.last().map(|(last, _)| *last) != Some(value) {
+                    sink.push((value, register_calls.load(Ordering::SeqCst)));
+                }
+            }
+        });
+        (observed, watcher)
+    }
+
+    /// Given: the platform answers the version check
+    /// And: the platform rejects registration twice and then accepts it
+    /// When: the composer retries
+    /// Then: the composer becomes ready only after the accepted registration
+    #[tokio::test(start_paused = true)]
+    async fn alive_ready_only_after_successful_registration() {
+        // pop() returns last first: false, false, true
+        let api = EngineFakeApi::new(vec![], vec![], vec![true, false, false]);
+        let register_calls = api.register_calls.clone();
+        let (ready_sender, ready_receiver) = watch::channel(false);
+        let (observed, watcher) = record_ready(ready_receiver, register_calls.clone());
+        let handle = tokio::spawn(alive_loop(Box::new(api), ready_sender, PING_INTERVAL, BACKOFF_MAX));
+
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        handle.abort();
+        watcher.abort();
+
+        let observed = observed.lock().expect("mutex should not be poisoned").clone();
+        assert_eq!(
+            observed,
+            vec![(true, 3)],
+            "ready must stay false until the third (accepted) registration, observed (ready, registrations): {observed:?}"
+        );
+        assert_eq!(register_calls.load(Ordering::SeqCst), 3);
+    }
+
     /// Given: version fails twice then succeeds
     /// When: alive retries
     /// Then: delays between retries increase (exponential backoff)
@@ -410,38 +465,40 @@ mod tests {
         alive_handle.abort();
     }
 
-    /// Given: alive connects, then ping fails, then succeeds again
-    /// When: alive loop runs
-    /// Then: ready transitions true -> false -> true, and register is called again
-    #[tokio::test]
-    async fn alive_recovers_from_connection_loss() {
-        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(EngineFakeApi::new(
+    /// Given: the composer is connected and registered
+    /// When: a heartbeat fails and the platform then answers again
+    /// Then: the composer registers again and becomes ready again
+    #[tokio::test(start_paused = true)]
+    async fn alive_reregisters_after_connection_loss() {
+        let api = EngineFakeApi::new(
+            vec![], // version always answers
             vec![
-                Some("1.0".to_string()), // initial version
-                Some("1.0".to_string()), // re-version after loss
+                None,                    // second ping fails (connection lost)
+                Some("1.0".to_string()), // first ping ok (pop() returns last first)
             ],
-            vec![
-                Some("1.0".to_string()), // first ping ok
-                None,                    // ping fails (connection lost)
-                Some("1.0".to_string()), // ping ok after recovery
-            ],
-            vec![true, true, true], // register called multiple times
-        ));
+            vec![], // registration always accepted
+        );
+        let register_calls = api.register_calls.clone();
         let (ready_sender, ready_receiver) = watch::channel(false);
+        let (observed, watcher) = record_ready(ready_receiver, register_calls.clone());
+        let handle = tokio::spawn(alive_loop(Box::new(api), ready_sender, PING_INTERVAL, BACKOFF_MAX));
 
-        let alive_handle = alive(api, ready_sender).await;
+        tokio::time::sleep(PING_INTERVAL * 6).await;
+        handle.abort();
+        watcher.abort();
 
-        // Wait for initial connection
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        assert!(*ready_receiver.borrow(), "should be ready after initial connection");
-
-        // Wait for ping failure and recovery
-        tokio::time::sleep(Duration::from_secs(3)).await;
-
-        // Should be ready again after recovery
-        assert!(*ready_receiver.borrow(), "should be ready after recovery");
-
-        alive_handle.abort();
+        let transitions: Vec<bool> = observed
+            .lock()
+            .expect("mutex should not be poisoned")
+            .iter()
+            .map(|(ready, _)| *ready)
+            .collect();
+        assert_eq!(transitions, vec![true, false, true], "ready should go true -> false -> true");
+        assert_eq!(
+            register_calls.load(Ordering::SeqCst),
+            2,
+            "the composer should register again after the connection is restored"
+        );
     }
 
     /// Test backoff_delay produces increasing delays
