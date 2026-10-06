@@ -178,6 +178,7 @@ mod tests {
         ping_responses: Arc<Mutex<Vec<Option<String>>>>,
         register_responses: Arc<Mutex<Vec<bool>>>,
         version_calls: Arc<AtomicUsize>,
+        version_instants: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
         register_calls: Arc<AtomicUsize>,
         ping_calls: Arc<AtomicUsize>,
         connectors_calls: Arc<AtomicUsize>,
@@ -203,6 +204,7 @@ mod tests {
                 ping_responses: Arc::new(Mutex::new(ping_responses)),
                 register_responses: Arc::new(Mutex::new(register_responses)),
                 version_calls: Arc::new(AtomicUsize::new(0)),
+                version_instants: Arc::new(std::sync::Mutex::new(Vec::new())),
                 register_calls: Arc::new(AtomicUsize::new(0)),
                 ping_calls: Arc::new(AtomicUsize::new(0)),
                 connectors_calls: Arc::new(AtomicUsize::new(0)),
@@ -227,6 +229,10 @@ mod tests {
 
         async fn version(&self) -> Option<String> {
             self.version_calls.fetch_add(1, Ordering::SeqCst);
+            self.version_instants
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(tokio::time::Instant::now());
             let mut resp = self.version_responses.lock().await;
             resp.pop().unwrap_or(Some("1.0".to_string()))
         }
@@ -423,46 +429,30 @@ mod tests {
         assert_eq!(register_calls.load(Ordering::SeqCst), 3);
     }
 
-    /// Given: version fails twice then succeeds
-    /// When: alive retries
-    /// Then: delays between retries increase (exponential backoff)
-    #[tokio::test]
+    /// Given: the platform is unreachable (version fails twice then succeeds)
+    /// When: consecutive version checks fail
+    /// Then: the waits between attempts follow the backoff schedule for attempts 0, 1
+    #[tokio::test(start_paused = true)]
     async fn alive_retry_uses_exponential_backoff() {
-        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(EngineFakeApi::new(
+        let api = EngineFakeApi::new(
             vec![Some("1.0".to_string()), None, None], // pop() returns last first: None, None, Some("1.0")
-            vec![Some("1.0".to_string()); 3],
-            vec![true],
-        ));
-        let (ready_sender, ready_receiver) = watch::channel(false);
-
-        let start = Instant::now();
-        let alive_handle = alive(api, ready_sender).await;
-
-        // Wait for ready to become true (after 3 version attempts)
-        let _timeout = tokio::time::timeout(Duration::from_secs(15), async {
-            loop {
-                if *ready_receiver.borrow() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }).await.expect("alive should eventually become ready");
-
-        let elapsed = start.elapsed();
-        // With backoff 1s, 2s, 4s (roughly), total should be at least ~3s
-        assert!(
-            elapsed >= Duration::from_secs(2),
-            "backoff should cause noticeable delay, elapsed: {:?}",
-            elapsed
+            vec![],
+            vec![],
         );
-        // But not too long (cap at 30s)
-        assert!(
-            elapsed < Duration::from_secs(15),
-            "backoff should not exceed cap, elapsed: {:?}",
-            elapsed
-        );
+        let version_instants = api.version_instants.clone();
+        let (ready_sender, mut ready_receiver) = watch::channel(false);
+        let handle = tokio::spawn(alive_loop(Box::new(api), ready_sender, PING_INTERVAL, BACKOFF_MAX));
 
-        alive_handle.abort();
+        tokio::time::timeout(Duration::from_secs(60), ready_receiver.wait_for(|ready| *ready))
+            .await
+            .expect("alive should become ready after the third version check")
+            .expect("alive should still be running");
+        handle.abort();
+
+        let instants = version_instants.lock().expect("mutex should not be poisoned").clone();
+        assert_eq!(instants.len(), 3, "expected three version checks");
+        assert_eq!(instants[1] - instants[0], backoff_delay(0, 1, BACKOFF_MAX), "wait after attempt 0");
+        assert_eq!(instants[2] - instants[1], backoff_delay(1, 1, BACKOFF_MAX), "wait after attempt 1");
     }
 
     /// Given: the composer is connected and registered
