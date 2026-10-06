@@ -9,6 +9,8 @@ use tracing::error;
 
 pub mod composer;
 pub mod docker;
+#[cfg(test)]
+pub mod fake;
 pub mod image;
 pub mod kubernetes;
 pub mod portainer;

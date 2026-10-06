@@ -33,7 +33,7 @@ fn backoff_delay(attempt: u32, base_secs: u64, max_secs: u64) -> Duration {
 
 async fn orchestration(
     api: Box<dyn ComposerApi + Send + Sync>,
-    mut ready: watch::Receiver<bool>,
+    ready: watch::Receiver<bool>,
 ) {
     let settings = settings();
     // Get current deployment in target orchestrator
@@ -60,6 +60,15 @@ async fn orchestration(
         };
     // Init scheduler interval
     let schedule = Duration::from_secs(settings.manager.execute_schedule);
+    orchestration_loop(api, orchestrator, ready, schedule).await;
+}
+
+async fn orchestration_loop(
+    api: Box<dyn ComposerApi + Send + Sync>,
+    orchestrator: Box<dyn Orchestrator + Send + Sync>,
+    mut ready: watch::Receiver<bool>,
+    schedule: Duration,
+) {
     let mut interval = interval(schedule);
     // Start scheduling
     tokio::select! {
@@ -91,56 +100,63 @@ pub async fn alive(
     let settings = settings();
     let ping_interval = Duration::from_secs(settings.manager.ping_alive_schedule);
     let backoff_max = settings.manager.ping_alive_schedule.max(30);
-    tokio::spawn(async move {
-        // Start scheduling
-        tokio::select! {
-            _ = signals::handle_stop_signals() => {}
-            _ = async {
-                let mut retry_attempt: u32 = 0;
-                // Infinite retry loop for initial connection
-                loop {
-                    let version = api.version().await;
-                    match version {
-                        Some(version) => {
-                            // Connection successful - register and start ping loop
-                            api.register().await;
-                            // Signal readiness
-                            let _ = ready.clone().send(true);
-                            let mut detected_version: String = version.clone();
-                            // Reset backoff on success
-                            retry_attempt = 0;
-                            loop {
-                                let ping_response = api.ping_alive().await;
-                                match ping_response {
-                                    Some(platform_version) => {
-                                        // Register when version changes
-                                        if platform_version != detected_version {
-                                            api.register().await;
-                                            detected_version = platform_version;
-                                        }
-                                    }
-                                    _ => {
-                                        // Connection lost - signal unready, break to outer retry loop
-                                        let _ = ready.clone().send(false);
-                                        break;
+    tokio::spawn(alive_loop(api, ready, ping_interval, backoff_max))
+}
+
+async fn alive_loop(
+    api: Box<dyn ComposerApi + Send + Sync>,
+    ready: watch::Sender<bool>,
+    ping_interval: Duration,
+    backoff_max: u64,
+) {
+    // Start scheduling
+    tokio::select! {
+        _ = signals::handle_stop_signals() => {}
+        _ = async {
+            let mut retry_attempt: u32 = 0;
+            // Infinite retry loop for initial connection
+            loop {
+                let version = api.version().await;
+                match version {
+                    Some(version) => {
+                        // Connection successful - register and start ping loop
+                        api.register().await;
+                        // Signal readiness
+                        let _ = ready.clone().send(true);
+                        let mut detected_version: String = version.clone();
+                        // Reset backoff on success
+                        retry_attempt = 0;
+                        loop {
+                            let ping_response = api.ping_alive().await;
+                            match ping_response {
+                                Some(platform_version) => {
+                                    // Register when version changes
+                                    if platform_version != detected_version {
+                                        api.register().await;
+                                        detected_version = platform_version;
                                     }
                                 }
-                                tokio::time::sleep(ping_interval).await;
+                                _ => {
+                                    // Connection lost - signal unready, break to outer retry loop
+                                    let _ = ready.clone().send(false);
+                                    break;
+                                }
                             }
-                        },
-                        None => {
-                            // Connection failed - exponential backoff then retry
-                            let delay = backoff_delay(retry_attempt, 1, backoff_max);
-                            retry_attempt = retry_attempt.saturating_add(1);
-                            tokio::time::sleep(delay).await;
+                            tokio::time::sleep(ping_interval).await;
                         }
+                    },
+                    None => {
+                        // Connection failed - exponential backoff then retry
+                        let delay = backoff_delay(retry_attempt, 1, backoff_max);
+                        retry_attempt = retry_attempt.saturating_add(1);
+                        tokio::time::sleep(delay).await;
                     }
                 }
-            } => {
-                // This branch will never be reached due to the infinite loop.
             }
+        } => {
+            // This branch will never be reached due to the infinite loop.
         }
-    })
+    }
 }
 
 #[cfg(test)]
@@ -148,6 +164,7 @@ mod tests {
     use super::*;
     use crate::api::{ApiConnector, ConnectorStatus};
     use crate::config::settings::Daemon;
+    use crate::orchestrator::fake::FakeOrchestrator;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Mutex;
@@ -243,6 +260,13 @@ mod tests {
         }
     }
 
+    fn fake_orchestrator() -> Box<dyn Orchestrator + Send + Sync> {
+        Box::new(FakeOrchestrator::new(
+            Vec::new(),
+            Arc::new(std::sync::Mutex::new(Vec::new())),
+        ))
+    }
+
     /// Given: alive succeeds immediately
     /// When: alive and orchestration run concurrently with a shared watch channel
     /// Then: orchestration does not proceed until ready is true
@@ -295,7 +319,7 @@ mod tests {
         ));
         let orch_ready = ready_receiver.clone();
         let orch_handle = tokio::spawn(async move {
-            orchestration(orch_api, orch_ready).await;
+            orchestration_loop(orch_api, fake_orchestrator(), orch_ready, Duration::from_secs(1)).await;
         });
 
         // Let orchestration run briefly
