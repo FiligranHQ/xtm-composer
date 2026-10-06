@@ -10,7 +10,10 @@ pub struct FakeOrchestrator {
 }
 
 impl FakeOrchestrator {
-    pub fn new(containers: Vec<OrchestratorContainer>, removed_ids: Arc<Mutex<Vec<String>>>) -> Self {
+    pub fn new(
+        containers: Vec<OrchestratorContainer>,
+        removed_ids: Arc<Mutex<Vec<String>>>,
+    ) -> Self {
         Self {
             containers,
             removed_ids,

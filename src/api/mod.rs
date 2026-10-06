@@ -706,11 +706,21 @@ mod tests {
         })
         .unwrap();
 
-        let first = client.post(&url).json(&serde_json::json!({})).send().await.unwrap();
+        let first = client
+            .post(&url)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(first.status(), reqwest::StatusCode::NOT_FOUND);
         let _ = first.text().await.unwrap();
 
-        let second = client.post(&url).json(&serde_json::json!({})).send().await.unwrap();
+        let second = client
+            .post(&url)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(
             second.status(),
             reqwest::StatusCode::OK,

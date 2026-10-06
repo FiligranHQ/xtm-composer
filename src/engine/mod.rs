@@ -31,10 +31,7 @@ fn backoff_delay(attempt: u32, base_secs: u64, max_secs: u64) -> Duration {
     delay + Duration::from_millis(jitter_offset)
 }
 
-async fn orchestration(
-    api: Box<dyn ComposerApi + Send + Sync>,
-    ready: watch::Receiver<bool>,
-) {
+async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>, ready: watch::Receiver<bool>) {
     let settings = settings();
     // Get current deployment in target orchestrator
     let daemon_configuration = api.daemon();
@@ -299,7 +296,12 @@ mod tests {
         let (ready_sender, ready_receiver) = watch::channel(false);
         // Readiness is signalled before orchestration starts running
         ready_sender.send(true).expect("receiver alive");
-        let handle = tokio::spawn(orchestration_loop(api, fake_orchestrator(), ready_receiver, SCHEDULE));
+        let handle = tokio::spawn(orchestration_loop(
+            api,
+            fake_orchestrator(),
+            ready_receiver,
+            SCHEDULE,
+        ));
 
         tokio::time::sleep(SCHEDULE * 3 + SCHEDULE / 2).await;
         let calls = connectors_calls.load(Ordering::SeqCst);
@@ -318,7 +320,12 @@ mod tests {
     async fn orchestration_stops_cleanly_when_alive_stops() {
         let (api, _connectors_calls) = counting_api();
         let (ready_sender, ready_receiver) = watch::channel(false);
-        let handle = tokio::spawn(orchestration_loop(api, fake_orchestrator(), ready_receiver, SCHEDULE));
+        let handle = tokio::spawn(orchestration_loop(
+            api,
+            fake_orchestrator(),
+            ready_receiver,
+            SCHEDULE,
+        ));
         // Let orchestration start waiting for readiness
         tokio::task::yield_now().await;
 
@@ -342,13 +349,21 @@ mod tests {
     async fn orchestration_does_not_fetch_connectors_before_ready() {
         let (api, connectors_calls) = counting_api();
         let (_ready_sender, ready_receiver) = watch::channel(false);
-        let handle = tokio::spawn(orchestration_loop(api, fake_orchestrator(), ready_receiver, SCHEDULE));
+        let handle = tokio::spawn(orchestration_loop(
+            api,
+            fake_orchestrator(),
+            ready_receiver,
+            SCHEDULE,
+        ));
 
         tokio::time::sleep(SCHEDULE * 5 + SCHEDULE / 2).await;
         let calls = connectors_calls.load(Ordering::SeqCst);
         handle.abort();
 
-        assert_eq!(calls, 0, "connector list must not be requested before readiness");
+        assert_eq!(
+            calls, 0,
+            "connector list must not be requested before readiness"
+        );
     }
 
     /// Given: orchestration waited for readiness for many orchestration periods
@@ -358,7 +373,12 @@ mod tests {
     async fn orchestration_does_not_burst_after_long_wait() {
         let (api, connectors_calls) = counting_api();
         let (ready_sender, ready_receiver) = watch::channel(false);
-        let handle = tokio::spawn(orchestration_loop(api, fake_orchestrator(), ready_receiver, SCHEDULE));
+        let handle = tokio::spawn(orchestration_loop(
+            api,
+            fake_orchestrator(),
+            ready_receiver,
+            SCHEDULE,
+        ));
         tokio::time::sleep(SCHEDULE * 10).await;
 
         ready_sender.send(true).expect("receiver alive");
@@ -414,13 +434,21 @@ mod tests {
         let register_calls = api.register_calls.clone();
         let (ready_sender, ready_receiver) = watch::channel(false);
         let (observed, watcher) = record_ready(ready_receiver, register_calls.clone());
-        let handle = tokio::spawn(alive_loop(Box::new(api), ready_sender, PING_INTERVAL, BACKOFF_MAX));
+        let handle = tokio::spawn(alive_loop(
+            Box::new(api),
+            ready_sender,
+            PING_INTERVAL,
+            BACKOFF_MAX,
+        ));
 
         tokio::time::sleep(Duration::from_secs(60)).await;
         handle.abort();
         watcher.abort();
 
-        let observed = observed.lock().expect("mutex should not be poisoned").clone();
+        let observed = observed
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone();
         assert_eq!(
             observed,
             vec![(true, 3)],
@@ -441,18 +469,37 @@ mod tests {
         );
         let version_instants = api.version_instants.clone();
         let (ready_sender, mut ready_receiver) = watch::channel(false);
-        let handle = tokio::spawn(alive_loop(Box::new(api), ready_sender, PING_INTERVAL, BACKOFF_MAX));
+        let handle = tokio::spawn(alive_loop(
+            Box::new(api),
+            ready_sender,
+            PING_INTERVAL,
+            BACKOFF_MAX,
+        ));
 
-        tokio::time::timeout(Duration::from_secs(60), ready_receiver.wait_for(|ready| *ready))
-            .await
-            .expect("alive should become ready after the third version check")
-            .expect("alive should still be running");
+        tokio::time::timeout(
+            Duration::from_secs(60),
+            ready_receiver.wait_for(|ready| *ready),
+        )
+        .await
+        .expect("alive should become ready after the third version check")
+        .expect("alive should still be running");
         handle.abort();
 
-        let instants = version_instants.lock().expect("mutex should not be poisoned").clone();
+        let instants = version_instants
+            .lock()
+            .expect("mutex should not be poisoned")
+            .clone();
         assert_eq!(instants.len(), 3, "expected three version checks");
-        assert_eq!(instants[1] - instants[0], backoff_delay(0, 1, BACKOFF_MAX), "wait after attempt 0");
-        assert_eq!(instants[2] - instants[1], backoff_delay(1, 1, BACKOFF_MAX), "wait after attempt 1");
+        assert_eq!(
+            instants[1] - instants[0],
+            backoff_delay(0, 1, BACKOFF_MAX),
+            "wait after attempt 0"
+        );
+        assert_eq!(
+            instants[2] - instants[1],
+            backoff_delay(1, 1, BACKOFF_MAX),
+            "wait after attempt 1"
+        );
     }
 
     /// Given: the composer is connected and registered
@@ -471,7 +518,12 @@ mod tests {
         let register_calls = api.register_calls.clone();
         let (ready_sender, ready_receiver) = watch::channel(false);
         let (observed, watcher) = record_ready(ready_receiver, register_calls.clone());
-        let handle = tokio::spawn(alive_loop(Box::new(api), ready_sender, PING_INTERVAL, BACKOFF_MAX));
+        let handle = tokio::spawn(alive_loop(
+            Box::new(api),
+            ready_sender,
+            PING_INTERVAL,
+            BACKOFF_MAX,
+        ));
 
         tokio::time::sleep(PING_INTERVAL * 6).await;
         handle.abort();
@@ -483,7 +535,11 @@ mod tests {
             .iter()
             .map(|(ready, _)| *ready)
             .collect();
-        assert_eq!(transitions, vec![true, false, true], "ready should go true -> false -> true");
+        assert_eq!(
+            transitions,
+            vec![true, false, true],
+            "ready should go true -> false -> true"
+        );
         assert_eq!(
             register_calls.load(Ordering::SeqCst),
             2,
