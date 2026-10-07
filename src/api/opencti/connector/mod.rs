@@ -61,3 +61,39 @@ impl ManagedConnector {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::decrypt_value::tests::{encrypt, test_private_key};
+
+    #[test]
+    fn to_api_connector_reports_undecryptable_keys() {
+        let managed = ManagedConnector {
+            id: cynic::Id::new("connector-1"),
+            name: "Connector".to_string(),
+            manager_contract_hash: Some("hash".to_string()),
+            manager_contract_image: Some("image".to_string()),
+            manager_current_status: Some("started".to_string()),
+            manager_requested_status: Some("starting".to_string()),
+            manager_contract_configuration: Some(vec![
+                ConnectorContractConfiguration {
+                    key: "GOOD".to_string(),
+                    value: Some(encrypt(1, "s3cr3t")),
+                    encrypted: Some(true),
+                },
+                ConnectorContractConfiguration {
+                    key: "BAD".to_string(),
+                    value: Some("bm90LWVuY3J5cHRlZA==".to_string()),
+                    encrypted: Some(true),
+                },
+            ]),
+        };
+
+        let connector = managed.to_api_connector(test_private_key());
+
+        assert_eq!(connector.undecryptable_keys, vec!["BAD".to_string()]);
+        assert_eq!(connector.contract_configuration.len(), 1);
+        assert_eq!(connector.contract_configuration[0].value, "s3cr3t");
+    }
+}

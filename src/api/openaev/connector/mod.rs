@@ -53,3 +53,39 @@ impl ConnectorInstances {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::decrypt_value::tests::{encrypt, test_private_key};
+
+    #[test]
+    fn to_api_connector_reports_undecryptable_keys() {
+        let instance = ConnectorInstances {
+            connector_instance_id: "instance-1".to_string(),
+            connector_instance_name: "Instance".to_string(),
+            connector_instance_hash: "hash".to_string(),
+            connector_image: "image".to_string(),
+            connector_instance_current_status: "started".to_string(),
+            connector_instance_requested_status: "starting".to_string(),
+            connector_instance_configurations: vec![
+                ConnectorContractConfiguration {
+                    configuration_key: "GOOD".to_string(),
+                    configuration_value: Some(encrypt(2, "s3cr3t")),
+                    configuration_is_encrypted: true,
+                },
+                ConnectorContractConfiguration {
+                    configuration_key: "BAD".to_string(),
+                    configuration_value: Some("bm90LWVuY3J5cHRlZA==".to_string()),
+                    configuration_is_encrypted: true,
+                },
+            ],
+        };
+
+        let connector = instance.to_api_connector(test_private_key());
+
+        assert_eq!(connector.undecryptable_keys, vec!["BAD".to_string()]);
+        assert_eq!(connector.contract_configuration.len(), 1);
+        assert_eq!(connector.contract_configuration[0].value, "s3cr3t");
+    }
+}

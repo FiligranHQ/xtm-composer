@@ -29,3 +29,7 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] 
 
 [build-dependencies]
 cynic-codegen = { version = "3" }
+
+# RSA key generation (used by the decryption tests) is very slow unoptimized.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
