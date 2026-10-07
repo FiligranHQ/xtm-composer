@@ -176,8 +176,10 @@ pub async fn orchestrate(
                     // connectors likely share the same name (OpenCTI should forbid
                     // this). Without this, the only symptom is an obscure Kubernetes
                     // selector-mismatch error.
-                    // The deployment belongs to another connector, so skip it rather
-                    // than refreshing, scaling or deleting something we don't own.
+                    // The deployment belongs to another connector, so don't reconcile
+                    // it (refresh/start/stop) for this one. If it is an orphan of this
+                    // manager, the cleanup below removes it and the connector gets
+                    // deployed on the next cycle; otherwise it is left untouched.
                     if let Some(found_id) =
                         detect_connector_id_mismatch(&container, &connector.id)
                     {
@@ -384,7 +386,12 @@ mod tests {
         }
 
         async fn list(&self) -> Vec<OrchestratorContainer> {
-            self.containers.clone()
+            // Real orchestrators only list containers labeled with the manager.
+            self.containers
+                .iter()
+                .filter(|container| container.labels.contains_key("opencti-manager"))
+                .cloned()
+                .collect()
         }
 
         async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
@@ -598,20 +605,17 @@ mod tests {
         assert!(removed.is_empty(), "correctly named containers should not be removed: {removed:?}");
     }
 
-    /// Regression test for #162: a deployment sharing the connector's name but
-    /// owned by another connector-id must be left alone (no refresh/start/stop).
-    #[tokio::test]
-    async fn orchestrate_skips_connector_on_name_collision() {
-        let mut colliding = managed_container("OTHER", "opencti");
-        colliding.name = connector("A").container_name();
-
-        let mut requested = connector("A");
-        requested.requested_status = "starting".to_string();
-
-        let orchestrator = FakeOrchestrator::new(vec![colliding], Arc::new(Mutex::new(Vec::new())));
+    /// Runs one orchestration cycle and returns the (actions, removed ids) seen
+    /// by the fake orchestrator.
+    async fn run_cycle(
+        containers: Vec<OrchestratorContainer>,
+        connectors: Vec<ApiConnector>,
+    ) -> (Vec<String>, Vec<String>) {
+        let removed_ids = Arc::new(Mutex::new(Vec::new()));
+        let orchestrator = FakeOrchestrator::new(containers, Arc::clone(&removed_ids));
         let actions = Arc::clone(&orchestrator.actions);
         let orchestrator: Box<dyn Orchestrator + Send + Sync> = Box::new(orchestrator);
-        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(FakeApi::new(vec![requested]));
+        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(FakeApi::new(connectors));
 
         let mut tick = Instant::now();
         let mut health_tick = Instant::now();
@@ -619,10 +623,63 @@ mod tests {
         orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
 
         let actions = actions.lock().expect("mutex should not be poisoned").clone();
-        assert!(
-            actions.is_empty(),
-            "colliding deployment must not be touched: {actions:?}"
-        );
+        let removed = removed_ids.lock().expect("mutex should not be poisoned").clone();
+        (actions, removed)
+    }
+
+    fn starting_connector(id: &str) -> ApiConnector {
+        let mut connector = connector(id);
+        connector.requested_status = "starting".to_string();
+        connector
+    }
+
+    /// Control case for the collision tests below: without a collision, the
+    /// connector is reconciled (refreshed on hash change, started/stopped).
+    #[tokio::test]
+    async fn orchestrate_reconciles_connector_without_collision() {
+        let mut outdated = managed_container("A", "opencti");
+        outdated
+            .envs
+            .insert("OPENCTI_CONFIG_HASH".to_string(), "old-hash".to_string());
+        let mut running = managed_container("B", "opencti");
+        running.state = "running".to_string();
+
+        let (actions, removed) = run_cycle(
+            vec![outdated, running],
+            vec![starting_connector("A"), connector("B")],
+        )
+        .await;
+
+        assert_eq!(actions, vec!["refresh:A", "start:A", "stop:B"]);
+        assert!(removed.is_empty(), "nothing should be removed: {removed:?}");
+    }
+
+    /// Regression test for #162: a same-named deployment not managed by this
+    /// manager (e.g. deployed the "old way") must be left completely untouched.
+    #[tokio::test]
+    async fn orchestrate_skips_connector_on_name_collision_with_foreign_deployment() {
+        let mut foreign = managed_container("OTHER", "opencti");
+        foreign.name = connector("A").container_name();
+        foreign.labels.remove("opencti-manager");
+
+        let (actions, removed) = run_cycle(vec![foreign], vec![starting_connector("A")]).await;
+
+        assert!(actions.is_empty(), "colliding deployment must not be reconciled: {actions:?}");
+        assert!(removed.is_empty(), "foreign deployment must not be removed: {removed:?}");
+    }
+
+    /// Regression test for #162: a same-named deployment left by a deleted
+    /// connector of this manager is not reconciled for the new connector, but
+    /// cleaned up as an orphan so the new connector deploys on the next cycle.
+    #[tokio::test]
+    async fn orchestrate_skips_connector_on_name_collision_and_cleans_orphan() {
+        let mut orphan = managed_container("OTHER", "opencti");
+        orphan.name = connector("A").container_name();
+
+        let (actions, removed) = run_cycle(vec![orphan], vec![starting_connector("A")]).await;
+
+        assert!(actions.is_empty(), "colliding deployment must not be reconciled: {actions:?}");
+        assert_eq!(removed, vec!["OTHER".to_string()]);
     }
 
     #[test]
