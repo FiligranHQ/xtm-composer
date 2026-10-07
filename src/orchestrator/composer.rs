@@ -176,6 +176,8 @@ pub async fn orchestrate(
                     // connectors likely share the same name (OpenCTI should forbid
                     // this). Without this, the only symptom is an obscure Kubernetes
                     // selector-mismatch error.
+                    // The deployment belongs to another connector, so skip it rather
+                    // than refreshing, scaling or deleting something we don't own.
                     if let Some(found_id) =
                         detect_connector_id_mismatch(&container, &connector.id)
                     {
@@ -183,8 +185,9 @@ pub async fn orchestrate(
                             name = connector.name,
                             expected_id = connector.id,
                             found_id = found_id,
-                            "Connector name collision detected: an existing deployment with this name belongs to a different connector id (duplicate connector name?)"
+                            "Connector name collision detected: an existing deployment with this name belongs to a different connector id (duplicate connector name?), skipping"
                         );
+                        continue;
                     }
                     orchestrate_existing(tick, health_tick, orchestrator, api, connector, container).await
                 }
@@ -349,6 +352,7 @@ mod tests {
     struct FakeOrchestrator {
         containers: Vec<OrchestratorContainer>,
         removed_ids: Arc<Mutex<Vec<String>>>,
+        actions: Arc<Mutex<Vec<String>>>,
     }
 
     impl FakeOrchestrator {
@@ -356,16 +360,26 @@ mod tests {
             Self {
                 containers,
                 removed_ids,
+                actions: Arc::new(Mutex::new(Vec::new())),
             }
+        }
+
+        fn record(&self, action: &str, connector: &ApiConnector) {
+            self.actions
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(format!("{action}:{}", connector.id));
         }
     }
 
     #[async_trait::async_trait]
     impl Orchestrator for FakeOrchestrator {
         async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+            // Real orchestrators look containers up by name, which is what makes
+            // name collisions possible.
             self.containers
                 .iter()
-                .find(|container| container.labels.get("opencti-connector-id") == Some(&connector.id))
+                .find(|container| container.name == connector.container_name())
                 .cloned()
         }
 
@@ -373,9 +387,13 @@ mod tests {
             self.containers.clone()
         }
 
-        async fn start(&self, _container: &OrchestratorContainer, _connector: &ApiConnector) -> () {}
+        async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+            self.record("start", connector);
+        }
 
-        async fn stop(&self, _container: &OrchestratorContainer, _connector: &ApiConnector) -> () {}
+        async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+            self.record("stop", connector);
+        }
 
         async fn remove(&self, container: &OrchestratorContainer) -> () {
             self.removed_ids
@@ -384,7 +402,8 @@ mod tests {
                 .push(container.extract_opencti_id());
         }
 
-        async fn refresh(&self, _connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+            self.record("refresh", connector);
             None
         }
 
@@ -577,6 +596,33 @@ mod tests {
             .expect("mutex should not be poisoned")
             .clone();
         assert!(removed.is_empty(), "correctly named containers should not be removed: {removed:?}");
+    }
+
+    /// Regression test for #162: a deployment sharing the connector's name but
+    /// owned by another connector-id must be left alone (no refresh/start/stop).
+    #[tokio::test]
+    async fn orchestrate_skips_connector_on_name_collision() {
+        let mut colliding = managed_container("OTHER", "opencti");
+        colliding.name = connector("A").container_name();
+
+        let mut requested = connector("A");
+        requested.requested_status = "starting".to_string();
+
+        let orchestrator = FakeOrchestrator::new(vec![colliding], Arc::new(Mutex::new(Vec::new())));
+        let actions = Arc::clone(&orchestrator.actions);
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> = Box::new(orchestrator);
+        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(FakeApi::new(vec![requested]));
+
+        let mut tick = Instant::now();
+        let mut health_tick = Instant::now();
+
+        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+
+        let actions = actions.lock().expect("mutex should not be poisoned").clone();
+        assert!(
+            actions.is_empty(),
+            "colliding deployment must not be touched: {actions:?}"
+        );
     }
 
     #[test]

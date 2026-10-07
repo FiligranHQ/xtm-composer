@@ -163,10 +163,21 @@ impl KubeOrchestrator {
         };
         let patch = Patch::Merge(&deployment_patch);
         let name = connector.container_name();
-        self.deployments
+        // The deployment may have disappeared within the same cycle (e.g. deleted
+        // by the refresh() self-heal): log and move on instead of panicking, which
+        // would kill the orchestration task for every connector.
+        if let Err(err) = self
+            .deployments
             .patch(name.as_str(), &PatchParams::default(), &patch)
             .await
-            .unwrap();
+        {
+            error!(
+                name = name,
+                scale = scale,
+                error = err.to_string(),
+                "Failed to scale deployment"
+            );
+        }
     }
 
     pub fn from_deployment(deployment: Deployment) -> OrchestratorContainer {
@@ -527,6 +538,79 @@ impl Orchestrator for KubeOrchestrator {
             "terminated" => ConnectorStatus::Stopped,
             _ => ConnectorStatus::Stopped,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::ApiContractConfig;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// Fake Kubernetes API answering every request with a 404, as when the
+    /// deployment was deleted earlier in the same orchestration cycle.
+    async fn spawn_not_found_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf).await;
+                let body = r#"{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"deployments.apps \"importfilestix\" not found","reason":"NotFound","code":404}"#;
+                let response = format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://127.0.0.1:{}", addr.port())
+    }
+
+    /// Regression test for #162: scaling a deployment that no longer exists
+    /// must not panic and kill the orchestration task.
+    #[tokio::test]
+    async fn stop_does_not_panic_when_deployment_is_missing() {
+        // Mirror main(): kube builds a rustls connector even for plain http.
+        let _ = rustls::crypto::CryptoProvider::install_default(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        );
+        let url = spawn_not_found_server().await;
+        let client = Client::try_from(kube::Config::new(url.parse().unwrap())).unwrap();
+        let orchestrator = KubeOrchestrator {
+            pods: Api::namespaced(client.clone(), "default"),
+            deployments: Api::namespaced(client.clone(), "default"),
+            secrets: Api::namespaced(client, "default"),
+            config: Kubernetes {
+                base_deployment: None,
+                base_deployment_json: None,
+                image_pull_policy: None,
+                image_resources: None,
+            },
+        };
+        let connector = ApiConnector {
+            id: "ab2fb502".to_string(),
+            platform: "opencti".to_string(),
+            name: "importfilestix".to_string(),
+            image: "ghcr.io/acme/test:latest".to_string(),
+            contract_hash: "hash".to_string(),
+            current_status: Some("started".to_string()),
+            requested_status: "stopping".to_string(),
+            contract_configuration: Vec::<ApiContractConfig>::new(),
+        };
+        let container = OrchestratorContainer {
+            id: "uid".to_string(),
+            name: connector.container_name(),
+            state: "running".to_string(),
+            labels: HashMap::new(),
+            envs: HashMap::new(),
+            restart_count: 0,
+            started_at: None,
+        };
+
+        orchestrator.stop(&container, &connector).await;
     }
 }
 
