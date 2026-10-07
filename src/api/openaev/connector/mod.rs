@@ -1,8 +1,7 @@
 use rsa::{RsaPrivateKey};
 use serde::Deserialize;
-use tracing::warn;
-use crate::api::{ApiConnector, ApiContractConfig};
-use crate::api::decrypt_value::parse_aes_encrypted_value;
+use crate::api::ApiConnector;
+use crate::api::decrypt_value::resolve_contract_configuration;
 
 pub mod get_connector_instances;
 pub mod patch_health;
@@ -30,38 +29,17 @@ pub struct ConnectorInstances {
 impl ConnectorInstances {
 
     pub fn to_api_connector(&self, private_key: &RsaPrivateKey )->ApiConnector {
-        let contract_configuration = self
-            .connector_instance_configurations
-            .iter()
-            .map(|c| {
-                let is_sensitive = c.configuration_is_encrypted;
-                if is_sensitive {
-                    let encrypted_value = c.configuration_value.clone().unwrap_or_default();
-                    let decoded_value_result = parse_aes_encrypted_value(private_key, encrypted_value);
-                    match decoded_value_result {
-                        Ok(decoded_value) => ApiContractConfig {
-                            key: c.configuration_key.clone(),
-                            value: decoded_value,
-                            is_sensitive: true,
-                        },
-                        Err(e) => {
-                            warn!(error = e.to_string(), "Fail to decode value");
-                            ApiContractConfig {
-                                key: c.configuration_key.clone(),
-                                value: String::new(),
-                                is_sensitive: true,
-                            }
-                        }
-                    }
-                } else {
-                    ApiContractConfig {
-                        key: c.configuration_key.clone(),
-                        value: c.configuration_value.clone().unwrap_or_default(),
-                        is_sensitive: false,
-                    }
-                }
-            })
-            .collect();
+        let (contract_configuration, undecryptable_keys) = resolve_contract_configuration(
+            private_key,
+            &self.connector_instance_id,
+            self.connector_instance_configurations.iter().map(|c| {
+                (
+                    c.configuration_key.clone(),
+                    c.configuration_value.clone(),
+                    c.configuration_is_encrypted,
+                )
+            }),
+        );
         ApiConnector {
             id: self.connector_instance_id.clone(),
             platform: "openaev".to_string(),
@@ -71,6 +49,7 @@ impl ConnectorInstances {
             current_status: Some(self.connector_instance_current_status.clone()),
             requested_status: self.connector_instance_requested_status.clone(),
             contract_configuration,
+            undecryptable_keys,
         }
     }
 }

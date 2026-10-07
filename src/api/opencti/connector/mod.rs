@@ -1,7 +1,6 @@
 use serde::Serialize;
-use crate::api::{ApiConnector, ApiContractConfig};
+use crate::api::ApiConnector;
 use rsa::{RsaPrivateKey};
-use tracing::{warn};
 use std::str;
 
 pub mod get_listing;
@@ -11,7 +10,7 @@ pub mod post_health;
 
 use cynic;
 use crate::api::opencti::opencti as schema;
-use crate::api::decrypt_value::parse_aes_encrypted_value;
+use crate::api::decrypt_value::resolve_contract_configuration;
 
 #[derive(cynic::QueryFragment, Debug, Clone, Serialize)]
 pub struct ConnectorContractConfiguration {
@@ -39,42 +38,18 @@ pub struct ManagedConnector {
 impl ManagedConnector {
 
     pub fn to_api_connector(&self, private_key: &RsaPrivateKey) -> ApiConnector {
-        let contract_configuration = self
-            .manager_contract_configuration
-            .clone()
-            .unwrap()
-            .into_iter()
-            .map(|c| {
-                let is_sensitive = c.encrypted.unwrap_or_default();
-                if is_sensitive {
-                    let encrypted_value = c.value.unwrap_or_default();
-                    let decoded_value_result = parse_aes_encrypted_value(private_key, encrypted_value);
-                    match decoded_value_result {
-                        Ok(decoded_value) => ApiContractConfig {
-                            key: c.key,
-                            value: decoded_value,
-                            is_sensitive: true,
-                        },
-                        Err(e) => {
-                            warn!(error = e.to_string(), "Fail to decode value");
-                            ApiContractConfig {
-                                key: c.key,
-                                value: String::from(""),
-                                is_sensitive: true,
-                            }
-                        }
-                    }
-                } else {
-                    ApiContractConfig {
-                        key: c.key,
-                        value: c.value.unwrap_or_default(),
-                        is_sensitive: false,
-                    }
-                }
-            })
-            .collect();
+        let id = self.id.clone().into_inner();
+        let (contract_configuration, undecryptable_keys) = resolve_contract_configuration(
+            private_key,
+            &id,
+            self.manager_contract_configuration
+                .clone()
+                .unwrap()
+                .into_iter()
+                .map(|c| (c.key, c.value, c.encrypted.unwrap_or_default())),
+        );
         ApiConnector {
-            id: self.id.clone().into_inner(),
+            id,
             platform: "opencti".to_string(),
             name: self.name.clone(),
             image: self.manager_contract_image.clone().unwrap(),
@@ -82,6 +57,7 @@ impl ManagedConnector {
             current_status: self.manager_current_status.clone(),
             requested_status: self.manager_requested_status.clone().unwrap(),
             contract_configuration,
+            undecryptable_keys,
         }
     }
 }

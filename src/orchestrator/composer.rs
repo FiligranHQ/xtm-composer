@@ -44,12 +44,33 @@ fn logs_due(log_ticks: &mut HashMap<String, Instant>, connector_id: &str, schedu
     }
 }
 
+/// Returns true when the connector configuration could not be fully decrypted.
+/// Such a configuration must never be deployed: the undecryptable secrets
+/// would be written as blanks, breaking connectors that were working fine.
+/// The existing deployment (if any) is left untouched until decryption works.
+fn refuse_incomplete_configuration(connector: &ApiConnector, action: &str) -> bool {
+    if connector.undecryptable_keys.is_empty() {
+        return false;
+    }
+    error!(
+        id = connector.id,
+        name = connector.name,
+        keys = ?connector.undecryptable_keys,
+        "Refusing to {} connector: some encrypted configuration values cannot be decrypted (check manager.credentials_key matches the key registered in the platform)",
+        action
+    );
+    true
+}
+
 async fn orchestrate_missing(
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
     connector: &ApiConnector,
 ) {
     // Connector is not provisioned, deploy the images
+    if refuse_incomplete_configuration(connector, "deploy") {
+        return;
+    }
     let id = connector.id.clone();
     info!(id = id, "Deploying the container");
     let deploy_action = orchestrator.deploy(connector).await;
@@ -132,7 +153,9 @@ async fn orchestrate_existing(
     // In case of platform upgrade, we need to align all deployed connectors
     let requested_connector_hash = connector.contract_hash.clone();
     let current_container_hash = container.extract_opencti_hash();
-    if !requested_connector_hash.eq(current_container_hash) {
+    if !requested_connector_hash.eq(current_container_hash)
+        && !refuse_incomplete_configuration(connector, "refresh")
+    {
         // Versions are not aligned
         info!(
             id = connector_id,
@@ -279,6 +302,7 @@ mod tests {
             current_status: Some("stopped".to_string()),
             requested_status: "stopping".to_string(),
             contract_configuration: Vec::<ApiContractConfig>::new(),
+            undecryptable_keys: vec![],
         }
     }
 
