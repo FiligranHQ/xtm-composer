@@ -12,16 +12,20 @@ use tracing::{error, info, warn};
 /// wrong one, later surfacing as an obscure Kubernetes
 /// "`selector` does not match template `labels`" error.
 ///
-/// Returns the mismatched connector-id found on the container when a collision is
-/// present, or `None` when the ids match or the label is absent (legacy/unlabeled
-/// containers are not treated as collisions).
+/// A container without the label is a collision too: the composer has always
+/// labeled what it deploys, so it was created by someone else (e.g. a connector
+/// deployed by hand) and must not be reconciled, let alone refreshed.
+///
+/// Returns the mismatched connector-id found on the container (or `<unlabeled>`)
+/// when a collision is present, or `None` when the ids match.
 fn detect_connector_id_mismatch(
     container: &OrchestratorContainer,
     connector_id: &str,
 ) -> Option<String> {
     match container.labels.get("opencti-connector-id") {
         Some(found) if found != connector_id => Some(found.clone()),
-        _ => None,
+        Some(_) => None,
+        None => Some("<unlabeled>".to_string()),
     }
 }
 
@@ -179,7 +183,8 @@ pub async fn orchestrate(
                     // The deployment belongs to another connector, so don't reconcile
                     // it (refresh/start/stop) for this one. If it is an orphan of this
                     // manager, the cleanup below removes it and the connector gets
-                    // deployed on the next cycle; otherwise it is left untouched.
+                    // deployed on the next cycle; otherwise (another manager's, or
+                    // unlabeled, e.g. deployed by hand) it is left untouched.
                     if let Some(found_id) =
                         detect_connector_id_mismatch(&container, &connector.id)
                     {
@@ -682,6 +687,22 @@ mod tests {
         assert_eq!(removed, vec!["OTHER".to_string()]);
     }
 
+    /// Regression test: a same-named deployment without any composer label (e.g.
+    /// deployed by hand) used to be reconciled, panicking on the missing config
+    /// hash. It must be skipped and left untouched.
+    #[tokio::test]
+    async fn orchestrate_skips_connector_on_name_collision_with_unlabeled_deployment() {
+        let mut unlabeled = managed_container("OTHER", "opencti");
+        unlabeled.name = connector("A").container_name();
+        unlabeled.labels.clear();
+        unlabeled.envs.clear();
+
+        let (actions, removed) = run_cycle(vec![unlabeled], vec![starting_connector("A")]).await;
+
+        assert!(actions.is_empty(), "unlabeled deployment must not be reconciled: {actions:?}");
+        assert!(removed.is_empty(), "unlabeled deployment must not be removed: {removed:?}");
+    }
+
     #[test]
     fn detect_mismatch_returns_found_id_on_collision() {
         let container = managed_container("A", "opencti");
@@ -692,5 +713,12 @@ mod tests {
         );
         // No false positive when the ids match.
         assert_eq!(detect_connector_id_mismatch(&container, "A"), None);
+        // A container without the label was not deployed by the composer.
+        let mut unlabeled = managed_container("A", "opencti");
+        unlabeled.labels.clear();
+        assert_eq!(
+            detect_connector_id_mismatch(&unlabeled, "A"),
+            Some("<unlabeled>".to_string())
+        );
     }
 }
