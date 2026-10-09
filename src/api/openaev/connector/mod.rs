@@ -1,8 +1,7 @@
 use rsa::{RsaPrivateKey};
 use serde::Deserialize;
-use tracing::warn;
-use crate::api::{ApiConnector, ApiContractConfig};
-use crate::api::decrypt_value::parse_aes_encrypted_value;
+use crate::api::ApiConnector;
+use crate::api::decrypt_value::resolve_contract_configuration;
 
 pub mod get_connector_instances;
 pub mod patch_health;
@@ -30,38 +29,17 @@ pub struct ConnectorInstances {
 impl ConnectorInstances {
 
     pub fn to_api_connector(&self, private_key: &RsaPrivateKey )->ApiConnector {
-        let contract_configuration = self
-            .connector_instance_configurations
-            .iter()
-            .map(|c| {
-                let is_sensitive = c.configuration_is_encrypted;
-                if is_sensitive {
-                    let encrypted_value = c.configuration_value.clone().unwrap_or_default();
-                    let decoded_value_result = parse_aes_encrypted_value(private_key, encrypted_value);
-                    match decoded_value_result {
-                        Ok(decoded_value) => ApiContractConfig {
-                            key: c.configuration_key.clone(),
-                            value: decoded_value,
-                            is_sensitive: true,
-                        },
-                        Err(e) => {
-                            warn!(error = e.to_string(), "Fail to decode value");
-                            ApiContractConfig {
-                                key: c.configuration_key.clone(),
-                                value: String::new(),
-                                is_sensitive: true,
-                            }
-                        }
-                    }
-                } else {
-                    ApiContractConfig {
-                        key: c.configuration_key.clone(),
-                        value: c.configuration_value.clone().unwrap_or_default(),
-                        is_sensitive: false,
-                    }
-                }
-            })
-            .collect();
+        let (contract_configuration, undecryptable_keys) = resolve_contract_configuration(
+            private_key,
+            &self.connector_instance_id,
+            self.connector_instance_configurations.iter().map(|c| {
+                (
+                    c.configuration_key.clone(),
+                    c.configuration_value.clone(),
+                    c.configuration_is_encrypted,
+                )
+            }),
+        );
         ApiConnector {
             id: self.connector_instance_id.clone(),
             platform: "openaev".to_string(),
@@ -71,6 +49,43 @@ impl ConnectorInstances {
             current_status: Some(self.connector_instance_current_status.clone()),
             requested_status: self.connector_instance_requested_status.clone(),
             contract_configuration,
+            undecryptable_keys,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::decrypt_value::tests::{encrypt, test_private_key};
+
+    #[test]
+    fn to_api_connector_reports_undecryptable_keys() {
+        let instance = ConnectorInstances {
+            connector_instance_id: "instance-1".to_string(),
+            connector_instance_name: "Instance".to_string(),
+            connector_instance_hash: "hash".to_string(),
+            connector_image: "image".to_string(),
+            connector_instance_current_status: "started".to_string(),
+            connector_instance_requested_status: "starting".to_string(),
+            connector_instance_configurations: vec![
+                ConnectorContractConfiguration {
+                    configuration_key: "GOOD".to_string(),
+                    configuration_value: Some(encrypt(2, "s3cr3t")),
+                    configuration_is_encrypted: true,
+                },
+                ConnectorContractConfiguration {
+                    configuration_key: "BAD".to_string(),
+                    configuration_value: Some("bm90LWVuY3J5cHRlZA==".to_string()),
+                    configuration_is_encrypted: true,
+                },
+            ],
+        };
+
+        let connector = instance.to_api_connector(test_private_key());
+
+        assert_eq!(connector.undecryptable_keys, vec!["BAD".to_string()]);
+        assert_eq!(connector.contract_configuration.len(), 1);
+        assert_eq!(connector.contract_configuration[0].value, "s3cr3t");
     }
 }

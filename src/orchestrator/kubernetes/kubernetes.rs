@@ -619,6 +619,7 @@ mod tests {
             current_status: Some("started".to_string()),
             requested_status: "stopping".to_string(),
             contract_configuration: Vec::<ApiContractConfig>::new(),
+            undecryptable_keys: vec![],
         }
     }
 

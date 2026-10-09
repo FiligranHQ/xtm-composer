@@ -44,12 +44,33 @@ fn logs_due(log_ticks: &mut HashMap<String, Instant>, connector_id: &str, schedu
     }
 }
 
+/// Returns true when the connector configuration could not be fully decrypted.
+/// Such a configuration must never be deployed: the undecryptable secrets
+/// would be written as blanks, breaking connectors that were working fine.
+/// The existing deployment (if any) is left untouched until decryption works.
+fn refuse_incomplete_configuration(connector: &ApiConnector, action: &str) -> bool {
+    if connector.undecryptable_keys.is_empty() {
+        return false;
+    }
+    error!(
+        id = connector.id,
+        name = connector.name,
+        keys = ?connector.undecryptable_keys,
+        "Refusing to {} connector: some encrypted configuration values cannot be decrypted (check manager.credentials_key matches the key registered in the platform)",
+        action
+    );
+    true
+}
+
 async fn orchestrate_missing(
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
     connector: &ApiConnector,
 ) {
     // Connector is not provisioned, deploy the images
+    if refuse_incomplete_configuration(connector, "deploy") {
+        return;
+    }
     let id = connector.id.clone();
     info!(id = id, "Deploying the container");
     let deploy_action = orchestrator.deploy(connector).await;
@@ -132,7 +153,9 @@ async fn orchestrate_existing(
     // In case of platform upgrade, we need to align all deployed connectors
     let requested_connector_hash = connector.contract_hash.clone();
     let current_container_hash = container.extract_opencti_hash();
-    if !requested_connector_hash.eq(current_container_hash) {
+    if !requested_connector_hash.eq(current_container_hash)
+        && !refuse_incomplete_configuration(connector, "refresh")
+    {
         // Versions are not aligned
         info!(
             id = connector_id,
@@ -279,6 +302,7 @@ mod tests {
             current_status: Some("stopped".to_string()),
             requested_status: "stopping".to_string(),
             contract_configuration: Vec::<ApiContractConfig>::new(),
+            undecryptable_keys: vec![],
         }
     }
 
@@ -451,7 +475,8 @@ mod tests {
             None
         }
 
-        async fn deploy(&self, _connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+            self.record("deploy", connector);
             None
         }
 
@@ -798,6 +823,70 @@ mod tests {
             logs[0].contains("Connector not deployed") && logs[0].contains("OTHER"),
             "unexpected message: {logs:?}"
         );
+    }
+
+    fn undecryptable_connector(id: &str) -> ApiConnector {
+        let mut connector = connector(id);
+        connector.undecryptable_keys = vec!["OPENCTI_TOKEN".to_string()];
+        connector
+    }
+
+    fn outdated_container(id: &str) -> OrchestratorContainer {
+        let mut container = managed_container(id, "opencti");
+        container
+            .envs
+            .insert("OPENCTI_CONFIG_HASH".to_string(), "old-hash".to_string());
+        container
+    }
+
+    /// Control case: a decryptable configuration change is applied.
+    #[tokio::test]
+    async fn orchestrate_refreshes_and_deploys_decryptable_connectors() {
+        let (actions, removed) = run_cycle(
+            vec![outdated_container("A")],
+            vec![connector("A"), connector("B")],
+        )
+        .await;
+
+        assert_eq!(actions, vec!["refresh:A", "deploy:B"]);
+        assert!(removed.is_empty(), "nothing should be removed: {removed:?}");
+    }
+
+    /// Regression test for #164: a configuration change that cannot be fully
+    /// decrypted must not refresh (overwrite) the running deployment, and the
+    /// deployment must not be removed as an orphan either.
+    #[tokio::test]
+    async fn orchestrate_keeps_existing_deployment_when_secrets_cannot_be_decrypted() {
+        let (actions, removed) = run_cycle(
+            vec![outdated_container("A")],
+            vec![undecryptable_connector("A")],
+        )
+        .await;
+
+        assert!(actions.is_empty(), "deployment must be left untouched: {actions:?}");
+        assert!(removed.is_empty(), "deployment must not be removed: {removed:?}");
+    }
+
+    /// Regression test for #164: a connector whose secrets cannot be decrypted
+    /// is not deployed with blank values.
+    #[tokio::test]
+    async fn orchestrate_does_not_deploy_when_secrets_cannot_be_decrypted() {
+        let (actions, _) = run_cycle(vec![], vec![undecryptable_connector("A")]).await;
+
+        assert!(actions.is_empty(), "connector must not be deployed: {actions:?}");
+    }
+
+    /// Start/stop reuse the existing deployment and its previous configuration,
+    /// so they keep being honored while secrets cannot be decrypted.
+    #[tokio::test]
+    async fn orchestrate_still_stops_connector_when_secrets_cannot_be_decrypted() {
+        let mut running = outdated_container("A");
+        running.state = "running".to_string();
+
+        let (actions, removed) = run_cycle(vec![running], vec![undecryptable_connector("A")]).await;
+
+        assert_eq!(actions, vec!["stop:A"]);
+        assert!(removed.is_empty(), "deployment must not be removed: {removed:?}");
     }
 
     #[test]
