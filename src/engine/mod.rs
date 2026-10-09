@@ -9,6 +9,7 @@ use crate::orchestrator::swarm::SwarmOrchestrator;
 use crate::orchestrator::{Orchestrator, composer};
 use crate::settings;
 use crate::system::signals;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
@@ -43,11 +44,11 @@ async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
     tokio::select! {
         _ = signals::handle_stop_signals() => {}
         _ = async {
-            let mut tick = Instant::now();
+            let mut log_ticks = HashMap::new();
             let mut health_tick = Instant::now();
             loop {
                 interval.tick().await; // Wait for period
-                composer::orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+                composer::orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
             }
         } => {
             // This branch will never be reached due to the infinite loop.
