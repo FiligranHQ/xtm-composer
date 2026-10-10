@@ -20,6 +20,25 @@ with https://doc.rust-lang.org/book.
   - Compatible version starts at 6.8.0
 - **OpenAEV**: 🚧 Coming Soon
 
+## Connector types
+
+XTM Composer does not depend on the connector type. It deploys the image of the contract with the contract
+configuration (sensitive values decrypted with the manager private key), adds `OPENCTI_URL` and `OPENCTI_CONFIG_HASH`,
+and reports the status, logs and health of the container. Every value of the OpenCTI `ConnectorType` enumeration is
+deployed the same way: `EXTERNAL_IMPORT`, `INTERNAL_IMPORT_FILE`, `INTERNAL_ENRICHMENT`, `INTERNAL_ANALYSIS`,
+`INTERNAL_EXPORT_FILE`, `INTERNAL_HUNT` and `STREAM`.
+
+Internal hunt connectors (`INTERNAL_HUNT`) execute OpenCTI hunts on one hunted platform, such as Splunk, Microsoft
+Sentinel or Elastic Security. Before deploying one, make sure that:
+
+- the container can reach the API of the hunted platform in addition to OpenCTI;
+- the platform credentials only grant read-only search permissions; they are entered in the OpenCTI catalog form and
+  reach XTM Composer encrypted, like every sensitive value;
+- the OpenCTI platform provides hunts, and the connector image ships a pycti version that knows the hunt contract. A
+  hunt connector stops at start in both cases - an OpenCTI platform without hunts refuses its registration, and a
+  connector image with an older pycti stops before registering - which shows as a restart loop in the connector
+  health. Upgrade the OpenCTI platform in the first case, and the connector image in the second.
+
 ## Orchestration
 
 Composer act as a micro orchestration tool to interface Filigran product to different major container orchestration

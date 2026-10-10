@@ -1080,4 +1080,54 @@ mod tests {
             std::env::remove_var("NO_PROXY");
         }
     }
+
+    fn contract_config(key: &str, value: &str, is_sensitive: bool) -> ApiContractConfig {
+        ApiContractConfig {
+            key: key.to_string(),
+            value: value.to_string(),
+            is_sensitive,
+        }
+    }
+
+    #[test]
+    fn hunt_connector_contract_reaches_the_container_unchanged() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let connector = ApiConnector {
+            id: "hunt-connector".to_string(),
+            platform: "opencti".to_string(),
+            name: "Splunk Hunt".to_string(),
+            image: "opencti/connector-splunk-hunt:rolling".to_string(),
+            contract_hash: "hash-hunt".to_string(),
+            current_status: None,
+            requested_status: "starting".to_string(),
+            contract_configuration: vec![
+                contract_config("CONNECTOR_TYPE", "INTERNAL_HUNT", false),
+                contract_config("CONNECTOR_SCOPE", "splunk", false),
+                contract_config("CONNECTOR_SECURITY_PLATFORM_NAME", "Splunk", false),
+                contract_config("SPLUNK_HUNT_URL", "https://splunk.example.com:8089", false),
+                contract_config("SPLUNK_HUNT_TOKEN", "test-search-token", true),
+            ],
+        };
+
+        let envs = connector.container_envs();
+        let find = |key: &str| envs.iter().find(|env| env.key == key);
+
+        for config in &connector.contract_configuration {
+            let env = find(&config.key)
+                .unwrap_or_else(|| panic!("{} should reach the container", config.key));
+            assert_eq!(env.value, config.value, "{} value", config.key);
+            assert_eq!(env.is_sensitive, config.is_sensitive, "{} sensitivity", config.key);
+        }
+        assert_eq!(
+            find("OPENCTI_CONFIG_HASH").map(|env| env.value.as_str()),
+            Some("hash-hunt")
+        );
+        let settings = crate::settings();
+        if settings.opencti.enable {
+            assert_eq!(
+                find("OPENCTI_URL").map(|env| env.value.as_str()),
+                Some(settings.opencti.url.as_str())
+            );
+        }
+    }
 }
