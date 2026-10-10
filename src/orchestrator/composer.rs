@@ -12,16 +12,35 @@ use tracing::{error, info, warn};
 /// wrong one, later surfacing as an obscure Kubernetes
 /// "`selector` does not match template `labels`" error.
 ///
-/// Returns the mismatched connector-id found on the container when a collision is
-/// present, or `None` when the ids match or the label is absent (legacy/unlabeled
-/// containers are not treated as collisions).
+/// A container without the label is a collision too: the composer has always
+/// labeled what it deploys, so it was created by someone else (e.g. a connector
+/// deployed by hand) and must not be reconciled, let alone refreshed.
+///
+/// Returns the mismatched connector-id found on the container (or `<unlabeled>`)
+/// when a collision is present, or `None` when the ids match.
 fn detect_connector_id_mismatch(
     container: &OrchestratorContainer,
     connector_id: &str,
 ) -> Option<String> {
     match container.labels.get("opencti-connector-id") {
         Some(found) if found != connector_id => Some(found.clone()),
-        _ => None,
+        Some(_) => None,
+        None => Some("<unlabeled>".to_string()),
+    }
+}
+
+/// Returns true when logs are due for this connector, and marks them as pushed.
+/// Each connector has its own schedule: a single shared timer would let only the
+/// first connector of each cycle report its logs. A connector seen for the first
+/// time reports after one full schedule, as at startup.
+fn logs_due(log_ticks: &mut HashMap<String, Instant>, connector_id: &str, schedule: Duration) -> bool {
+    let now = Instant::now();
+    let last = log_ticks.entry(connector_id.to_string()).or_insert(now);
+    if now.duration_since(*last) >= schedule {
+        *last = now;
+        true
+    } else {
+        false
     }
 }
 
@@ -46,7 +65,7 @@ async fn orchestrate_missing(
 }
 
 async fn orchestrate_existing(
-    tick: &mut Instant,
+    log_ticks: &mut HashMap<String, Instant>,
     health_tick: &mut Instant,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
@@ -137,9 +156,8 @@ async fn orchestrate_existing(
             info!(id = connector_id, "Nothing to execute");
         }
     }
-    // Get latest logs and update opencti every 5 minutes
-    let now = Instant::now();
-    if now.duration_since(tick.clone()) >= api.post_logs_schedule() {
+    // Get latest logs and update the platform on the logs schedule
+    if logs_due(log_ticks, &connector_id, api.post_logs_schedule()) {
         let connector_logs = orchestrator.logs(&container, connector).await;
         match connector_logs {
             Some(logs) => {
@@ -150,12 +168,11 @@ async fn orchestrate_existing(
                 // No logs
             }
         }
-        *tick = now;
     }
 }
 
 pub async fn orchestrate(
-    tick: &mut Instant,
+    log_ticks: &mut HashMap<String, Instant>,
     health_tick: &mut Instant,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
@@ -176,6 +193,11 @@ pub async fn orchestrate(
                     // connectors likely share the same name (OpenCTI should forbid
                     // this). Without this, the only symptom is an obscure Kubernetes
                     // selector-mismatch error.
+                    // The deployment belongs to another connector, so don't reconcile
+                    // it (refresh/start/stop) for this one. If it is an orphan of this
+                    // manager, the cleanup below removes it and the connector gets
+                    // deployed on the next cycle; otherwise (another manager's, or
+                    // unlabeled, e.g. deployed by hand) it is left untouched.
                     if let Some(found_id) =
                         detect_connector_id_mismatch(&container, &connector.id)
                     {
@@ -183,10 +205,21 @@ pub async fn orchestrate(
                             name = connector.name,
                             expected_id = connector.id,
                             found_id = found_id,
-                            "Connector name collision detected: an existing deployment with this name belongs to a different connector id (duplicate connector name?)"
+                            "Connector name collision detected: an existing deployment with this name belongs to a different connector id (duplicate connector name?), skipping"
                         );
+                        // The connector is stuck until the clash is resolved: tell the
+                        // platform, not only the manager logs.
+                        if logs_due(log_ticks, &connector.id, api.post_logs_schedule()) {
+                            let message = format!(
+                                "[XTM Composer] Connector not deployed: a deployment named \"{}\" already exists and belongs to another owner ({}). Rename this connector or remove that deployment.",
+                                connector.container_name(),
+                                found_id
+                            );
+                            api.patch_logs(connector.id.clone(), vec![message]).await;
+                        }
+                        continue;
                     }
-                    orchestrate_existing(tick, health_tick, orchestrator, api, connector, container).await
+                    orchestrate_existing(log_ticks, health_tick, orchestrator, api, connector, container).await
                 }
                 None => orchestrate_missing(orchestrator, api, connector).await,
             }
@@ -196,6 +229,7 @@ pub async fn orchestrate(
             .iter()
             .map(|n| (n.id.clone(), n.clone()))
             .collect();
+        log_ticks.retain(|id, _| connectors_by_id.contains_key(id));
         let platform = api.platform();
         let existing_containers = orchestrator.list().await;
         for container in existing_containers {
@@ -289,11 +323,15 @@ mod tests {
 
     struct FakeApi {
         connectors: Vec<ApiConnector>,
+        pushed_logs: Arc<Mutex<Vec<(String, Vec<String>)>>>,
     }
 
     impl FakeApi {
         fn new(connectors: Vec<ApiConnector>) -> Self {
-            Self { connectors }
+            Self {
+                connectors,
+                pushed_logs: Arc::new(Mutex::new(Vec::new())),
+            }
         }
     }
 
@@ -331,7 +369,11 @@ mod tests {
             None
         }
 
-        async fn patch_logs(&self, _id: String, _logs: Vec<String>) -> Option<String> {
+        async fn patch_logs(&self, id: String, logs: Vec<String>) -> Option<String> {
+            self.pushed_logs
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push((id, logs));
             None
         }
 
@@ -349,6 +391,7 @@ mod tests {
     struct FakeOrchestrator {
         containers: Vec<OrchestratorContainer>,
         removed_ids: Arc<Mutex<Vec<String>>>,
+        actions: Arc<Mutex<Vec<String>>>,
     }
 
     impl FakeOrchestrator {
@@ -356,26 +399,45 @@ mod tests {
             Self {
                 containers,
                 removed_ids,
+                actions: Arc::new(Mutex::new(Vec::new())),
             }
+        }
+
+        fn record(&self, action: &str, connector: &ApiConnector) {
+            self.actions
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(format!("{action}:{}", connector.id));
         }
     }
 
     #[async_trait::async_trait]
     impl Orchestrator for FakeOrchestrator {
         async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+            // Real orchestrators look containers up by name, which is what makes
+            // name collisions possible.
             self.containers
                 .iter()
-                .find(|container| container.labels.get("opencti-connector-id") == Some(&connector.id))
+                .find(|container| container.name == connector.container_name())
                 .cloned()
         }
 
         async fn list(&self) -> Vec<OrchestratorContainer> {
-            self.containers.clone()
+            // Real orchestrators only list containers labeled with the manager.
+            self.containers
+                .iter()
+                .filter(|container| container.labels.contains_key("opencti-manager"))
+                .cloned()
+                .collect()
         }
 
-        async fn start(&self, _container: &OrchestratorContainer, _connector: &ApiConnector) -> () {}
+        async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+            self.record("start", connector);
+        }
 
-        async fn stop(&self, _container: &OrchestratorContainer, _connector: &ApiConnector) -> () {}
+        async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+            self.record("stop", connector);
+        }
 
         async fn remove(&self, container: &OrchestratorContainer) -> () {
             self.removed_ids
@@ -384,7 +446,8 @@ mod tests {
                 .push(container.extract_opencti_id());
         }
 
-        async fn refresh(&self, _connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+            self.record("refresh", connector);
             None
         }
 
@@ -397,7 +460,7 @@ mod tests {
             _container: &OrchestratorContainer,
             _connector: &ApiConnector,
         ) -> Option<Vec<String>> {
-            None
+            Some(vec!["connector log line".to_string()])
         }
 
         fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
@@ -425,10 +488,10 @@ mod tests {
         let api: Box<dyn ComposerApi + Send + Sync> =
             Box::new(FakeApi::new(vec![connector("A"), connector("B"), connector("C")]));
 
-        let mut tick = Instant::now();
+        let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
 
-        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -456,10 +519,10 @@ mod tests {
         let api: Box<dyn ComposerApi + Send + Sync> =
             Box::new(FakeApi::new(vec![connector("A"), connector("B"), connector("C")]));
 
-        let mut tick = Instant::now();
+        let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
 
-        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -481,10 +544,10 @@ mod tests {
         let api: Box<dyn ComposerApi + Send + Sync> =
             Box::new(FakeApi::new(vec![connector("A")]));
 
-        let mut tick = Instant::now();
+        let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
 
-        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -506,10 +569,10 @@ mod tests {
         let api: Box<dyn ComposerApi + Send + Sync> =
             Box::new(FakeApi::new(vec![connector("A"), connector("B")]));
 
-        let mut tick = Instant::now();
+        let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
 
-        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -537,10 +600,10 @@ mod tests {
         let api: Box<dyn ComposerApi + Send + Sync> =
             Box::new(FakeApi::new(vec![connector("A"), connector("B")]));
 
-        let mut tick = Instant::now();
+        let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
 
-        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -567,16 +630,174 @@ mod tests {
         let api: Box<dyn ComposerApi + Send + Sync> =
             Box::new(FakeApi::new(vec![connector("A"), connector("B")]));
 
-        let mut tick = Instant::now();
+        let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
 
-        orchestrate(&mut tick, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
             .expect("mutex should not be poisoned")
             .clone();
         assert!(removed.is_empty(), "correctly named containers should not be removed: {removed:?}");
+    }
+
+    /// Runs one orchestration cycle and returns the (actions, removed ids) seen
+    /// by the fake orchestrator.
+    async fn run_cycle(
+        containers: Vec<OrchestratorContainer>,
+        connectors: Vec<ApiConnector>,
+    ) -> (Vec<String>, Vec<String>) {
+        let removed_ids = Arc::new(Mutex::new(Vec::new()));
+        let orchestrator = FakeOrchestrator::new(containers, Arc::clone(&removed_ids));
+        let actions = Arc::clone(&orchestrator.actions);
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> = Box::new(orchestrator);
+        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(FakeApi::new(connectors));
+
+        let mut log_ticks = HashMap::new();
+        let mut health_tick = Instant::now();
+
+        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+
+        let actions = actions.lock().expect("mutex should not be poisoned").clone();
+        let removed = removed_ids.lock().expect("mutex should not be poisoned").clone();
+        (actions, removed)
+    }
+
+    fn starting_connector(id: &str) -> ApiConnector {
+        let mut connector = connector(id);
+        connector.requested_status = "starting".to_string();
+        connector
+    }
+
+    /// Control case for the collision tests below: without a collision, the
+    /// connector is reconciled (refreshed on hash change, started/stopped).
+    #[tokio::test]
+    async fn orchestrate_reconciles_connector_without_collision() {
+        let mut outdated = managed_container("A", "opencti");
+        outdated
+            .envs
+            .insert("OPENCTI_CONFIG_HASH".to_string(), "old-hash".to_string());
+        let mut running = managed_container("B", "opencti");
+        running.state = "running".to_string();
+
+        let (actions, removed) = run_cycle(
+            vec![outdated, running],
+            vec![starting_connector("A"), connector("B")],
+        )
+        .await;
+
+        assert_eq!(actions, vec!["refresh:A", "start:A", "stop:B"]);
+        assert!(removed.is_empty(), "nothing should be removed: {removed:?}");
+    }
+
+    /// Regression test for #162: a same-named deployment not managed by this
+    /// manager (e.g. deployed the "old way") must be left completely untouched.
+    #[tokio::test]
+    async fn orchestrate_skips_connector_on_name_collision_with_foreign_deployment() {
+        let mut foreign = managed_container("OTHER", "opencti");
+        foreign.name = connector("A").container_name();
+        foreign.labels.remove("opencti-manager");
+
+        let (actions, removed) = run_cycle(vec![foreign], vec![starting_connector("A")]).await;
+
+        assert!(actions.is_empty(), "colliding deployment must not be reconciled: {actions:?}");
+        assert!(removed.is_empty(), "foreign deployment must not be removed: {removed:?}");
+    }
+
+    /// Regression test for #162: a same-named deployment left by a deleted
+    /// connector of this manager is not reconciled for the new connector, but
+    /// cleaned up as an orphan so the new connector deploys on the next cycle.
+    #[tokio::test]
+    async fn orchestrate_skips_connector_on_name_collision_and_cleans_orphan() {
+        let mut orphan = managed_container("OTHER", "opencti");
+        orphan.name = connector("A").container_name();
+
+        let (actions, removed) = run_cycle(vec![orphan], vec![starting_connector("A")]).await;
+
+        assert!(actions.is_empty(), "colliding deployment must not be reconciled: {actions:?}");
+        assert_eq!(removed, vec!["OTHER".to_string()]);
+    }
+
+    /// Regression test: a same-named deployment without any composer label (e.g.
+    /// deployed by hand) used to be reconciled, panicking on the missing config
+    /// hash. It must be skipped and left untouched.
+    #[tokio::test]
+    async fn orchestrate_skips_connector_on_name_collision_with_unlabeled_deployment() {
+        let mut unlabeled = managed_container("OTHER", "opencti");
+        unlabeled.name = connector("A").container_name();
+        unlabeled.labels.clear();
+        unlabeled.envs.clear();
+
+        let (actions, removed) = run_cycle(vec![unlabeled], vec![starting_connector("A")]).await;
+
+        assert!(actions.is_empty(), "unlabeled deployment must not be reconciled: {actions:?}");
+        assert!(removed.is_empty(), "unlabeled deployment must not be removed: {removed:?}");
+    }
+
+    /// Runs `cycles` orchestration cycles sharing the same log schedule state,
+    /// starting with the given connectors' logs already due, and returns the
+    /// logs pushed to the platform.
+    async fn run_cycles_with_due_logs(
+        containers: Vec<OrchestratorContainer>,
+        connectors: Vec<ApiConnector>,
+        cycles: usize,
+    ) -> Vec<(String, Vec<String>)> {
+        let api = FakeApi::new(connectors.clone());
+        let pushed_logs = Arc::clone(&api.pushed_logs);
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+            Box::new(FakeOrchestrator::new(containers, Arc::new(Mutex::new(Vec::new()))));
+        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(api);
+
+        // FakeApi's logs schedule is 1h: pretend the last push was 2h ago.
+        let overdue = Instant::now().checked_sub(Duration::from_secs(7200)).unwrap();
+        let mut log_ticks: HashMap<String, Instant> =
+            connectors.iter().map(|c| (c.id.clone(), overdue)).collect();
+        let mut health_tick = Instant::now();
+        for _ in 0..cycles {
+            orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+        }
+
+        let pushed = pushed_logs.lock().expect("mutex should not be poisoned").clone();
+        pushed
+    }
+
+    /// Regression test: logs used to share a single timer, so only the first
+    /// connector of each cycle ever had its logs pushed to the platform.
+    #[tokio::test]
+    async fn logs_are_pushed_for_every_due_connector_once_per_schedule() {
+        let pushed = run_cycles_with_due_logs(
+            vec![
+                managed_container("A", "opencti"),
+                managed_container("B", "opencti"),
+                managed_container("C", "opencti"),
+            ],
+            vec![connector("A"), connector("B"), connector("C")],
+            2,
+        )
+        .await;
+
+        let ids: Vec<&str> = pushed.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["A", "B", "C"], "each connector once, not again on the 2nd cycle");
+    }
+
+    /// A skipped colliding connector reports why to the platform (on the logs
+    /// schedule), not only in the manager logs.
+    #[tokio::test]
+    async fn collision_is_reported_to_the_platform_once_per_schedule() {
+        let mut foreign = managed_container("OTHER", "opencti");
+        foreign.name = connector("A").container_name();
+        foreign.labels.remove("opencti-manager");
+
+        let pushed = run_cycles_with_due_logs(vec![foreign], vec![connector("A")], 2).await;
+
+        assert_eq!(pushed.len(), 1, "one message per schedule, not every cycle: {pushed:?}");
+        let (id, logs) = &pushed[0];
+        assert_eq!(id, "A");
+        assert!(
+            logs[0].contains("Connector not deployed") && logs[0].contains("OTHER"),
+            "unexpected message: {logs:?}"
+        );
     }
 
     #[test]
@@ -589,5 +810,12 @@ mod tests {
         );
         // No false positive when the ids match.
         assert_eq!(detect_connector_id_mismatch(&container, "A"), None);
+        // A container without the label was not deployed by the composer.
+        let mut unlabeled = managed_container("A", "opencti");
+        unlabeled.labels.clear();
+        assert_eq!(
+            detect_connector_id_mismatch(&unlabeled, "A"),
+            Some("<unlabeled>".to_string())
+        );
     }
 }

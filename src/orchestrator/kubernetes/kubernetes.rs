@@ -163,10 +163,21 @@ impl KubeOrchestrator {
         };
         let patch = Patch::Merge(&deployment_patch);
         let name = connector.container_name();
-        self.deployments
+        // The deployment may have disappeared within the same cycle (e.g. deleted
+        // by the refresh() self-heal): log and move on instead of panicking, which
+        // would kill the orchestration task for every connector.
+        if let Err(err) = self
+            .deployments
             .patch(name.as_str(), &PatchParams::default(), &patch)
             .await
-            .unwrap();
+        {
+            error!(
+                name = name,
+                scale = scale,
+                error = %err,
+                "Failed to scale deployment"
+            );
+        }
     }
 
     pub fn from_deployment(deployment: Deployment) -> OrchestratorContainer {
@@ -527,6 +538,168 @@ impl Orchestrator for KubeOrchestrator {
             "terminated" => ConnectorStatus::Stopped,
             _ => ConnectorStatus::Stopped,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::ApiContractConfig;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpListener;
+
+    /// Fake Kubernetes API answering a single request with the given status and
+    /// JSON body. Returns the base URL and the raw request it received.
+    async fn spawn_server(
+        status_line: &'static str,
+        body: &'static str,
+    ) -> (String, Arc<Mutex<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let request = Arc::new(Mutex::new(String::new()));
+        let captured = Arc::clone(&request);
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut raw = String::new();
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                raw.push_str(&line);
+                if let Some((_, value)) = line.to_ascii_lowercase().split_once("content-length:") {
+                    content_length = value.trim().parse().unwrap();
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut request_body = vec![0u8; content_length];
+            reader.read_exact(&mut request_body).await.unwrap();
+            raw.push_str(&String::from_utf8_lossy(&request_body));
+            *captured.lock().unwrap() = raw;
+            let response = format!(
+                "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_line,
+                body.len(),
+                body
+            );
+            reader.into_inner().write_all(response.as_bytes()).await.unwrap();
+        });
+        (format!("http://127.0.0.1:{}", addr.port()), request)
+    }
+
+    fn orchestrator(url: &str) -> KubeOrchestrator {
+        // Mirror main(): kube builds a rustls connector even for plain http.
+        let _ = rustls::crypto::CryptoProvider::install_default(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        );
+        let client = Client::try_from(kube::Config::new(url.parse().unwrap())).unwrap();
+        KubeOrchestrator {
+            pods: Api::namespaced(client.clone(), "default"),
+            deployments: Api::namespaced(client.clone(), "default"),
+            secrets: Api::namespaced(client, "default"),
+            config: Kubernetes {
+                base_deployment: None,
+                base_deployment_json: None,
+                image_pull_policy: None,
+                image_resources: None,
+            },
+        }
+    }
+
+    fn connector() -> ApiConnector {
+        ApiConnector {
+            id: "ab2fb502".to_string(),
+            platform: "opencti".to_string(),
+            name: "importfilestix".to_string(),
+            image: "ghcr.io/acme/test:latest".to_string(),
+            contract_hash: "hash".to_string(),
+            current_status: Some("started".to_string()),
+            requested_status: "stopping".to_string(),
+            contract_configuration: Vec::<ApiContractConfig>::new(),
+        }
+    }
+
+    fn container(connector: &ApiConnector) -> OrchestratorContainer {
+        OrchestratorContainer {
+            id: "uid".to_string(),
+            name: connector.container_name(),
+            state: "running".to_string(),
+            labels: HashMap::new(),
+            envs: HashMap::new(),
+            restart_count: 0,
+            started_at: None,
+        }
+    }
+
+    /// Captures the logs emitted by the code under test.
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_scales_deployment_to_zero() {
+        let (url, request) = spawn_server(
+            "HTTP/1.1 200 OK",
+            r#"{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"importfilestix"}}"#,
+        )
+        .await;
+        let connector = connector();
+
+        orchestrator(&url)
+            .stop(&container(&connector), &connector)
+            .await;
+
+        let request = request.lock().unwrap().clone();
+        assert!(
+            request.starts_with("PATCH /apis/apps/v1/namespaces/default/deployments/importfilestix"),
+            "unexpected request: {request}"
+        );
+        assert!(
+            request.contains(r#""replicas":0"#),
+            "scale patch must set replicas to 0: {request}"
+        );
+    }
+
+    /// Regression test for #162: scaling a deployment that no longer exists
+    /// must not panic and kill the orchestration task, only log the failure.
+    #[tokio::test]
+    async fn stop_does_not_panic_when_deployment_is_missing() {
+        let (url, _) = spawn_server(
+            "HTTP/1.1 404 Not Found",
+            r#"{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"deployments.apps \"importfilestix\" not found","reason":"NotFound","code":404}"#,
+        )
+        .await;
+        let connector = connector();
+        let logs = LogBuffer::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        orchestrator(&url)
+            .stop(&container(&connector), &connector)
+            .await;
+
+        let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logs.contains("Failed to scale deployment") && logs.contains("not found"),
+            "scale failure must be logged: {logs}"
+        );
     }
 }
 
