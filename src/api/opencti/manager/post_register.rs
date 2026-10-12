@@ -31,7 +31,7 @@ pub struct RegisterConnectorsManagerInput<'a> {
 }
 // endregion
 
-pub async fn register(api: &ApiOpenCTI) {
+pub async fn register(api: &ApiOpenCTI) -> bool {
     use cynic::MutationBuilder;
 
     let settings = crate::settings();
@@ -62,11 +62,14 @@ pub async fn register(api: &ApiOpenCTI) {
                     "register_connectors_manager"
                 ) {
                     info!(manager_id = manager.id.into_inner(), "Manager registered");
+                    return true;
                 }
             }
+            false
         }
         Err(e) => {
             error!(error = e.to_string(), "Error registering connector manager");
+            false
         }
     }
 }

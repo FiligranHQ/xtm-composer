@@ -43,7 +43,10 @@ pub fn build_http_client(config: &HttpClientConfig) -> Result<reqwest::Client, r
     let mut client_builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(config.request_timeout))
         .connect_timeout(Duration::from_secs(config.connect_timeout))
-        .danger_accept_invalid_certs(config.unsecured_certificate);
+        .danger_accept_invalid_certs(config.unsecured_certificate)
+        // Never reuse idle connections: a pooled connection to a stale upstream can keep
+        // answering 404 until restart (issue #135); low request rate makes this cheap.
+        .pool_max_idle_per_host(0);
 
     if config.with_proxy {
         if let Some(http_proxy) = &config.http_proxy {
@@ -424,7 +427,8 @@ pub trait ComposerApi {
 
     async fn ping_alive(&self) -> Option<String>;
 
-    async fn register(&self) -> ();
+    /// Register the composer as a manager; returns true only when the platform accepted it.
+    async fn register(&self) -> bool;
 
     async fn connectors(&self) -> Option<Vec<ApiConnector>>;
 
@@ -626,6 +630,102 @@ mod tests {
         // Clean up env var
         // SAFETY: guarded by ENV_LOCK and acceptable in current_thread runtime
         unsafe { std::env::remove_var("HTTP_PROXY"); }
+    }
+
+    /// Read one full HTTP/1.1 request (headers and Content-Length body) from `stream`.
+    /// Returns false when the peer closed the connection.
+    async fn read_http_request(stream: &mut tokio::net::TcpStream) -> bool {
+        use tokio::io::AsyncReadExt;
+        let mut data: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            if let Some(header_end) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                let headers = String::from_utf8_lossy(&data[..header_end]).to_ascii_lowercase();
+                let content_length: usize = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .map(|value| value.trim().parse().unwrap_or(0))
+                    .unwrap_or(0);
+                if data.len() >= header_end + 4 + content_length {
+                    return true;
+                }
+            }
+            match stream.read(&mut chunk).await {
+                Ok(0) | Err(_) => return false,
+                Ok(n) => data.extend_from_slice(&chunk[..n]),
+            }
+        }
+    }
+
+    /// Stub platform: the first accepted connection keeps answering every request
+    /// with a keep-alive "404 Not Found" (a stale upstream); every later connection
+    /// reaches a healthy platform answering "200 OK" and then closes.
+    async fn spawn_stale_404_then_healthy_server() -> String {
+        use tokio::io::AsyncWriteExt;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut first_connection = true;
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let stale = first_connection;
+                first_connection = false;
+                tokio::spawn(async move {
+                    if stale {
+                        while read_http_request(&mut stream).await {
+                            let response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nNot Found";
+                            if stream.write_all(response.as_bytes()).await.is_err() {
+                                return;
+                            }
+                        }
+                    } else if read_http_request(&mut stream).await {
+                        let body = r#"{"ok":true}"#;
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(response.as_bytes()).await;
+                        let _ = stream.shutdown().await;
+                    }
+                });
+            }
+        });
+        format!("http://{}/graphql", addr)
+    }
+
+    /// Given: an established connection to the platform answers "404 Not Found"
+    /// And: a newly opened connection reaches a healthy platform
+    /// When: the composer sends its next request
+    /// Then: that request succeeds without restarting the composer
+    #[tokio::test]
+    async fn request_after_404_is_not_stuck_on_the_same_connection() {
+        let url = spawn_stale_404_then_healthy_server().await;
+        let client = build_http_client(&HttpClientConfig {
+            with_proxy: false,
+            ..base_config()
+        })
+        .unwrap();
+
+        let first = client
+            .post(&url)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(first.status(), reqwest::StatusCode::NOT_FOUND);
+        let _ = first.text().await.unwrap();
+
+        let second = client
+            .post(&url)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            second.status(),
+            reqwest::StatusCode::OK,
+            "the request after a 404 must not be sent on the same stale connection"
+        );
     }
 
     // --- Tests for connector proxy env injection ---

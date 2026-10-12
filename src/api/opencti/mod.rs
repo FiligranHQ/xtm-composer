@@ -97,7 +97,7 @@ impl ComposerApi for ApiOpenCTI {
         manager::post_ping::ping(self).await
     }
 
-    async fn register(&self) {
+    async fn register(&self) -> bool {
         manager::post_register::register(self).await
     }
 

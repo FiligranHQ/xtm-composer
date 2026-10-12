@@ -14,7 +14,7 @@ struct RegisterInput {
     public_key: String,
 }
 
-pub async fn register(api: &ApiOpenAEV) {
+pub async fn register(api: &ApiOpenAEV) -> bool {
     let settings = crate::settings();
     let priv_key = crate::private_key();
     let pub_key = RsaPublicKey::from(priv_key);
@@ -38,8 +38,12 @@ pub async fn register(api: &ApiOpenAEV) {
         "register into OpenAEV backend"
     ).await;
 
-    if let Some(m) = manager {
-        info!("Manager registered: {}", m.xtm_composer_id);
+    match manager {
+        Some(m) => {
+            info!("Manager registered: {}", m.xtm_composer_id);
+            true
+        }
+        None => false,
     }
 }
 

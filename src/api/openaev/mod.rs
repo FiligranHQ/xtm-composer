@@ -101,7 +101,7 @@ impl ComposerApi for ApiOpenAEV {
         manager::ping_alive::ping_alive(self).await
     }
 
-    async fn register(&self) {
+    async fn register(&self) -> bool {
         manager::post_register::register(self).await
     }
 
