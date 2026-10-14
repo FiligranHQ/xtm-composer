@@ -23,6 +23,13 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      # Go is required to build the AWS-LC FIPS module (fips feature)
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
@@ -34,8 +41,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      # Run the tests in default and FIPS modes, then merge both coverages
       - name: Run tests with coverage
-        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --workspace --no-report
+          cargo llvm-cov --workspace --no-report --features fips
+          cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         if: ${{ !cancelled() && hashFiles('lcov.info') != '' }}
