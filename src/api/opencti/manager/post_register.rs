@@ -4,7 +4,7 @@ use crate::api::opencti::error_handler::{handle_graphql_response, extract_option
 use crate::api::opencti::opencti as schema;
 use cynic;
 use tracing::{error, info};
-use rsa::{RsaPublicKey, pkcs1::EncodeRsaPublicKey};
+use crate::api::rsa_key::public_key_pkcs1_pem;
 
 // region schema
 #[derive(cynic::QueryVariables, Debug)]
@@ -37,8 +37,7 @@ pub async fn register(api: &ApiOpenCTI) {
     let settings = crate::settings();
     // Use the singleton private key
     let priv_key = crate::private_key();
-    let pub_key = RsaPublicKey::from(priv_key);
-    let public_key = RsaPublicKey::to_pkcs1_pem(&pub_key, Default::default()).unwrap();
+    let public_key = public_key_pkcs1_pem(priv_key).unwrap();
 
     let vars = RegisterConnectorsManageVariables {
         input: RegisterConnectorsManagerInput {

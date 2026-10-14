@@ -18,7 +18,7 @@ use tracing_subscriber::fmt::Layer;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Registry, layer::SubscriberExt};
-use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
+use aws_lc_rs::rsa::PrivateDecryptingKey;
 use rustls::crypto::CryptoProvider;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -34,8 +34,8 @@ fn settings() -> &'static Settings {
 }
 
 // Singleton RSA private key for all application
-pub fn private_key() -> &'static RsaPrivateKey {
-    static KEY: OnceLock<RsaPrivateKey> = OnceLock::new();
+pub fn private_key() -> &'static PrivateDecryptingKey {
+    static KEY: OnceLock<PrivateDecryptingKey> = OnceLock::new();
     KEY.get_or_init(|| load_and_verify_credentials_key())
 }
 
@@ -97,7 +97,7 @@ fn init_logger() {
 }
 
 // Load and verify RSA private key from configuration
-pub fn load_and_verify_credentials_key() -> RsaPrivateKey {
+pub fn load_and_verify_credentials_key() -> PrivateDecryptingKey {
     let setting = settings();
     
     // Priority: file > environment variable
@@ -129,7 +129,7 @@ pub fn load_and_verify_credentials_key() -> RsaPrivateKey {
     }
     
     // Parse and validate RSA private key using PKCS#8 format
-    match RsaPrivateKey::from_pkcs8_pem(&key_content) {
+    match api::rsa_key::private_key_from_pkcs8_pem(&key_content) {
         Ok(key) => {
             info!("Successfully loaded RSA private key (PKCS#8 format)");
             key

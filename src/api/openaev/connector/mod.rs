@@ -1,4 +1,4 @@
-use rsa::{RsaPrivateKey};
+use aws_lc_rs::rsa::PrivateDecryptingKey;
 use serde::Deserialize;
 use tracing::warn;
 use crate::api::{ApiConnector, ApiContractConfig};
@@ -29,7 +29,7 @@ pub struct ConnectorInstances {
 
 impl ConnectorInstances {
 
-    pub fn to_api_connector(&self, private_key: &RsaPrivateKey )->ApiConnector {
+    pub fn to_api_connector(&self, private_key: &PrivateDecryptingKey )->ApiConnector {
         let contract_configuration = self
             .connector_instance_configurations
             .iter()

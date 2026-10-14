@@ -1,6 +1,6 @@
 use serde::Serialize;
 use crate::api::{ApiConnector, ApiContractConfig};
-use rsa::{RsaPrivateKey};
+use aws_lc_rs::rsa::PrivateDecryptingKey;
 use tracing::{warn};
 use std::str;
 
@@ -38,7 +38,7 @@ pub struct ManagedConnector {
 
 impl ManagedConnector {
 
-    pub fn to_api_connector(&self, private_key: &RsaPrivateKey) -> ApiConnector {
+    pub fn to_api_connector(&self, private_key: &PrivateDecryptingKey) -> ApiConnector {
         let contract_configuration = self
             .manager_contract_configuration
             .clone()
