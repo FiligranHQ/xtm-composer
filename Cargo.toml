@@ -3,6 +3,10 @@ name = "xtm-composer"
 version = "3.260825.0"
 edition = "2024"
 
+[features]
+# FIPS 140-3 mode: only approved algorithms are accepted
+fips = []
+
 [dependencies]
 slug = { version = "0.1" }
 bollard = { version = "0.21.0" }
