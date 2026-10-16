@@ -1,6 +1,6 @@
 use serde::Serialize;
 use crate::api::ApiConnector;
-use rsa::{RsaPrivateKey};
+use aws_lc_rs::rsa::PrivateDecryptingKey;
 use std::str;
 
 pub mod get_listing;
@@ -37,7 +37,7 @@ pub struct ManagedConnector {
 
 impl ManagedConnector {
 
-    pub fn to_api_connector(&self, private_key: &RsaPrivateKey) -> ApiConnector {
+    pub fn to_api_connector(&self, private_key: &PrivateDecryptingKey) -> ApiConnector {
         let id = self.id.clone().into_inner();
         let (contract_configuration, undecryptable_keys) = resolve_contract_configuration(
             private_key,
@@ -79,7 +79,8 @@ mod tests {
             manager_contract_configuration: Some(vec![
                 ConnectorContractConfiguration {
                     key: "GOOD".to_string(),
-                    value: Some(encrypt(1, "s3cr3t")),
+                    // Version 1 is rejected in FIPS mode
+                    value: Some(encrypt(if cfg!(feature = "fips") { 2 } else { 1 }, "s3cr3t")),
                     encrypted: Some(true),
                 },
                 ConnectorContractConfiguration {

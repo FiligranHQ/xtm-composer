@@ -6,7 +6,7 @@ use crate::api::{ApiConnector, ComposerApi, ConnectorStatus, HttpClientConfig, b
 use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use std::time::Duration;
-use rsa::RsaPrivateKey;
+use aws_lc_rs::rsa::PrivateDecryptingKey;
 
 const BEARER: &str = "Bearer";
 const AUTHORIZATION_HEADER: &str = "Authorization";
@@ -17,7 +17,7 @@ pub struct ApiOpenAEV {
     bearer: String,
     daemon: Daemon,
     logs_schedule: u64,
-    private_key: RsaPrivateKey,
+    private_key: PrivateDecryptingKey,
 }
 
 impl ApiOpenAEV {

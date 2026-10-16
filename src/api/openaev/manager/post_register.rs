@@ -1,11 +1,9 @@
-use rsa::{RsaPublicKey};
-use rsa::pkcs1::LineEnding;
-use rsa::pkcs8::EncodePublicKey;
 use serde::Serialize;
 use tracing::info;
 use crate::api::openaev::api_handler::handle_api_response;
 use crate::api::openaev::ApiOpenAEV;
 use crate::api::openaev::manager::ConnectorManager;
+use crate::api::rsa_key::public_key_spki_pem;
 
 #[derive(Serialize)]
 struct RegisterInput {
@@ -17,9 +15,7 @@ struct RegisterInput {
 pub async fn register(api: &ApiOpenAEV) {
     let settings = crate::settings();
     let priv_key = crate::private_key();
-    let pub_key = RsaPublicKey::from(priv_key);
-    let public_key: String = pub_key
-        .to_public_key_pem(LineEnding::LF)
+    let public_key: String = public_key_spki_pem(priv_key)
         .expect("Failed to encode public key as PKCS#8");
 
     let register_input = RegisterInput {
