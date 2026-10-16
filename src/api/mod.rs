@@ -92,6 +92,10 @@ pub struct ApiConnector {
     pub current_status: Option<String>,
     pub requested_status: String,
     pub contract_configuration: Vec<ApiContractConfig>,
+    /// Keys of encrypted configuration values that could not be decrypted.
+    /// When non-empty, the configuration is incomplete and must not be
+    /// deployed: doing so would replace working secrets with blanks.
+    pub undecryptable_keys: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -954,6 +958,7 @@ mod tests {
             current_status: None,
             requested_status: "starting".to_string(),
             contract_configuration: vec![],
+            undecryptable_keys: vec![],
         };
 
         let bundle = connector.proxy_ca_bundle().expect("bundle should exist");
