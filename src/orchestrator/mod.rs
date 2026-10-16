@@ -139,6 +139,7 @@ mod tests {
             current_status: None,
             requested_status: String::new(),
             contract_configuration: vec![],
+            undecryptable_keys: vec![],
         };
 
         let labels = build_labels("test-manager", &connector);
