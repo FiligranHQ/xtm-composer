@@ -12,7 +12,7 @@ jobs:
   check-pr-issue:
     name: Check Pull Request is linked to an issue
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'dependencies') }}
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Check for linked issues
         env:
