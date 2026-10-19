@@ -18,7 +18,7 @@ use tracing_subscriber::fmt::Layer;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Registry, layer::SubscriberExt};
-use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
+use aws_lc_rs::rsa::PrivateDecryptingKey;
 use rustls::crypto::CryptoProvider;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -34,8 +34,8 @@ fn settings() -> &'static Settings {
 }
 
 // Singleton RSA private key for all application
-pub fn private_key() -> &'static RsaPrivateKey {
-    static KEY: OnceLock<RsaPrivateKey> = OnceLock::new();
+pub fn private_key() -> &'static PrivateDecryptingKey {
+    static KEY: OnceLock<PrivateDecryptingKey> = OnceLock::new();
     KEY.get_or_init(|| load_and_verify_credentials_key())
 }
 
@@ -97,7 +97,7 @@ fn init_logger() {
 }
 
 // Load and verify RSA private key from configuration
-pub fn load_and_verify_credentials_key() -> RsaPrivateKey {
+pub fn load_and_verify_credentials_key() -> PrivateDecryptingKey {
     let setting = settings();
     
     // Priority: file > environment variable
@@ -129,7 +129,7 @@ pub fn load_and_verify_credentials_key() -> RsaPrivateKey {
     }
     
     // Parse and validate RSA private key using PKCS#8 format
-    match RsaPrivateKey::from_pkcs8_pem(&key_content) {
+    match api::rsa_key::private_key_from_pkcs8_pem(&key_content) {
         Ok(key) => {
             info!("Successfully loaded RSA private key (PKCS#8 format)");
             key
@@ -167,21 +167,54 @@ fn openaev_orchestrate(orchestrations: &mut Vec<JoinHandle<()>>) {
     }
 }
 
+// Install the process-wide rustls CryptoProvider used by every TLS client
+#[cfg(not(feature = "fips"))]
+fn install_crypto_provider() {
+    // Ignore error if a provider was already installed by another dependency.
+    let _ = CryptoProvider::install_default(rustls::crypto::aws_lc_rs::default_provider());
+}
+
+// In FIPS mode, refuse to start unless TLS relies on the FIPS validated module
+#[cfg(feature = "fips")]
+fn install_crypto_provider() {
+    if let Err(e) = aws_lc_rs::try_fips_mode() {
+        panic!("AWS-LC is not running in FIPS mode: {}", e);
+    }
+    // A provider already installed by another dependency is kept, then checked below.
+    let _ = CryptoProvider::install_default(rustls::crypto::default_fips_provider());
+    let provider = CryptoProvider::get_default().expect("No rustls CryptoProvider installed");
+    if !provider.fips() {
+        panic!("The installed rustls CryptoProvider is not FIPS compliant");
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Install the rustls CryptoProvider before any TLS client is created.
     // Required since reqwest 0.13 switched from native-tls to rustls.
-    // Ignore error if a provider was already installed by another dependency.
-    let _ = CryptoProvider::install_default(rustls::crypto::aws_lc_rs::default_provider());
+    install_crypto_provider();
     // Initialize the global logging system
     init_logger();
     // Log the start
     let env = Settings::mode();
-    info!(version = VERSION, env, "Starting XTM composer");
+    let fips = cfg!(feature = "fips");
+    info!(version = VERSION, env, fips, "Starting XTM composer");
     // Start orchestration threads
     let mut orchestrations = Vec::new();
     opencti_orchestrate(&mut orchestrations);
     openaev_orchestrate(&mut orchestrations);
     // Wait for threads to terminate
     join_all(orchestrations).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installs_a_crypto_provider_matching_the_fips_feature() {
+        install_crypto_provider();
+        let provider = CryptoProvider::get_default().expect("No rustls CryptoProvider installed");
+        assert_eq!(provider.fips(), cfg!(feature = "fips"));
+    }
 }

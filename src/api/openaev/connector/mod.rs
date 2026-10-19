@@ -1,4 +1,4 @@
-use rsa::{RsaPrivateKey};
+use aws_lc_rs::rsa::PrivateDecryptingKey;
 use serde::Deserialize;
 use crate::api::ApiConnector;
 use crate::api::decrypt_value::resolve_contract_configuration;
@@ -28,7 +28,7 @@ pub struct ConnectorInstances {
 
 impl ConnectorInstances {
 
-    pub fn to_api_connector(&self, private_key: &RsaPrivateKey )->ApiConnector {
+    pub fn to_api_connector(&self, private_key: &PrivateDecryptingKey )->ApiConnector {
         let (contract_configuration, undecryptable_keys) = resolve_contract_configuration(
             private_key,
             &self.connector_instance_id,

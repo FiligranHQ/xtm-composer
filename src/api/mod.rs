@@ -10,6 +10,7 @@ use tracing::{error, info};
 pub mod openaev;
 pub mod opencti;
 mod decrypt_value;
+pub mod rsa_key;
 
 pub const PROXY_CA_CERT_MOUNT_PATH: &str = "/etc/ssl/certs/xtm-proxy-ca.crt";
 
