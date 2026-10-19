@@ -26,6 +26,27 @@
         "reqwest"
       ],
       "allowedVersions": "<=0.12"
+    },
+    {
+      "description": "AWS-LC-FIPS 3 is the FIPS 140-3 validated module: from aws-lc-rs 1.18.0, the fips feature builds on AWS-LC-FIPS 4, which is not certified yet",
+      "matchPackageNames": [
+        "aws-lc-rs"
+      ],
+      "allowedVersions": "<1.18.0"
+    },
+    {
+      "description": "rustls 0.23.44 and later require aws-lc-rs 1.18 (AWS-LC-FIPS 4)",
+      "matchPackageNames": [
+        "rustls"
+      ],
+      "allowedVersions": "<0.23.44"
+    },
+    {
+      "description": "rustls-webpki 0.103.14 and later require aws-lc-rs 1.18 (AWS-LC-FIPS 4)",
+      "matchPackageNames": [
+        "rustls-webpki"
+      ],
+      "allowedVersions": "<0.103.14"
     }
   ]
 }

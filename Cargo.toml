@@ -4,8 +4,8 @@ version = "3.260825.0"
 edition = "2024"
 
 [features]
-# FIPS 140-3 mode: only approved algorithms are accepted
-fips = []
+# FIPS 140-3 mode: crypto relies on the AWS-LC FIPS module and only approved algorithms are accepted
+fips = ["rustls/fips", "aws-lc-rs/fips"]
 
 [dependencies]
 slug = { version = "0.1" }
@@ -26,7 +26,9 @@ config = { version = "0.15.19", features = ["yaml", "toml"] }
 kube = { version = "4.0.0", default-features = false, features = ["client", "rustls-tls", "aws-lc-rs", "runtime", "derive"] }
 k8s-openapi = { version = "0.28.0", features = ["v1_32"] }
 base64 = "0.22.1"
-aws-lc-rs = { version = "1.17.4" }
+# Pinned to the validated AWS-LC-FIPS 3 module: from 1.18.0, the fips feature
+# builds on AWS-LC-FIPS 4, which is not FIPS 140-3 certified yet.
+aws-lc-rs = { version = "=1.17.4" }
 pem = { version = "3.0.6" }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 
