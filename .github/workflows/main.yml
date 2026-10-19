@@ -110,8 +110,15 @@ jobs:
     needs: [merge]
     runs-on: ubuntu-24.04
     steps:
+      # awxkit 24.6.1, its last release, breaks on Python 3.12.8 and later (argparse)
+      # and imports pkg_resources, removed from setuptools 82
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
       - name: Install AWX CLI
-        run: pip install awxkit
+        run: pip install "awxkit==24.6.1" "setuptools<82"
 
       - name: Deploy via AWX
         run: |
