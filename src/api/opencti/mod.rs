@@ -6,7 +6,7 @@ use cynic::http::CynicReqwestError;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
-use rsa::RsaPrivateKey;
+use aws_lc_rs::rsa::PrivateDecryptingKey;
 
 pub mod connector;
 pub mod manager;
@@ -24,7 +24,7 @@ pub struct ApiOpenCTI {
     bearer: String,
     daemon: Daemon,
     logs_schedule: u64,
-    private_key: RsaPrivateKey,
+    private_key: PrivateDecryptingKey,
 }
 
 impl ApiOpenCTI {
