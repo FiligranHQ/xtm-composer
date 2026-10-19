@@ -1,8 +1,8 @@
 use base64::{engine::general_purpose, Engine as _};
 use aws_lc_rs::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
-use aws_lc_rs::rsa::{
-    OaepPrivateDecryptingKey, Pkcs1PrivateDecryptingKey, PrivateDecryptingKey, OAEP_SHA256_MGF1SHA256,
-};
+use aws_lc_rs::rsa::{OaepPrivateDecryptingKey, PrivateDecryptingKey, OAEP_SHA256_MGF1SHA256};
+#[cfg(not(feature = "fips"))]
+use aws_lc_rs::rsa::Pkcs1PrivateDecryptingKey;
 use tracing::error;
 use crate::api::ApiContractConfig;
 
@@ -27,8 +27,12 @@ pub fn parse_aes_encrypted_value(
     let aes_key_iv_encrypted_bytes = &encrypted_bytes[1..=512];
     let mut aes_key_iv_buffer = vec![0u8; private_key.key_size_bytes()];
     let aes_key_iv_decrypted_bytes: &[u8] = match version {
+        #[cfg(not(feature = "fips"))]
         1 => Pkcs1PrivateDecryptingKey::new(private_key.clone())?
             .decrypt(aes_key_iv_encrypted_bytes, &mut aes_key_iv_buffer)?,
+        // RSA PKCS#1 v1.5 is not an approved key transport scheme in FIPS mode
+        #[cfg(feature = "fips")]
+        1 => return Err("Encryption version 1 (RSA PKCS#1 v1.5) is not allowed in FIPS mode".into()),
         2 => OaepPrivateDecryptingKey::new(private_key.clone())?
             .decrypt(&OAEP_SHA256_MGF1SHA256, aes_key_iv_encrypted_bytes, &mut aes_key_iv_buffer, None)?,
         _ => return Err(format!("Encryption version {} not handled", version).into()),
@@ -162,10 +166,18 @@ pub(crate) mod tests {
         assert_eq!(decrypted.unwrap(), "s3cr3t");
     }
 
+    #[cfg(not(feature = "fips"))]
     #[test]
     fn decrypts_version_1_values() {
         let decrypted = parse_aes_encrypted_value(test_private_key(), encrypt(1, "s3cr3t"));
         assert_eq!(decrypted.unwrap(), "s3cr3t");
+    }
+
+    #[cfg(feature = "fips")]
+    #[test]
+    fn rejects_version_1_values_in_fips_mode() {
+        let error = parse_aes_encrypted_value(test_private_key(), encrypt(1, "s3cr3t")).unwrap_err();
+        assert_eq!(error.to_string(), "Encryption version 1 (RSA PKCS#1 v1.5) is not allowed in FIPS mode");
     }
 
     #[test]

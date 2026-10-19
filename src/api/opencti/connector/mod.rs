@@ -79,7 +79,8 @@ mod tests {
             manager_contract_configuration: Some(vec![
                 ConnectorContractConfiguration {
                     key: "GOOD".to_string(),
-                    value: Some(encrypt(1, "s3cr3t")),
+                    // Version 1 is rejected in FIPS mode
+                    value: Some(encrypt(if cfg!(feature = "fips") { 2 } else { 1 }, "s3cr3t")),
                     encrypted: Some(true),
                 },
                 ConnectorContractConfiguration {
