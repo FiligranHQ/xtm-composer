@@ -262,7 +262,11 @@ impl CompatApi {
             .map_err(|err| format!("engine API request failed: {}", err))?;
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = tokio::time::timeout(self.pull_idle_timeout, response.text())
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default();
             return Err(response_error(status, &body));
         }
 
@@ -643,6 +647,25 @@ mod fake_engine_tests {
             error,
             "engine API returned 400 Bad Request: failed to parse \"X-Registry-Auth\" header"
         );
+    }
+
+    #[tokio::test]
+    async fn pull_fails_on_an_error_status_whose_body_stalls() {
+        let idle_timeout = Duration::from_millis(500);
+        let engine = fake_engine(
+            "pull-status-stall",
+            "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"mess".to_string(),
+            Duration::from_secs(10),
+        );
+        let started = Instant::now();
+
+        let error = client(&engine, idle_timeout)
+            .pull_image("xtm/connector:1.0", Some(&credentials()))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, "engine API returned 401 Unauthorized");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[tokio::test]
