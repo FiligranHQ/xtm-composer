@@ -44,14 +44,14 @@ async fn build_orchestrator(daemon_configuration: &Daemon) -> Box<dyn Orchestrat
 
 async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
     let settings = settings();
-    // Init scheduler interval
-    let mut interval = interval(Duration::from_secs(settings.manager.execute_schedule));
     // Start scheduling
     tokio::select! {
         _ = signals::handle_stop_signals() => {}
         _ = async {
             // Get current deployment in target orchestrator
             let orchestrator = build_orchestrator(api.daemon()).await;
+            // Created once the orchestrator is ready: ticks missed while it waits for its socket would run back-to-back
+            let mut interval = interval(Duration::from_secs(settings.manager.execute_schedule));
             let mut log_ticks = HashMap::new();
             let mut health_tick = Instant::now();
             loop {
