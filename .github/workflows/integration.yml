@@ -106,14 +106,10 @@ jobs:
       - name: Test registry authentication delegated to rootful Podman
         if: matrix.mode == 'rootful'
         run: |
-          echo "$XTM_IT_REGISTRY_PASSWORD" | sudo podman login --authfile /etc/containers/auth.json \
+          sudo mkdir -p /root/.config/containers
+          echo "$XTM_IT_REGISTRY_PASSWORD" | sudo podman login --authfile /root/.config/containers/auth.json \
             -u "$XTM_IT_REGISTRY_USERNAME" --password-stdin "$XTM_IT_REGISTRY"
-          sudo chmod 600 /etc/containers/auth.json
-          sudo mkdir -p /etc/systemd/system/podman.service.d
-          printf '[Service]\nEnvironment=REGISTRY_AUTH_FILE=/etc/containers/auth.json\n' \
-            | sudo tee /etc/systemd/system/podman.service.d/registry-auth.conf
-          sudo systemctl daemon-reload
-          sudo systemctl restart podman.service podman.socket
+          sudo chmod 600 /root/.config/containers/auth.json
           sudo --preserve-env env -u XDG_RUNTIME_DIR "$TEST_BINARY" --ignored --test-threads=1 "$TEST_FILTER::delegated"
 
       # The Composer runs as the user and auto-detects its rootless socket

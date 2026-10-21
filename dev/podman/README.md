@@ -97,22 +97,15 @@ Connector images are pulled from `<server>/<image>`. Passwords may contain any c
 
 Podman can authenticate with credentials stored on its host instead. Keep only the server in the
 Composer configuration (`OPENCTI__DAEMON__REGISTRY__SERVER`), without username and password, and log in
-with an auth file that survives reboots:
+with the auth file the Podman service reads by default and that survives reboots:
 
 - Rootful:
 
   ```bash
-  sudo podman login --authfile /etc/containers/auth.json registry.example.com
-  sudo chmod 600 /etc/containers/auth.json
-  sudo systemctl edit podman.service
-  # [Service]
-  # Environment=REGISTRY_AUTH_FILE=/etc/containers/auth.json
-  sudo systemctl daemon-reload
-  sudo systemctl restart podman.service podman.socket
+  sudo mkdir -p /root/.config/containers
+  sudo podman login --authfile /root/.config/containers/auth.json registry.example.com
+  sudo chmod 600 /root/.config/containers/auth.json
   ```
-
-  A plain `sudo podman login` stores the credentials in `/run/containers/0/auth.json`, which is cleared
-  at reboot.
 
 - Rootless, as the user running the connectors:
 
@@ -121,7 +114,10 @@ with an auth file that survives reboots:
   chmod 600 ~/.config/containers/auth.json
   ```
 
-  The rootless Podman service reads this file by default.
+The Podman service reads the credentials at each pull: no restart is needed. A plain `podman login` stores
+them in `/run/containers/0/auth.json` (rootful) or `$XDG_RUNTIME_DIR/containers/auth.json` (rootless),
+which are cleared at reboot. `REGISTRY_AUTH_FILE` is only read by the `podman` command line: setting it
+on the Podman service has no effect on the pulls it serves.
 
 A registry served over plain HTTP, or with a certificate signed by a private authority, must be declared
 to Podman: see `insecure` in
