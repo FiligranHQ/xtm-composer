@@ -65,7 +65,20 @@ XTM composer is a product designed and developed by the company [Filigran](https
 
 ## Release
 
-1. Change version in cargo.toml (ex:1.0.0)
-2. Push that version on master
-3. Create a git tag with same numbers (ex:1.0.0)
-4. Push a git tag in the format X.X.X to the master branch. The Docker image will be built with the same tag.
+1. Bump the version in `Cargo.toml` and `Cargo.lock` (ex: 1.0.0) through a pull request merged into master.
+2. Create the GitHub release with the same version, targeting master, with generated release notes:
+
+   ```bash
+   gh release create 1.0.0 --target master --generate-notes
+   ```
+
+   This creates the `1.0.0` tag, which builds and publishes the Docker images with the same tag.
+   The release can also be created from the GitHub Releases page, with a new tag targeting master.
+
+   To release from a signed tag instead, push the tag first, then create the release on it:
+
+   ```bash
+   git tag -s 1.0.0 -m 1.0.0
+   git push origin 1.0.0
+   gh release create 1.0.0 --verify-tag --generate-notes
+   ```
