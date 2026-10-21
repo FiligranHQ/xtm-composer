@@ -39,6 +39,7 @@ FROM alpine:latest
 RUN <<EOT
   set -euxo pipefail
 
+  apk --no-cache upgrade
   apk --no-cache add ca-certificates-bundle
   apk --no-cache --purge del apk-tools libapk ssl_client libssl3 libcrypto3
   rm /var/log/apk.log
