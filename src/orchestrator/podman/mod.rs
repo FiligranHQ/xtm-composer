@@ -164,7 +164,7 @@ async fn wait_for_socket(configured: Option<&str>, retry_interval: Duration) -> 
     }
 }
 
-/// Connect to the Podman API socket of the daemon configuration, waiting for it to exist.
+/// Connect to the Podman API socket of the daemon configuration, waiting for it to exist and answer.
 pub async fn connect(daemon: &Daemon, retry_interval: Duration) -> DockerOrchestrator {
     if cfg!(not(unix)) {
         panic!(
