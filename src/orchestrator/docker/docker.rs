@@ -16,8 +16,8 @@ use bollard::query_parameters::{
     CreateContainerOptions, CreateImageOptions, InspectContainerOptions, ListContainersOptions,
     LogsOptions, RemoveContainerOptions, StartContainerOptions, StopContainerOptions,
 };
-use futures::TryStreamExt;
 use futures::future;
+use futures::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, error, info};
@@ -32,15 +32,18 @@ impl DockerOrchestrator {
     pub async fn new(daemon: &Daemon, retry_interval: Duration) -> Self {
         let options = daemon.docker.clone();
         let socket_path = options.as_ref().and_then(|options| options.socket_path.clone());
-        let docker = match &socket_path {
-            Some(path) => Docker::connect_with_socket(path, CLIENT_TIMEOUT, API_DEFAULT_VERSION),
-            None => Docker::connect_with_socket_defaults(),
-        }
-        .unwrap_or_else(|err| panic!("Cannot connect to the Docker socket: {}", err));
-        // Docker rejects the requests of a client more recent than itself
         let docker = loop {
-            match docker.clone().negotiate_version().await {
-                Ok(negotiated) => break negotiated,
+            let connected = match &socket_path {
+                Some(path) => Docker::connect_with_socket(path, CLIENT_TIMEOUT, API_DEFAULT_VERSION),
+                None => Docker::connect_with_socket_defaults(),
+            };
+            // Docker rejects the requests of a client more recent than itself
+            let negotiated = match connected {
+                Ok(docker) => docker.negotiate_version().await,
+                Err(err) => Err(err),
+            };
+            match negotiated {
+                Ok(docker) => break docker,
                 Err(err) => {
                     error!(
                         error = err.to_string(),
@@ -114,26 +117,27 @@ impl DockerOrchestrator {
             info!(image = image, "Pulling image");
             return compat.pull_image(image, credentials.as_ref()).await;
         }
-        self.docker
-            .create_image(
-                Some(CreateImageOptions {
-                    from_image: Some(image.to_string()),
-                    ..Default::default()
-                }),
-                None,
-                credentials,
-            )
-            .try_for_each(|info| {
-                info!(
+        let mut pull = self.docker.create_image(
+            Some(CreateImageOptions {
+                from_image: Some(image.to_string()),
+                ..Default::default()
+            }),
+            None,
+            credentials,
+        );
+        loop {
+            match tokio::time::timeout(compat::PULL_IDLE_TIMEOUT, pull.next()).await {
+                Ok(Some(Ok(info))) => info!(
                     "{} {:?} {:?} pulling...",
                     image,
                     info.status.as_deref(),
                     info.progress_detail.as_ref()
-                );
-                future::ok(())
-            })
-            .await
-            .map_err(|err| err.to_string())
+                ),
+                Ok(Some(Err(err))) => return Err(err.to_string()),
+                Ok(None) => return Ok(()),
+                Err(_) => return Err(compat::pull_stalled_error(compat::PULL_IDLE_TIMEOUT)),
+            }
+        }
     }
 }
 

@@ -19,10 +19,14 @@ use tracing::debug;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 // Same response timeout as bollard: once the pull has started, its stream is read until the end.
 const PULL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
+/// A pull stream silent for this long is stalled: the reconciliation loop must not wait for
+/// it forever. Long enough for an engine committing large layers without reporting progress.
+pub(crate) const PULL_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
 pub struct CompatApi {
     client: reqwest::Client,
     api_version: Option<String>,
+    pull_idle_timeout: Duration,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -166,6 +170,7 @@ impl CompatApi {
         Ok(Self {
             client,
             api_version,
+            pull_idle_timeout: PULL_IDLE_TIMEOUT,
         })
     }
 
@@ -262,9 +267,9 @@ impl CompatApi {
         }
 
         let mut pending: Vec<u8> = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
+        while let Some(chunk) = tokio::time::timeout(self.pull_idle_timeout, response.chunk())
             .await
+            .map_err(|_| pull_stalled_error(self.pull_idle_timeout))?
             .map_err(|err| format!("pull stream interrupted: {}", err))?
         {
             pending.extend_from_slice(&chunk);
@@ -275,6 +280,13 @@ impl CompatApi {
         }
         check_pull_line(image, &pending)
     }
+}
+
+pub(crate) fn pull_stalled_error(idle_timeout: Duration) -> String {
+    format!(
+        "pull stalled: no progress from the engine for {} seconds",
+        idle_timeout.as_secs()
+    )
 }
 
 fn check_pull_line(image: &str, line: &[u8]) -> Result<(), String> {
@@ -455,5 +467,253 @@ mod tests {
 
         let info: EngineInfo = serde_json::from_str(r#"{"SecurityOptions":null}"#).unwrap();
         assert!(info.security_options.is_none());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod fake_engine_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::Instant;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixListener;
+    use tokio::task::JoinHandle;
+
+    const STREAM_HEAD: &str =
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n";
+
+    /// Engine socket answering one request with `response`, then keeping the connection
+    /// open for `hold`.
+    struct FakeEngine {
+        socket: PathBuf,
+        request: Option<JoinHandle<String>>,
+    }
+
+    impl FakeEngine {
+        /// Lowercased head of the request received.
+        async fn request_head(&mut self) -> String {
+            self.request.take().unwrap().await.unwrap()
+        }
+    }
+
+    impl Drop for FakeEngine {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.socket);
+        }
+    }
+
+    fn fake_engine(name: &str, response: String, hold: Duration) -> FakeEngine {
+        let socket =
+            std::env::temp_dir().join(format!("xtm-composer-{}-{}.sock", name, std::process::id()));
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let request = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            let mut buffer = [0u8; 4096];
+            while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                head.extend_from_slice(&buffer[..read]);
+            }
+            stream.write_all(response.as_bytes()).await.unwrap();
+            stream.flush().await.unwrap();
+            tokio::time::sleep(hold).await;
+            String::from_utf8_lossy(&head).to_lowercase()
+        });
+        FakeEngine {
+            socket,
+            request: Some(request),
+        }
+    }
+
+    fn client(engine: &FakeEngine, pull_idle_timeout: Duration) -> CompatApi {
+        let mut api =
+            CompatApi::new(engine.socket.to_str().unwrap(), Some("1.41".to_string())).unwrap();
+        api.pull_idle_timeout = pull_idle_timeout;
+        api
+    }
+
+    fn json_response(status: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            status,
+            body.len(),
+            body
+        )
+    }
+
+    fn credentials() -> DockerCredentials {
+        DockerCredentials {
+            username: Some("xtm-it".to_string()),
+            password: Some("Xtm?Composer~Test>2026!".to_string()),
+            serveraddress: Some("localhost:5000".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn pull_reads_the_whole_stream_and_sends_base64url_credentials() {
+        let mut engine = fake_engine(
+            "pull-ok",
+            format!(
+                "{}{}\n{}",
+                STREAM_HEAD,
+                r#"{"status":"Pulling fs layer","progressDetail":{},"id":"0123456789ab"}"#,
+                r#"{"status":"Download complete","progressDetail":{},"id":"0123456789ab"}"#
+            ),
+            Duration::ZERO,
+        );
+
+        client(&engine, PULL_IDLE_TIMEOUT)
+            .pull_image("localhost:5000/xtm/connector:1.0", Some(&credentials()))
+            .await
+            .unwrap();
+
+        let head = engine.request_head().await;
+        assert!(
+            head.starts_with(
+                "post /v1.41/images/create?fromimage=localhost%3a5000%2fxtm%2fconnector%3a1.0 "
+            ),
+            "{head}"
+        );
+        let header = encode_registry_auth(&credentials()).to_lowercase();
+        assert!(
+            head.contains(&format!("x-registry-auth: {header}\r\n")),
+            "{head}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pull_without_credentials_sends_no_auth_header() {
+        let mut engine = fake_engine(
+            "pull-anonymous",
+            format!("{}{}\n", STREAM_HEAD, r#"{"status":"Download complete"}"#),
+            Duration::ZERO,
+        );
+
+        client(&engine, PULL_IDLE_TIMEOUT)
+            .pull_image("xtm/connector:1.0", None)
+            .await
+            .unwrap();
+
+        assert!(!engine.request_head().await.contains("x-registry-auth"));
+    }
+
+    #[tokio::test]
+    async fn pull_fails_on_an_error_reported_in_the_stream() {
+        let engine = fake_engine(
+            "pull-stream-error",
+            format!(
+                "{}{}\n{}\n",
+                STREAM_HEAD,
+                r#"{"status":"Pulling fs layer","id":"0123456789ab"}"#,
+                r#"{"errorDetail":{"message":"unauthorized: authentication required"},"error":"unauthorized: authentication required"}"#
+            ),
+            Duration::ZERO,
+        );
+
+        let error = client(&engine, PULL_IDLE_TIMEOUT)
+            .pull_image("xtm/connector:1.0", Some(&credentials()))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, "unauthorized: authentication required");
+    }
+
+    #[tokio::test]
+    async fn pull_fails_on_an_error_status() {
+        let engine = fake_engine(
+            "pull-status-error",
+            json_response(
+                "400 Bad Request",
+                r#"{"cause":"illegal base64 data at input byte 4","message":"failed to parse \"X-Registry-Auth\" header","response":400}"#,
+            ),
+            Duration::ZERO,
+        );
+
+        let error = client(&engine, PULL_IDLE_TIMEOUT)
+            .pull_image("xtm/connector:1.0", Some(&credentials()))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            "engine API returned 400 Bad Request: failed to parse \"X-Registry-Auth\" header"
+        );
+    }
+
+    #[tokio::test]
+    async fn pull_fails_when_the_stream_stalls() {
+        let idle_timeout = Duration::from_millis(500);
+        let engine = fake_engine(
+            "pull-stall",
+            format!(
+                "{}{}\n",
+                STREAM_HEAD,
+                r#"{"status":"Downloading","progressDetail":{"current":1,"total":100}}"#
+            ),
+            Duration::from_secs(10),
+        );
+        let started = Instant::now();
+
+        let error = client(&engine, idle_timeout)
+            .pull_image("xtm/connector:1.0", None)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, pull_stalled_error(idle_timeout));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn inspect_of_a_missing_container_is_none() {
+        let mut engine = fake_engine(
+            "inspect-missing",
+            json_response("404 Not Found", r#"{"message":"no such container"}"#),
+            Duration::ZERO,
+        );
+
+        let inspect = client(&engine, PULL_IDLE_TIMEOUT)
+            .inspect_container("connector-a")
+            .await
+            .unwrap();
+
+        assert!(inspect.is_none());
+        assert!(
+            engine
+                .request_head()
+                .await
+                .starts_with("get /v1.41/containers/connector-a/json ")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_filters_on_the_manager_label() {
+        let mut engine = fake_engine(
+            "list",
+            json_response(
+                "200 OK",
+                r#"[{"Id":"abc","Names":["/connector-a"],"State":"stopped","Labels":{"opencti-manager":"m"}}]"#,
+            ),
+            Duration::ZERO,
+        );
+
+        let containers = client(&engine, PULL_IDLE_TIMEOUT)
+            .list_containers("opencti-manager=m")
+            .await
+            .unwrap();
+
+        assert_eq!(containers.len(), 1);
+        assert_eq!(containers[0].state.as_deref(), Some("stopped"));
+        let head = engine.request_head().await;
+        assert!(
+            head.starts_with(
+                "get /v1.41/containers/json?all=true&filters=%7b%22label%22%3a%5b%22opencti-manager%3dm%22%5d%7d "
+            ),
+            "{head}"
+        );
     }
 }
