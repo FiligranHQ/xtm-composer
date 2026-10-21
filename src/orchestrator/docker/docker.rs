@@ -19,7 +19,8 @@ use bollard::query_parameters::{
 use futures::TryStreamExt;
 use futures::future;
 use std::collections::HashMap;
-use tracing::{debug, error, info, warn};
+use std::time::Duration;
+use tracing::{debug, error, info};
 
 /// Request timeout of the bollard client, in seconds.
 pub(crate) const CLIENT_TIMEOUT: u64 = 120;
@@ -27,7 +28,8 @@ pub(crate) const CLIENT_TIMEOUT: u64 = 120;
 const DEFAULT_DOCKER_SOCKET: &str = "/var/run/docker.sock";
 
 impl DockerOrchestrator {
-    pub async fn new(daemon: &Daemon) -> Self {
+    /// Connect to the Docker API socket, waiting for the API to answer.
+    pub async fn new(daemon: &Daemon, retry_interval: Duration) -> Self {
         let options = daemon.docker.clone();
         let socket_path = options.as_ref().and_then(|options| options.socket_path.clone());
         let docker = match &socket_path {
@@ -36,15 +38,17 @@ impl DockerOrchestrator {
         }
         .unwrap_or_else(|err| panic!("Cannot connect to the Docker socket: {}", err));
         // Docker rejects the requests of a client more recent than itself
-        let docker = match docker.clone().negotiate_version().await {
-            Ok(negotiated) => negotiated,
-            Err(err) => {
-                warn!(
-                    error = err.to_string(),
-                    api_version = API_DEFAULT_VERSION.to_string(),
-                    "Could not negotiate the Docker API version"
-                );
-                docker
+        let docker = loop {
+            match docker.clone().negotiate_version().await {
+                Ok(negotiated) => break negotiated,
+                Err(err) => {
+                    error!(
+                        error = err.to_string(),
+                        retry_in_seconds = retry_interval.as_secs(),
+                        "Cannot query the Docker API: check that the daemon is running and that the Composer user can read and write its socket"
+                    );
+                    tokio::time::sleep(retry_interval).await;
+                }
             }
         };
         info!(

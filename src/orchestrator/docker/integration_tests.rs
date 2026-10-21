@@ -63,16 +63,17 @@ async fn orchestrator(daemon: &Daemon) -> DockerOrchestrator {
         .with_max_level(tracing::Level::INFO)
         .with_test_writer()
         .try_init();
-    match daemon.selector.as_str() {
-        "docker" => DockerOrchestrator::new(daemon).await,
-        "podman" => tokio::time::timeout(
-            Duration::from_secs(30),
-            podman::connect(daemon, Duration::from_secs(1)),
-        )
+    let retry_interval = Duration::from_secs(1);
+    let connect = async {
+        match daemon.selector.as_str() {
+            "docker" => DockerOrchestrator::new(daemon, retry_interval).await,
+            "podman" => podman::connect(daemon, retry_interval).await,
+            other => panic!("unsupported XTM_IT_ENGINE '{}'", other),
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), connect)
         .await
-        .expect("a Podman socket must be found"),
-        other => panic!("unsupported XTM_IT_ENGINE '{}'", other),
-    }
+        .expect("the engine API must answer")
 }
 
 fn connector(test: &str) -> ApiConnector {

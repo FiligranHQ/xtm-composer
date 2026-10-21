@@ -185,21 +185,22 @@ pub async fn connect(daemon: &Daemon, retry_interval: Duration) -> DockerOrchest
 
     let probe = CompatApi::new(&socket.path, None)
         .unwrap_or_else(|err| panic!("Cannot reach the Podman socket: {}", err));
-    let version = match probe.version().await {
-        Ok(version) => Some(version),
-        Err(err) => {
-            warn!(
-                socket = socket.path,
-                error = err,
-                "Could not query the Podman version: check that the socket is a Podman API socket the Composer user can read and write"
-            );
-            None
+    let version = loop {
+        match probe.version().await {
+            Ok(version) => break version,
+            Err(err) => {
+                error!(
+                    socket = socket.path,
+                    error = err,
+                    retry_in_seconds = retry_interval.as_secs(),
+                    "Cannot query the Podman API: check that the socket is a Podman API socket the Composer user can read and write"
+                );
+                tokio::time::sleep(retry_interval).await;
+            }
         }
     };
-    let engine_version = version.as_ref().and_then(podman_version);
-    if let Some(version) = &version
-        && engine_version.is_none()
-    {
+    let engine_version = podman_version(&version);
+    if engine_version.is_none() {
         warn!(
             socket = socket.path,
             engine = ?version.components.iter().flatten().filter_map(|c| c.name.clone()).collect::<Vec<_>>(),
@@ -218,8 +219,7 @@ pub async fn connect(daemon: &Daemon, retry_interval: Duration) -> DockerOrchest
         }
     };
 
-    let api_version =
-        negotiated_api_version(version.as_ref().and_then(|v| v.api_version.as_deref()));
+    let api_version = negotiated_api_version(version.api_version.as_deref());
     let docker = Docker::connect_with_socket(&socket.path, CLIENT_TIMEOUT, &api_version)
         .unwrap_or_else(|err| panic!("Cannot connect to the Podman socket: {}", err));
     let compat = CompatApi::new(&socket.path, Some(api_version.to_string()))

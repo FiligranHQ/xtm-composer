@@ -40,8 +40,8 @@ Without `socket_path`, the Composer uses the first socket that exists:
 3. `/run/podman/podman.sock`: the rootful socket
 
 At startup it logs `Connected to Podman` with the socket, how it was found, the mode detected from the
-Podman API (`rootful` or `rootless`), the Podman version and the API version. When no socket exists yet,
-it logs the paths it checked and retries until one shows up.
+Podman API (`rootful` or `rootless`), the Podman version and the API version. Until a socket exists and
+answers, it logs why (with the paths it checked) and retries.
 
 ## Rootful Podman
 
@@ -153,6 +153,6 @@ The connectors already deployed are kept.
 | Log | Cause |
 |---|---|
 | `No Podman API socket found` | The socket is not enabled, not mounted in the Composer container, or the rootless user is not lingering. |
-| `Could not query the Podman version` | The Composer user cannot use the socket: permissions, or SELinux (`label=disable`). |
+| `Cannot query the Podman API` | The Composer user cannot use the socket: permissions, or SELinux (`label=disable`). |
 | `The socket is not served by Podman` | The socket belongs to a Docker daemon: use the `docker` selector. |
 | `Error fetching container image` | The registry rejected the pull: check the server, the credentials, or the auth file used by Podman. |

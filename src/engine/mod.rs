@@ -17,6 +17,8 @@ use tokio::task::JoinHandle;
 use tokio::time::interval;
 
 async fn build_orchestrator(daemon_configuration: &Daemon) -> Box<dyn Orchestrator + Send + Sync> {
+    // Delay between two attempts to reach the Docker or Podman API at startup
+    let retry_interval = Duration::from_secs(settings().manager.execute_schedule.max(1));
     match daemon_configuration.selector.as_str() {
         "portainer" => match daemon_configuration.portainer.clone() {
             Some(config) => match config.env_type.as_str() {
@@ -29,11 +31,8 @@ async fn build_orchestrator(daemon_configuration: &Daemon) -> Box<dyn Orchestrat
             Some(config) => Box::new(KubeOrchestrator::new(config).await),
             None => panic!("Missing kubernetes configuration"),
         },
-        "docker" => Box::new(DockerOrchestrator::new(daemon_configuration).await),
-        "podman" => {
-            let retry_interval = Duration::from_secs(settings().manager.execute_schedule.max(1));
-            Box::new(podman::connect(daemon_configuration, retry_interval).await)
-        }
+        "docker" => Box::new(DockerOrchestrator::new(daemon_configuration, retry_interval).await),
+        "podman" => Box::new(podman::connect(daemon_configuration, retry_interval).await),
         "swarm" => match daemon_configuration.swarm.clone() {
             Some(config) => Box::new(SwarmOrchestrator::new(config)),
             None => panic!("Missing swarm configuration"),
