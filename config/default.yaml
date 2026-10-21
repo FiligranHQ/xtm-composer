@@ -47,7 +47,10 @@ opencti:
     #   username: "your-username"
     #   password: "your-password"
     #   email: "your-email@example.com"
-    selector: kubernetes
+    selector: kubernetes # kubernetes, docker, podman, swarm or portainer
+    # podman: # Optional, every key defaults to auto-detection or to the engine default
+    #   socket_path: /run/podman/podman.sock # Defaults to the rootless socket ($XDG_RUNTIME_DIR/podman/podman.sock), then the rootful one
+    #   network_mode: opencti_default # Accepts the same container options as the docker block
     kubernetes:
       # Image pull policy for K8s containers created by xtmcomposer
       # Valid values: Always, IfNotPresent, Never  
@@ -123,7 +126,10 @@ openaev:
     #   username: "your-username"
     #   password: "your-password"
     #   email: "your-email@example.com"
-    selector: kubernetes
+    selector: kubernetes # kubernetes, docker, podman, swarm or portainer
+    # podman:
+    #   socket_path: /run/podman/podman.sock
+    #   # See opencti.daemon.podman above for all available options
     kubernetes:
       # Image pull policy for K8s containers created by xtmcomposer
       # Valid values: Always, IfNotPresent, Never  

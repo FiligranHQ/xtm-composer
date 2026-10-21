@@ -1,0 +1,48 @@
+# XTM Composer on Podman: `podman compose up -d` or `podman-compose up -d`
+# Set XTM_COMPOSER_ID, OPENCTI_URL and OPENCTI_ADMIN_TOKEN, e.g. in a .env file.
+services:
+  rsa-key-generator:
+    image: alpine/openssl:latest
+    volumes:
+      - rsakeys:/keys
+    entrypoint: ["/bin/ash"]
+    command: ["-c", "if [ ! -f /keys/private_key.pem ]; then openssl genpkey -algorithm RSA -out /keys/private_key.pem -pkeyopt rsa_keygen_bits:4096; fi && tail -f /dev/null"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/keys/private_key.pem"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: always
+
+  xtm-composer:
+    image: filigran/xtm-composer:latest
+    environment:
+      - MANAGER__ID=${XTM_COMPOSER_ID}
+      - "MANAGER__NAME=XTM Integrations Manager"
+      - MANAGER__CREDENTIALS_KEY_FILEPATH=/keys/private_key.pem
+      - OPENCTI__ENABLE=true
+      - OPENCTI__URL=${OPENCTI_URL}
+      - OPENCTI__TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - OPENCTI__DAEMON__SELECTOR=podman
+      # Network the connectors join to reach OpenCTI
+      # - OPENCTI__DAEMON__PODMAN__NETWORK_MODE=opencti_default
+      # Private registry, see README.md
+      # - OPENCTI__DAEMON__REGISTRY__SERVER=registry.example.com
+      # - OPENCTI__DAEMON__REGISTRY__USERNAME=ChangeMe
+      # - OPENCTI__DAEMON__REGISTRY__PASSWORD=ChangeMe
+    volumes:
+      # Rootful Podman
+      - /run/podman/podman.sock:/run/podman/podman.sock
+      # Rootless Podman: the socket of the user running this compose file (`id -u`)
+      # - /run/user/1000/podman/podman.sock:/run/podman/podman.sock
+      - rsakeys:/keys:ro
+    security_opt:
+      # On SELinux hosts, lets the container use the Podman socket
+      - label=disable
+    depends_on:
+      rsa-key-generator:
+        condition: service_healthy
+    restart: always
+
+volumes:
+  rsakeys:

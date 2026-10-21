@@ -1,0 +1,147 @@
+name: integration
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: docker
+            engine: docker
+          - name: podman-rootful
+            engine: podman
+            mode: rootful
+          - name: podman-rootless
+            engine: podman
+            mode: rootless
+    env:
+      XTM_IT_ENGINE: ${{ matrix.engine }}
+      XTM_IT_PODMAN_MODE: ${{ matrix.mode }}
+      XTM_IT_REGISTRY: localhost:5000
+      XTM_IT_REGISTRY_USERNAME: xtm-it
+      # Encoded with the standard base64 alphabet, its credentials contain '+' or '/'
+      XTM_IT_REGISTRY_PASSWORD: Xtm?Composer~Test>2026!
+      XTM_IT_IMAGE: xtm-composer-it/connector:1.0
+      TEST_FILTER: orchestrator::docker::integration_tests
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-integration-
+            ${{ runner.os }}-cargo-
+
+      - name: Build the tests
+        run: |
+          binary=$(cargo test --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable')
+          test -x "$binary"
+          echo "TEST_BINARY=$binary" >> "$GITHUB_ENV"
+
+      - name: Start an authenticated registry holding the test connector image
+        run: |
+          mkdir -p "$RUNNER_TEMP/registry-auth"
+          docker run --rm --entrypoint htpasswd httpd:2 -Bbn \
+            "$XTM_IT_REGISTRY_USERNAME" "$XTM_IT_REGISTRY_PASSWORD" > "$RUNNER_TEMP/registry-auth/htpasswd"
+          docker run -d --name registry -p 5000:5000 \
+            -v "$RUNNER_TEMP/registry-auth:/auth:ro" \
+            -e REGISTRY_AUTH=htpasswd \
+            -e REGISTRY_AUTH_HTPASSWD_REALM=xtm-composer-it \
+            -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd \
+            registry:2
+          docker build -t "$XTM_IT_REGISTRY/$XTM_IT_IMAGE" - <<'EOF'
+          FROM busybox:1.37
+          CMD ["sh", "-c", "trap 'exit 0' TERM; echo xtm-composer-it ready; while true; do sleep 1; done"]
+          EOF
+          echo "$XTM_IT_REGISTRY_PASSWORD" | docker login "$XTM_IT_REGISTRY" -u "$XTM_IT_REGISTRY_USERNAME" --password-stdin
+          docker push "$XTM_IT_REGISTRY/$XTM_IT_IMAGE"
+          docker logout "$XTM_IT_REGISTRY"
+          docker rmi "$XTM_IT_REGISTRY/$XTM_IT_IMAGE"
+
+      - name: Test on Docker
+        if: matrix.engine == 'docker'
+        run: |
+          docker version
+          "$TEST_BINARY" --ignored --test-threads=1 --skip delegated "$TEST_FILTER"
+
+      - name: Allow the plain HTTP test registry in Podman
+        if: matrix.engine == 'podman'
+        run: |
+          podman version
+          sudo mkdir -p /etc/containers/registries.conf.d
+          printf '[[registry]]\nlocation = "%s"\ninsecure = true\n' "$XTM_IT_REGISTRY" \
+            | sudo tee /etc/containers/registries.conf.d/99-xtm-composer-it.conf
+
+      # The Composer runs as root and auto-detects the rootful socket, as in a container
+      - name: Test on rootful Podman
+        if: matrix.mode == 'rootful'
+        run: |
+          sudo systemctl enable --now podman.socket
+          sudo curl --fail --silent --unix-socket /run/podman/podman.sock http://localhost/_ping
+          sudo --preserve-env env -u XDG_RUNTIME_DIR "$TEST_BINARY" --ignored --test-threads=1 --skip delegated "$TEST_FILTER"
+
+      - name: Test registry authentication delegated to rootful Podman
+        if: matrix.mode == 'rootful'
+        run: |
+          echo "$XTM_IT_REGISTRY_PASSWORD" | sudo podman login --authfile /etc/containers/auth.json \
+            -u "$XTM_IT_REGISTRY_USERNAME" --password-stdin "$XTM_IT_REGISTRY"
+          sudo chmod 600 /etc/containers/auth.json
+          sudo mkdir -p /etc/systemd/system/podman.service.d
+          printf '[Service]\nEnvironment=REGISTRY_AUTH_FILE=/etc/containers/auth.json\n' \
+            | sudo tee /etc/systemd/system/podman.service.d/registry-auth.conf
+          sudo systemctl daemon-reload
+          sudo systemctl restart podman.service podman.socket
+          sudo --preserve-env env -u XDG_RUNTIME_DIR "$TEST_BINARY" --ignored --test-threads=1 "$TEST_FILTER::delegated"
+
+      # The Composer runs as the user and auto-detects its rootless socket
+      - name: Test on rootless Podman
+        if: matrix.mode == 'rootless'
+        run: |
+          # Ubuntu 24.04 restricts the unprivileged user namespaces rootless Podman relies on
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          sudo loginctl enable-linger "$USER"
+          for _ in $(seq 1 30); do test -S "$XDG_RUNTIME_DIR/bus" && break; sleep 1; done
+          systemctl --user enable --now podman.socket
+          curl --fail --silent --unix-socket "$XDG_RUNTIME_DIR/podman/podman.sock" http://localhost/_ping
+          "$TEST_BINARY" --ignored --test-threads=1 --skip delegated "$TEST_FILTER"
+
+      - name: Test registry authentication delegated to rootless Podman
+        if: matrix.mode == 'rootless'
+        run: |
+          mkdir -p "$HOME/.config/containers"
+          echo "$XTM_IT_REGISTRY_PASSWORD" | podman login --authfile "$HOME/.config/containers/auth.json" \
+            -u "$XTM_IT_REGISTRY_USERNAME" --password-stdin "$XTM_IT_REGISTRY"
+          chmod 600 "$HOME/.config/containers/auth.json"
+          "$TEST_BINARY" --ignored --test-threads=1 "$TEST_FILTER::delegated"
+
+      - name: Engine logs
+        if: failure()
+        run: |
+          docker logs registry || true
+          sudo journalctl -u podman.service -u podman.socket --no-pager -n 200 || true
+          journalctl --user -u podman.service -u podman.socket --no-pager -n 200 || true
