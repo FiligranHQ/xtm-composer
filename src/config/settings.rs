@@ -122,6 +122,8 @@ pub struct Daemon {
     pub kubernetes: Option<Kubernetes>,
     pub docker: Option<Docker>,
     pub swarm: Option<Swarm>,
+    /// Podman serves the Docker-compatible API: it takes the same options as `docker`.
+    pub podman: Option<Docker>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -187,9 +189,12 @@ pub struct Kubernetes {
     pub image_resources: Option<ResourceRequirements>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 #[allow(unused)]
 pub struct Docker {
+    /// API socket, as a path or a `unix://` URL. Defaults to `/var/run/docker.sock` for
+    /// Docker and to the auto-detected rootless or rootful socket for Podman.
+    pub socket_path: Option<String>,
     pub network_mode: Option<String>,
     pub extra_hosts: Option<Vec<String>>,
     pub dns: Option<Vec<String>>,
@@ -260,9 +265,13 @@ impl Settings {
         config_builder
             .add_source(File::with_name("config/default"))
             .add_source(File::with_name(&format!("config/{}", run_mode)).required(false))
-            .add_source(Environment::default().try_parsing(true).separator("__"))
+            .add_source(Self::environment())
             .build()?
             .try_deserialize()
+    }
+
+    fn environment() -> Environment {
+        Environment::default().try_parsing(true).separator("__")
     }
 }
 
@@ -304,6 +313,95 @@ mod tests {
             cfg.https_proxy_ca,
             Some(vec!["/ca/a.pem".to_string(), "/ca/b.pem".to_string()])
         );
+    }
+
+    fn settings_with_env(env: &[(&str, &str)]) -> Settings {
+        let env_map: config::Map<String, String> = env
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        Config::builder()
+            .add_source(File::from_str(
+                include_str!("../../config/default.yaml"),
+                config::FileFormat::Yaml,
+            ))
+            .add_source(Settings::environment().source(Some(env_map)))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap()
+    }
+
+    #[test]
+    fn default_configuration_has_no_podman_block() {
+        let settings = settings_with_env(&[]);
+        assert!(settings.opencti.daemon.podman.is_none());
+        assert!(settings.openaev.daemon.podman.is_none());
+    }
+
+    #[test]
+    fn podman_daemon_is_configured_from_environment_for_each_platform() {
+        let settings = settings_with_env(&[
+            ("OPENCTI__DAEMON__SELECTOR", "podman"),
+            ("OPENCTI__DAEMON__PODMAN__SOCKET_PATH", "/run/podman/podman.sock"),
+            ("OPENCTI__DAEMON__PODMAN__NETWORK_MODE", "opencti_default"),
+            ("OPENCTI__DAEMON__PODMAN__PRIVILEGED", "false"),
+            ("OPENAEV__DAEMON__SELECTOR", "podman"),
+            ("OPENAEV__DAEMON__PODMAN__SOCKET_PATH", "unix:///run/user/1000/podman/podman.sock"),
+        ]);
+
+        let opencti = &settings.opencti.daemon;
+        assert_eq!(opencti.selector, "podman");
+        let podman = opencti.podman.as_ref().expect("opencti podman block");
+        assert_eq!(podman.socket_path.as_deref(), Some("/run/podman/podman.sock"));
+        assert_eq!(podman.network_mode.as_deref(), Some("opencti_default"));
+        assert_eq!(podman.privileged, Some(false));
+
+        let openaev = &settings.openaev.daemon;
+        assert_eq!(openaev.selector, "podman");
+        let podman = openaev.podman.as_ref().expect("openaev podman block");
+        assert_eq!(
+            podman.socket_path.as_deref(),
+            Some("unix:///run/user/1000/podman/podman.sock")
+        );
+        assert!(podman.network_mode.is_none());
+    }
+
+    #[test]
+    fn podman_daemon_accepts_the_docker_container_options() {
+        let input = r#"
+            selector: podman
+            podman:
+              network_mode: host
+              extra_hosts:
+                - "host.containers.internal:host-gateway"
+              cap_drop:
+                - ALL
+              security_opt:
+                - "label=disable"
+              ulimits:
+                - name: nofile
+                  soft: 1024
+                  hard: 2048
+        "#;
+        let daemon: Daemon = Config::builder()
+            .add_source(File::from_str(input, config::FileFormat::Yaml))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+
+        let podman = daemon.podman.expect("podman block");
+        assert!(podman.socket_path.is_none(), "socket path is auto-detected by default");
+        assert_eq!(podman.network_mode.as_deref(), Some("host"));
+        assert_eq!(
+            podman.extra_hosts,
+            Some(vec!["host.containers.internal:host-gateway".to_string()])
+        );
+        assert_eq!(podman.cap_drop, Some(vec!["ALL".to_string()]));
+        assert_eq!(podman.security_opt, Some(vec!["label=disable".to_string()]));
+        assert_eq!(podman.ulimits.map(|ulimits| ulimits.len()), Some(1));
+        assert!(daemon.docker.is_none());
     }
 
     #[test]

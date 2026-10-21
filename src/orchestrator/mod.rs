@@ -11,6 +11,7 @@ pub mod composer;
 pub mod docker;
 pub mod image;
 pub mod kubernetes;
+pub mod podman;
 pub mod portainer;
 pub mod swarm;
 

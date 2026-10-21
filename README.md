@@ -50,6 +50,13 @@ If you don't have any orchestration system and you use direct docker-composer, i
 
 > Direct docker daemon access require also a direct socket binding
 
+### Podman
+
+Podman is a daemonless container engine, the standard one of RHEL and SUSE Linux Enterprise. https://podman.io/
+Connectors are deployed through the Podman API socket, in rootful or rootless mode, with the `podman` selector.
+
+> See the [Podman guide](dev/podman/README.md): socket setup, rootless mode, private registries and a compose example
+
 ## About
 
 XTM composer is a product designed and developed by the company [Filigran](https://filigran.io).
