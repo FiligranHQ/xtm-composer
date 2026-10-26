@@ -257,7 +257,7 @@ impl Orchestrator for SwarmOrchestrator {
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let settings = crate::settings();
         let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
+        let resolver = Image::new(registry_config, settings.manager.image_tag_suffix.clone());
         let auth = resolver.get_credentials();
         let image = resolver.build_name(connector.image.clone());
 

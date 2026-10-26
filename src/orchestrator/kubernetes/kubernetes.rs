@@ -43,7 +43,7 @@ impl KubeOrchestrator {
     async fn register_secret(secrets: &Api<Secret>) {
         let settings = crate::settings();
         let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
+        let resolver = Image::new(registry_config, settings.manager.image_tag_suffix.clone());
         let registry_secret = resolver.get_kubernetes_registry_secret();
         if registry_secret.is_some() {
             let secret_name = resolver.get_kubernetes_secret_name().unwrap();
@@ -229,7 +229,7 @@ impl KubeOrchestrator {
         let is_starting = &connector.requested_status == "starting";
         let settings = crate::settings();
         let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
+        let resolver = Image::new(registry_config, settings.manager.image_tag_suffix.clone());
         let auth = resolver.get_credentials();
         let image = resolver.build_name(connector.image.clone());
         let selector = LabelSelector {

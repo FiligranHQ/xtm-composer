@@ -269,7 +269,7 @@ async fn deploy_fails_with_wrong_registry_credentials() {
     assert!(orchestrator.deploy(&connector).await.is_none());
     assert!(orchestrator.get(&connector).await.is_none());
 
-    let resolver = Image::new(daemon.registry.clone());
+    let resolver = Image::new(daemon.registry.clone(), None);
     let error = orchestrator
         .pull_image(
             &resolver.build_name(connector.image.clone()),
@@ -287,7 +287,7 @@ async fn deploy_fails_with_wrong_registry_credentials() {
 async fn bollard_registry_auth_header_is_rejected_for_some_passwords() {
     let daemon = daemon_with_credentials();
     let orchestrator = orchestrator(&daemon).await;
-    let resolver = Image::new(daemon.registry.clone());
+    let resolver = Image::new(daemon.registry.clone(), None);
     let credentials = resolver.get_credentials().expect("registry credentials");
     let bollard_header = STANDARD.encode(serde_json::to_string(&credentials).unwrap());
     assert!(
