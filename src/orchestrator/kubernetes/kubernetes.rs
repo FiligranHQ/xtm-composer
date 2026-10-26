@@ -105,8 +105,8 @@ impl KubeOrchestrator {
         platform: &str,
         legacy_registry: Option<Registry>,
     ) -> Vec<(String, BTreeMap<String, String>)> {
-        let resolver = Image::new(registry);
-        let legacy_resolver = Image::new(legacy_registry);
+        let resolver = Image::new(registry, None);
+        let legacy_resolver = Image::new(legacy_registry, None);
         [
             (
                 resolver.get_kubernetes_secret_name(platform),
@@ -334,7 +334,10 @@ impl KubeOrchestrator {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(workload);
         let is_starting = &workload.requested_status == "starting";
-        let resolver = Image::new(self.registry.clone());
+        let resolver = Image::new(
+            self.registry.clone(),
+            crate::settings().manager.image_tag_suffix.clone(),
+        );
         let auth = resolver.get_credentials();
         let image = resolver.build_name(workload.image.clone());
         let selector = LabelSelector {

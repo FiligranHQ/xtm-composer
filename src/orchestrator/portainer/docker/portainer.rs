@@ -196,7 +196,10 @@ impl Orchestrator for PortainerDockerOrchestrator {
     }
 
     async fn pull(&self, workload: &ApiWorkload) -> Result<(), ImagePullError> {
-        let resolver = Image::new(self.registry.clone());
+        let resolver = Image::new(
+            self.registry.clone(),
+            crate::settings().manager.image_tag_suffix.clone(),
+        );
         let auth = resolver.get_credentials();
         let auth_header =
             auth.map(|c| general_purpose::STANDARD.encode(serde_json::to_string(&c).unwrap()));
@@ -230,7 +233,11 @@ impl Orchestrator for PortainerDockerOrchestrator {
     }
 
     async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let image = Image::new(self.registry.clone()).build_name(workload.image.clone());
+        let image = Image::new(
+            self.registry.clone(),
+            crate::settings().manager.image_tag_suffix.clone(),
+        )
+        .build_name(workload.image.clone());
         let image_name: String = workload.container_name();
         let deploy_container_uri = format!("{}/create?name={}", self.container_uri, image_name);
 

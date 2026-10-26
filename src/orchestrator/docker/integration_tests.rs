@@ -286,7 +286,7 @@ async fn deploy_fails_with_wrong_registry_credentials() {
         .expect_err("the pull must be rejected");
     assert_eq!(
         error.image,
-        Image::new(daemon.registry.clone()).build_name(workload.image.clone())
+        Image::new(daemon.registry.clone(), None).build_name(workload.image.clone())
     );
     assert!(
         error.error.to_lowercase().contains("auth"),
@@ -303,7 +303,7 @@ async fn deploy_fails_with_wrong_registry_credentials() {
 async fn bollard_registry_auth_header_is_rejected_for_some_passwords() {
     let daemon = daemon_with_credentials();
     let orchestrator = orchestrator(&daemon).await;
-    let resolver = Image::new(daemon.registry.clone());
+    let resolver = Image::new(daemon.registry.clone(), None);
     let credentials = resolver.get_credentials().expect("registry credentials");
     let bollard_header = STANDARD.encode(serde_json::to_string(&credentials).unwrap());
     assert!(

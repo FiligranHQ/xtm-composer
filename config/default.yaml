@@ -15,6 +15,9 @@ manager:
   # credentials_key_filepath: /path/to/private_key.pem
   
   # Note: If both are set, filepath takes priority with a warning
+
+  # Suffix appended to the tag of the connector images (e.g. 6.9.0 -> 6.9.0-fips)
+  # image_tag_suffix: -fips
   
   logger:
     level: info

@@ -102,6 +102,7 @@ pub struct Manager {
     pub credentials_key: Option<String>,
     pub credentials_key_filepath: Option<String>,
     pub debug: Option<Debug>,
+    pub image_tag_suffix: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -330,6 +331,24 @@ mod tests {
             .unwrap()
             .try_deserialize()
             .unwrap()
+    }
+
+    #[test]
+    fn default_configuration_has_no_image_tag_suffix() {
+        let settings = settings_with_env(&[]);
+        assert!(settings.manager.image_tag_suffix.is_none());
+    }
+
+    #[test]
+    fn image_tag_suffix_is_configured_from_environment() {
+        let settings = settings_with_env(&[("MANAGER__IMAGE_TAG_SUFFIX", "-fips")]);
+        assert_eq!(settings.manager.image_tag_suffix.as_deref(), Some("-fips"));
+    }
+
+    #[test]
+    fn image_tag_suffix_can_be_emptied_from_environment() {
+        let settings = settings_with_env(&[("MANAGER__IMAGE_TAG_SUFFIX", "")]);
+        assert_eq!(settings.manager.image_tag_suffix.as_deref(), Some(""));
     }
 
     #[test]
