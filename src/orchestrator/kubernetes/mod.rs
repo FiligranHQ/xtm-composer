@@ -11,4 +11,5 @@ pub struct KubeOrchestrator {
     secrets: Api<Secret>,
     config: Kubernetes,
     registry: Option<Registry>,
+    platform: &'static str,
 }
