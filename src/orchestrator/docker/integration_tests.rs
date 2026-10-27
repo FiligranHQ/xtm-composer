@@ -203,8 +203,8 @@ async fn connector_lifecycle_with_private_registry_credentials() {
         .await
         .expect("connector deployed");
     assert!(deployed.is_managed());
-    assert_eq!(deployed.extract_opencti_id(), connector.id);
-    assert_eq!(deployed.extract_opencti_hash(), "hash-1");
+    assert_eq!(deployed.extract_workload_id(), connector.id);
+    assert_eq!(deployed.extract_config_hash(), "hash-1");
     assert_eq!(
         deployed.envs.get("XTM_IT_VALUE").map(String::as_str),
         Some("a=b")
@@ -218,7 +218,7 @@ async fn connector_lifecycle_with_private_registry_credentials() {
     assert!(running.started_at.is_some());
     let containers = orchestrator.list().await;
     assert_eq!(
-        listed(&containers, &connector).extract_opencti_id(),
+        listed(&containers, &connector).extract_workload_id(),
         connector.id
     );
     wait_for_logs(&orchestrator, &running, &connector).await;
@@ -241,7 +241,7 @@ async fn connector_lifecycle_with_private_registry_credentials() {
         .await
         .expect("connector refreshed");
     assert_ne!(refreshed.id, running.id);
-    assert_eq!(refreshed.extract_opencti_hash(), "hash-2");
+    assert_eq!(refreshed.extract_config_hash(), "hash-2");
     let refreshed = wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
 
     orchestrator.remove(&refreshed).await;
