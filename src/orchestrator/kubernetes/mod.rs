@@ -1,4 +1,4 @@
-use crate::config::settings::Kubernetes;
+use crate::config::settings::{Kubernetes, Registry};
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{Pod, Secret};
 use kube::Api;
@@ -9,5 +9,6 @@ pub struct KubeOrchestrator {
     pods: Api<Pod>,
     deployments: Api<Deployment>,
     secrets: Api<Secret>,
-    config: Kubernetes
+    config: Kubernetes,
+    registry: Option<Registry>,
 }

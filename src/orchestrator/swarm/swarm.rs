@@ -1,5 +1,6 @@
 use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
+use crate::config::settings::{Registry, Swarm};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::swarm::SwarmOrchestrator;
 use crate::orchestrator::ensure_proxy_ca_file;
@@ -27,9 +28,13 @@ use std::collections::HashMap;
 use tracing::{debug, error, info};
 
 impl SwarmOrchestrator {
-    pub fn new(config: crate::config::settings::Swarm) -> Self {
+    pub fn new(config: Swarm, registry: Option<Registry>) -> Self {
         let docker = Docker::connect_with_socket_defaults().unwrap();
-        Self { docker, config }
+        Self {
+            docker,
+            config,
+            registry,
+        }
     }
 
     async fn get_task_info(&self, service_name: &str) -> (u32, Option<String>, String) {
@@ -265,9 +270,7 @@ impl Orchestrator for SwarmOrchestrator {
     }
 
     async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
+        let resolver = Image::new(self.registry.clone());
         let auth = resolver.get_credentials();
         let image = resolver.build_name(workload.image.clone());
 

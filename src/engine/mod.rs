@@ -22,19 +22,27 @@ async fn build_orchestrator(daemon_configuration: &Daemon) -> Box<dyn Orchestrat
     match daemon_configuration.selector.as_str() {
         "portainer" => match daemon_configuration.portainer.clone() {
             Some(config) => match config.env_type.as_str() {
-                "docker" => Box::new(PortainerDockerOrchestrator::new(config)),
+                "docker" => Box::new(PortainerDockerOrchestrator::new(
+                    config,
+                    daemon_configuration.registry.clone(),
+                )),
                 def => panic!("Invalid portainer type configuration: {}", def),
             },
             None => panic!("Missing portainer configuration"),
         },
         "kubernetes" => match daemon_configuration.kubernetes.clone() {
-            Some(config) => Box::new(KubeOrchestrator::new(config).await),
+            Some(config) => Box::new(
+                KubeOrchestrator::new(config, daemon_configuration.registry.clone()).await,
+            ),
             None => panic!("Missing kubernetes configuration"),
         },
         "docker" => Box::new(DockerOrchestrator::new(daemon_configuration, retry_interval).await),
         "podman" => Box::new(podman::connect(daemon_configuration, retry_interval).await),
         "swarm" => match daemon_configuration.swarm.clone() {
-            Some(config) => Box::new(SwarmOrchestrator::new(config)),
+            Some(config) => Box::new(SwarmOrchestrator::new(
+                config,
+                daemon_configuration.registry.clone(),
+            )),
             None => panic!("Missing swarm configuration"),
         },
         def => panic!("Invalid daemon configuration: {}", def),

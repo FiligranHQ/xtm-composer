@@ -1,6 +1,6 @@
 use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
-use crate::config::settings::Kubernetes;
+use crate::config::settings::{Kubernetes, Registry};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{
@@ -24,17 +24,18 @@ use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, error, info, warn};
 
 impl KubeOrchestrator {
-    pub async fn new(config: Kubernetes) -> Self {
+    pub async fn new(config: Kubernetes, registry: Option<Registry>) -> Self {
         let client = Client::try_default().await.unwrap();
         let pods: Api<Pod> = Api::default_namespaced(client.clone());
         let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
         let secrets: Api<Secret> = Api::default_namespaced(client.clone());
-        Self::register_secret(&secrets).await;
+        Self::register_secret(&secrets, registry.clone()).await;
         Self {
             pods,
             deployments,
             secrets,
             config,
+            registry,
         }
     }
 
@@ -43,10 +44,8 @@ impl KubeOrchestrator {
     }
 
     // Validate and return image pull policy
-    async fn register_secret(secrets: &Api<Secret>) {
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
+    async fn register_secret(secrets: &Api<Secret>, registry: Option<Registry>) {
+        let resolver = Image::new(registry);
         let registry_secret = resolver.get_kubernetes_registry_secret();
         if registry_secret.is_some() {
             let secret_name = resolver.get_kubernetes_secret_name().unwrap();
@@ -231,9 +230,7 @@ impl KubeOrchestrator {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(workload);
         let is_starting = &workload.requested_status == "starting";
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
+        let resolver = Image::new(self.registry.clone());
         let auth = resolver.get_credentials();
         let image = resolver.build_name(workload.image.clone());
         let selector = LabelSelector {
@@ -599,6 +596,10 @@ mod tests {
     }
 
     fn orchestrator(url: &str) -> KubeOrchestrator {
+        orchestrator_with_registry(url, None)
+    }
+
+    fn orchestrator_with_registry(url: &str, registry: Option<Registry>) -> KubeOrchestrator {
         // Mirror main(): kube builds a rustls connector even for plain http.
         let _ = rustls::crypto::CryptoProvider::install_default(
             rustls::crypto::aws_lc_rs::default_provider(),
@@ -614,6 +615,7 @@ mod tests {
                 image_pull_policy: None,
                 image_resources: None,
             },
+            registry,
         }
     }
 
@@ -732,6 +734,30 @@ mod tests {
         for hash_key in [ENV_CONFIG_HASH, LEGACY_ENV_CONFIG_HASH] {
             assert_eq!(annotations.get(hash_key), Some(&workload.contract_hash));
         }
+    }
+
+    /// Regression test for #64: the image is resolved with the registry of the
+    /// orchestrator's platform, not always with the OpenCTI one.
+    #[tokio::test]
+    async fn deployment_image_uses_the_platform_registry() {
+        let registry = Registry {
+            server: Some("registry.openaev.example".to_string()),
+            username: None,
+            password: None,
+            email: None,
+        };
+        let workload = workload();
+
+        let deployment = orchestrator_with_registry("http://127.0.0.1:1", Some(registry))
+            .build_configuration(&workload, HashMap::new(), None);
+
+        let image = deployment.spec.unwrap().template.spec.unwrap().containers[0]
+            .image
+            .clone();
+        assert_eq!(
+            image.as_deref(),
+            Some("registry.openaev.example/ghcr.io/acme/test:latest")
+        );
     }
 }
 

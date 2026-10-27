@@ -1,4 +1,4 @@
-use crate::config::settings::Portainer;
+use crate::config::settings::{Portainer, Registry};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -26,6 +26,7 @@ pub struct PortainerDockerOrchestrator {
     image_uri: String,
     container_uri: String,
     config: Portainer,
+    registry: Option<Registry>,
 }
 
 #[derive(Deserialize)]
