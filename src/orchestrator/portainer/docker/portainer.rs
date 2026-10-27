@@ -8,7 +8,9 @@ use crate::orchestrator::portainer::docker::{
     PortainerApiError, PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
     PortainerDockerOrchestrator, PortainerGetResponse,
 };
-use crate::orchestrator::{Orchestrator, OrchestratorContainer};
+use crate::orchestrator::{
+    dedup_containers, manager_label_filters, Orchestrator, OrchestratorContainer,
+};
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose;
@@ -49,6 +51,52 @@ impl PortainerDockerOrchestrator {
             client,
             config,
         }
+    }
+
+    /// List the managed containers carrying the given `key=value` label.
+    async fn list_by_label(&self, label: String) -> Vec<OrchestratorContainer> {
+        let filter: HashMap<String, Vec<String>> =
+            HashMap::from([("label".into(), vec![label])]);
+        let serialized_filter = serde_json::to_string(&filter).unwrap();
+        let list_uri = format!(
+            "{}/json?all=true&filters={}",
+            self.container_uri, serialized_filter
+        );
+        let response = self.client.get(list_uri.clone()).send().await;
+        let response_result: Result<Vec<OrchestratorContainer>, _> = match response {
+            Ok(data) => {
+                let response: Vec<ContainerSummary> = data.json().await.unwrap();
+                let containers = response
+                    .into_iter()
+                    .map(|summary| {
+                        let container_name: Option<String> =
+                            summary.names.unwrap().first().cloned();
+                        OrchestratorContainer {
+                            id: summary.id.unwrap(),
+                            name: DockerOrchestrator::normalize_name(container_name),
+                            state: summary.state.unwrap().to_string(),
+                            envs: HashMap::new(),
+                            labels: summary.labels.unwrap(),
+                            restart_count: 0, // Not available in list, will be updated by get()
+                            started_at: None, // Not available in list, will be updated by get()
+                        }
+                    })
+                    .collect();
+                Ok::<Vec<OrchestratorContainer>, Error>(containers)
+            }
+            Err(err) => {
+                error!(
+                    error = err.to_string(),
+                    "Portainer error fetching containers"
+                );
+                Ok(Vec::new())
+            }
+        };
+        let containers_get = response_result.unwrap_or_default();
+        containers_get
+            .into_iter()
+            .filter(|c: &OrchestratorContainer| c.is_managed())
+            .collect()
     }
 }
 
@@ -95,49 +143,11 @@ impl Orchestrator for PortainerDockerOrchestrator {
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
         let settings = crate::settings();
-        let mut label_filters = Vec::new();
-        label_filters.push(format!("opencti-manager={}", settings.manager.id.clone()));
-        let filter: HashMap<String, Vec<String>> = HashMap::from([("label".into(), label_filters)]);
-        let serialized_filter = serde_json::to_string(&filter).unwrap();
-        let list_uri = format!(
-            "{}/json?all=true&filters={}",
-            self.container_uri, serialized_filter
-        );
-        let response = self.client.get(list_uri.clone()).send().await;
-        let response_result: Result<Vec<OrchestratorContainer>, _> = match response {
-            Ok(data) => {
-                let response: Vec<ContainerSummary> = data.json().await.unwrap();
-                let containers = response
-                    .into_iter()
-                    .map(|summary| {
-                        let container_name: Option<String> =
-                            summary.names.unwrap().first().cloned();
-                        OrchestratorContainer {
-                            id: summary.id.unwrap(),
-                            name: DockerOrchestrator::normalize_name(container_name),
-                            state: summary.state.unwrap().to_string(),
-                            envs: HashMap::new(),
-                            labels: summary.labels.unwrap(),
-                            restart_count: 0, // Not available in list, will be updated by get()
-                            started_at: None, // Not available in list, will be updated by get()
-                        }
-                    })
-                    .collect();
-                Ok::<Vec<OrchestratorContainer>, Error>(containers)
-            }
-            Err(err) => {
-                error!(
-                    error = err.to_string(),
-                    "Portainer error fetching containers"
-                );
-                Ok(Vec::new())
-            }
-        };
-        let containers_get = response_result.unwrap_or_default();
-        containers_get
-            .into_iter()
-            .filter(|c: &OrchestratorContainer| c.is_managed())
-            .collect()
+        let mut containers = Vec::new();
+        for manager_label in manager_label_filters(&settings.manager.id) {
+            containers.extend(self.list_by_label(manager_label).await);
+        }
+        dedup_containers(containers)
     }
 
     async fn start(&self, container: &OrchestratorContainer, connector: &ApiConnector) -> () {

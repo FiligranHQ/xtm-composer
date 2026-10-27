@@ -2,7 +2,7 @@ use crate::api::{ApiConnector, ConnectorStatus};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use tracing::error;
@@ -14,6 +14,43 @@ pub mod kubernetes;
 pub mod podman;
 pub mod portainer;
 pub mod swarm;
+
+/// Product-agnostic label and environment keys tagging the workloads deployed
+/// by the composer, whatever their platform (#136).
+pub const LABEL_MANAGER: &str = "xtm-manager";
+pub const LABEL_WORKLOAD_ID: &str = "xtm-workload-id";
+pub const LABEL_PLATFORM: &str = "xtm-platform";
+pub const ENV_CONFIG_HASH: &str = "XTM_CONFIG_HASH";
+
+/// Keys used before #136. During the transition they are written alongside the
+/// current keys, so that an older composer still recognizes the workloads after
+/// a rollback, and read as a fallback, so that the workloads deployed by older
+/// versions keep being recognized until they are redeployed.
+pub const LEGACY_LABEL_MANAGER: &str = "opencti-manager";
+pub const LEGACY_LABEL_WORKLOAD_ID: &str = "opencti-connector-id";
+pub const LEGACY_LABEL_PLATFORM: &str = "opencti-platform";
+pub const LEGACY_ENV_CONFIG_HASH: &str = "OPENCTI_CONFIG_HASH";
+
+/// Label filters (`key=value`) matching the workloads of a manager under the
+/// current and the legacy manager keys. Orchestrators combine multiple label
+/// filters with AND, so callers issue one query per filter and merge the
+/// results with [`dedup_containers`].
+pub fn manager_label_filters(manager_id: &str) -> [String; 2] {
+    [
+        format!("{LABEL_MANAGER}={manager_id}"),
+        format!("{LEGACY_LABEL_MANAGER}={manager_id}"),
+    ]
+}
+
+/// Drop the containers listed more than once, e.g. a workload carrying both the
+/// current and the legacy manager labels, keeping the first occurrence.
+pub fn dedup_containers(containers: Vec<OrchestratorContainer>) -> Vec<OrchestratorContainer> {
+    let mut seen = HashSet::new();
+    containers
+        .into_iter()
+        .filter(|container| seen.insert(container.id.clone()))
+        .collect()
+}
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all(deserialize = "PascalCase"))]
@@ -29,15 +66,37 @@ pub struct OrchestratorContainer {
 
 impl OrchestratorContainer {
     pub fn is_managed(&self) -> bool {
-        self.labels.contains_key("opencti-connector-id")
+        self.workload_id().is_some()
     }
 
-    pub fn extract_opencti_id(&self) -> String {
-        self.labels.get("opencti-connector-id").unwrap().clone()
+    /// Workload id label, falling back to the legacy key.
+    pub fn workload_id(&self) -> Option<&String> {
+        self.labels
+            .get(LABEL_WORKLOAD_ID)
+            .or_else(|| self.labels.get(LEGACY_LABEL_WORKLOAD_ID))
     }
 
-    pub fn extract_opencti_hash(&self) -> &String {
-        self.envs.get("OPENCTI_CONFIG_HASH").unwrap()
+    /// Platform label, falling back to the legacy key.
+    pub fn platform(&self) -> Option<&String> {
+        self.labels
+            .get(LABEL_PLATFORM)
+            .or_else(|| self.labels.get(LEGACY_LABEL_PLATFORM))
+    }
+
+    pub fn extract_workload_id(&self) -> String {
+        self.workload_id().unwrap().clone()
+    }
+
+    /// Configuration hash env, read from the legacy key first. Both keys are
+    /// written with the same value, but a composer rolled back to an older
+    /// version only updates the legacy one when it refreshes a workload (on
+    /// Kubernetes, its merge patch leaves the current annotation untouched):
+    /// the legacy value is the up-to-date one as long as it is written.
+    pub fn extract_config_hash(&self) -> &String {
+        self.envs
+            .get(LEGACY_ENV_CONFIG_HASH)
+            .or_else(|| self.envs.get(ENV_CONFIG_HASH))
+            .unwrap()
     }
 
     pub fn is_in_reboot_loop(&self) -> bool {
@@ -53,12 +112,27 @@ impl OrchestratorContainer {
     }
 }
 
+/// Labels of a deployed workload, under both the current and the legacy keys.
 pub fn build_labels(manager_id: &str, connector: &ApiConnector) -> HashMap<String, String> {
     let mut labels: HashMap<String, String> = HashMap::new();
-    labels.insert("opencti-manager".into(), manager_id.to_string());
-    labels.insert("opencti-connector-id".into(), connector.id.clone());
-    labels.insert("opencti-platform".into(), connector.platform.clone());
+    for (key, legacy_key, value) in [
+        (LABEL_MANAGER, LEGACY_LABEL_MANAGER, manager_id),
+        (LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID, connector.id.as_str()),
+        (LABEL_PLATFORM, LEGACY_LABEL_PLATFORM, connector.platform.as_str()),
+    ] {
+        labels.insert(key.into(), value.to_string());
+        labels.insert(legacy_key.into(), value.to_string());
+    }
     labels
+}
+
+/// Configuration hash entries of a deployed workload, under both the current
+/// and the legacy keys.
+pub fn config_hash_entries(hash: &str) -> [(String, String); 2] {
+    [
+        (ENV_CONFIG_HASH.to_string(), hash.to_string()),
+        (LEGACY_ENV_CONFIG_HASH.to_string(), hash.to_string()),
+    ]
 }
 
 pub fn ensure_proxy_ca_file(connector: &ApiConnector) -> Option<String> {
@@ -145,9 +219,139 @@ mod tests {
 
         let labels = build_labels("test-manager", &connector);
 
+        assert_eq!(labels.get(LABEL_WORKLOAD_ID), Some(&connector.id));
+        assert_eq!(labels.get(LABEL_PLATFORM), Some(&connector.platform));
+        assert_eq!(labels.get(LABEL_MANAGER), Some(&"test-manager".to_string()));
+    }
+
+    /// The legacy labels are still written so that an older composer keeps
+    /// recognizing the workloads after a rollback.
+    #[test]
+    fn labels_keep_the_legacy_keys() {
+        let connector = ApiConnector {
+            id: "connector-1".to_string(),
+            platform: "openaev".to_string(),
+            name: String::new(),
+            image: String::new(),
+            contract_hash: String::new(),
+            current_status: None,
+            requested_status: String::new(),
+            contract_configuration: vec![],
+            undecryptable_keys: vec![],
+        };
+
+        let labels = build_labels("test-manager", &connector);
+
+        assert_eq!(labels.len(), 6);
         assert_eq!(labels.get("opencti-connector-id"), Some(&connector.id));
         assert_eq!(labels.get("opencti-platform"), Some(&connector.platform));
         assert_eq!(labels.get("opencti-manager"), Some(&"test-manager".to_string()));
+    }
+
+    #[test]
+    fn config_hash_entries_cover_current_and_legacy_keys() {
+        let entries: HashMap<String, String> = config_hash_entries("h1").into_iter().collect();
+        assert_eq!(entries.get("XTM_CONFIG_HASH").map(String::as_str), Some("h1"));
+        assert_eq!(entries.get("OPENCTI_CONFIG_HASH").map(String::as_str), Some("h1"));
+    }
+
+    fn container_with(labels: &[(&str, &str)], envs: &[(&str, &str)]) -> OrchestratorContainer {
+        OrchestratorContainer {
+            id: "container-id".to_string(),
+            name: "container-name".to_string(),
+            state: "running".to_string(),
+            labels: labels
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            envs: envs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            restart_count: 0,
+            started_at: None,
+        }
+    }
+
+    #[test]
+    fn accessors_read_current_keys() {
+        let container = container_with(
+            &[(LABEL_WORKLOAD_ID, "A"), (LABEL_PLATFORM, "openaev")],
+            &[(ENV_CONFIG_HASH, "h1")],
+        );
+        assert!(container.is_managed());
+        assert_eq!(container.extract_workload_id(), "A");
+        assert_eq!(container.platform().map(String::as_str), Some("openaev"));
+        assert_eq!(container.extract_config_hash(), "h1");
+    }
+
+    #[test]
+    fn accessors_fall_back_to_legacy_keys() {
+        let container = container_with(
+            &[(LEGACY_LABEL_WORKLOAD_ID, "A"), (LEGACY_LABEL_PLATFORM, "opencti")],
+            &[(LEGACY_ENV_CONFIG_HASH, "h1")],
+        );
+        assert!(container.is_managed());
+        assert_eq!(container.extract_workload_id(), "A");
+        assert_eq!(container.platform().map(String::as_str), Some("opencti"));
+        assert_eq!(container.extract_config_hash(), "h1");
+    }
+
+    #[test]
+    fn accessors_prefer_current_labels_over_legacy_ones() {
+        let container = container_with(
+            &[
+                (LABEL_WORKLOAD_ID, "new"),
+                (LEGACY_LABEL_WORKLOAD_ID, "old"),
+                (LABEL_PLATFORM, "openaev"),
+                (LEGACY_LABEL_PLATFORM, "opencti"),
+            ],
+            &[],
+        );
+        assert_eq!(container.extract_workload_id(), "new");
+        assert_eq!(container.platform().map(String::as_str), Some("openaev"));
+    }
+
+    /// A composer rolled back to an older version only updates the legacy hash.
+    #[test]
+    fn config_hash_prefers_the_legacy_key() {
+        let container = container_with(
+            &[],
+            &[(ENV_CONFIG_HASH, "stale-hash"), (LEGACY_ENV_CONFIG_HASH, "refreshed-hash")],
+        );
+        assert_eq!(container.extract_config_hash(), "refreshed-hash");
+    }
+
+    #[test]
+    fn container_without_workload_id_is_not_managed() {
+        let container = container_with(&[(LABEL_MANAGER, "m"), (LEGACY_LABEL_MANAGER, "m")], &[]);
+        assert!(!container.is_managed());
+        assert!(container.platform().is_none());
+    }
+
+    #[test]
+    fn manager_label_filters_cover_current_and_legacy_keys() {
+        assert_eq!(
+            manager_label_filters("m"),
+            ["xtm-manager=m".to_string(), "opencti-manager=m".to_string()]
+        );
+    }
+
+    #[test]
+    fn dedup_containers_keeps_first_occurrence_by_id() {
+        let mut first = container_with(&[], &[]);
+        first.id = "a".to_string();
+        first.name = "first".to_string();
+        let mut duplicate = first.clone();
+        duplicate.name = "duplicate".to_string();
+        let mut other = first.clone();
+        other.id = "b".to_string();
+
+        let containers = dedup_containers(vec![first, duplicate, other]);
+
+        let ids: Vec<&str> = containers.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "b"]);
+        assert_eq!(containers[0].name, "first");
     }
 
     #[test]
@@ -187,51 +391,6 @@ mod tests {
             spec.get("replicas").and_then(|v| v.as_i64()),
             Some(1),
             "other spec fields must survive"
-        );
-    }
-
-    #[test]
-    fn deploy_payload_includes_all_labels_in_selector() {
-        // deploy() sends the full Deployment including the selector with
-        // all labels so Kubernetes can match pods precisely.
-        use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
-        use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
-        use std::collections::BTreeMap;
-
-        let labels: BTreeMap<String, String> = BTreeMap::from([
-            ("opencti-manager".to_string(), "test-manager".to_string()),
-            ("opencti-connector-id".to_string(), "connector-42".to_string()),
-            ("opencti-platform".to_string(), "opencti".to_string()),
-        ]);
-        let deployment = Deployment {
-            spec: Some(DeploymentSpec {
-                selector: LabelSelector {
-                    match_labels: Some(labels.clone()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        let json = serde_json::to_value(&deployment).unwrap();
-        let match_labels = json
-            .pointer("/spec/selector/matchLabels")
-            .expect("matchLabels must be present");
-        assert_eq!(
-            match_labels.get("opencti-connector-id").and_then(|v| v.as_str()),
-            Some("connector-42"),
-            "selector must contain the connector-id label"
-        );
-        assert_eq!(
-            match_labels.get("opencti-manager").and_then(|v| v.as_str()),
-            Some("test-manager"),
-            "selector must contain the manager label"
-        );
-        assert_eq!(
-            match_labels.get("opencti-platform").and_then(|v| v.as_str()),
-            Some("opencti"),
-            "selector must contain the platform label"
         );
     }
 

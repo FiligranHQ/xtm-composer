@@ -3,7 +3,9 @@ use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::orchestrator::image::Image;
 use crate::orchestrator::swarm::SwarmOrchestrator;
 use crate::orchestrator::ensure_proxy_ca_file;
-use crate::orchestrator::{Orchestrator, OrchestratorContainer};
+use crate::orchestrator::{
+    dedup_containers, manager_label_filters, Orchestrator, OrchestratorContainer,
+};
 use async_trait::async_trait;
 use bollard::auth::DockerCredentials;
 use bollard::models::{
@@ -72,6 +74,40 @@ impl SwarmOrchestrator {
             Err(_) => (0, None, "unknown".to_string()),
         }
     }
+
+    /// List the services carrying the given `key=value` label.
+    async fn list_by_label(&self, manager_label: String) -> Vec<OrchestratorContainer> {
+        let filters: HashMap<String, Vec<String>> =
+            HashMap::from([("label".to_string(), vec![manager_label])]);
+
+        let options = Some(ListServicesOptions {
+            filters: Some(filters),
+            ..Default::default()
+        });
+        match self.docker.list_services(options).await {
+            Ok(services) => services
+                .into_iter()
+                .filter_map(|svc| {
+                    let spec = svc.spec?;
+                    let name = spec.name.clone()?;
+                    let labels = spec.labels.unwrap_or_default();
+                    Some(OrchestratorContainer {
+                        id: svc.id.unwrap_or_default(),
+                        name,
+                        state: "unknown".to_string(),
+                        envs: HashMap::new(),
+                        labels,
+                        restart_count: 0,
+                        started_at: None,
+                    })
+                })
+                .collect(),
+            Err(err) => {
+                error!(error = err.to_string(), "Error fetching swarm services");
+                Vec::new()
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -128,37 +164,11 @@ impl Orchestrator for SwarmOrchestrator {
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
         let settings = crate::settings();
-        let manager_label = format!("opencti-manager={}", settings.manager.id);
-        let filters: HashMap<String, Vec<String>> =
-            HashMap::from([("label".to_string(), vec![manager_label])]);
-
-        let options = Some(ListServicesOptions {
-            filters: Some(filters),
-            ..Default::default()
-        });
-        match self.docker.list_services(options).await {
-            Ok(services) => services
-                .into_iter()
-                .filter_map(|svc| {
-                    let spec = svc.spec?;
-                    let name = spec.name.clone()?;
-                    let labels = spec.labels.unwrap_or_default();
-                    Some(OrchestratorContainer {
-                        id: svc.id.unwrap_or_default(),
-                        name,
-                        state: "unknown".to_string(),
-                        envs: HashMap::new(),
-                        labels,
-                        restart_count: 0,
-                        started_at: None,
-                    })
-                })
-                .collect(),
-            Err(err) => {
-                error!(error = err.to_string(), "Error fetching swarm services");
-                Vec::new()
-            }
+        let mut services = Vec::new();
+        for manager_label in manager_label_filters(&settings.manager.id) {
+            services.extend(self.list_by_label(manager_label).await);
         }
+        dedup_containers(services)
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {

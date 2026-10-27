@@ -3,7 +3,10 @@ use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::config::settings::Kubernetes;
 use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
-use crate::orchestrator::{Orchestrator, OrchestratorContainer};
+use crate::orchestrator::{
+    config_hash_entries, dedup_containers, manager_label_filters, Orchestrator,
+    OrchestratorContainer, LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID,
+};
 use async_trait::async_trait;
 use k8s_openapi::DeepMerge;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
@@ -201,21 +204,22 @@ impl KubeOrchestrator {
     }
 
     async fn get_deployment_pod(&self, connector_id: String) -> Option<Pod> {
-        let lp = &ListParams::default().labels(&format!("opencti-connector-id={}", connector_id));
-        let deployment_pods_response = self.pods.list(lp).await;
-        match deployment_pods_response {
-            Ok(pods) => {
-                let pod_list = pods.items;
-                match !pod_list.is_empty() {
-                    true => pod_list.into_iter().next(),
-                    false => None,
+        // Pods deployed by older composer versions only carry the legacy label
+        for label_key in [LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID] {
+            let lp = &ListParams::default().labels(&format!("{}={}", label_key, connector_id));
+            match self.pods.list(lp).await {
+                Ok(pods) => {
+                    if let Some(pod) = pods.items.into_iter().next() {
+                        return Some(pod);
+                    }
+                }
+                Err(err) => {
+                    error!(error = err.to_string(), "Fail to get deployment pod");
+                    return None;
                 }
             }
-            Err(err) => {
-                error!(error = err.to_string(), "Fail to get deployment pod");
-                None
-            }
         }
+        None
     }
 
     pub fn build_configuration(
@@ -268,10 +272,9 @@ impl KubeOrchestrator {
                 name: Some(connector.container_name()),
                 labels: Some(deployment_labels.clone()),
                 // Specific case to let the hash config on top level
-                annotations: Some(BTreeMap::from([(
-                    "OPENCTI_CONFIG_HASH".into(),
-                    connector.contract_hash.clone(),
-                )])),
+                annotations: Some(BTreeMap::from(config_hash_entries(
+                    &connector.contract_hash,
+                ))),
                 ..Default::default()
             },
             spec: Some(DeploymentSpec {
@@ -388,13 +391,17 @@ impl Orchestrator for KubeOrchestrator {
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
         let settings = crate::settings();
-        let lp = &ListParams::default()
-            .labels(&format!("opencti-manager={}", settings.manager.id.clone()));
-        let get_deployments = self.deployments.list(lp).await.unwrap();
-        get_deployments
-            .into_iter()
-            .map(|deployment| KubeOrchestrator::from_deployment(deployment))
-            .collect()
+        let mut containers = Vec::new();
+        for manager_label in manager_label_filters(&settings.manager.id) {
+            let lp = &ListParams::default().labels(&manager_label);
+            let get_deployments = self.deployments.list(lp).await.unwrap();
+            containers.extend(
+                get_deployments
+                    .into_iter()
+                    .map(|deployment| KubeOrchestrator::from_deployment(deployment)),
+            );
+        }
+        dedup_containers(containers)
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
@@ -412,7 +419,7 @@ impl Orchestrator for KubeOrchestrator {
         match delete_response {
             Ok(_) => info!(
                 name = container.name,
-                id = container.extract_opencti_id(),
+                id = container.extract_workload_id(),
                 "Deployment successfully deleted"
             ),
             Err(err) => error!(
@@ -545,6 +552,7 @@ impl Orchestrator for KubeOrchestrator {
 mod tests {
     use super::*;
     use crate::api::ApiContractConfig;
+    use crate::orchestrator::{build_labels, ENV_CONFIG_HASH, LEGACY_ENV_CONFIG_HASH};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpListener;
@@ -701,6 +709,29 @@ mod tests {
             logs.contains("Failed to scale deployment") && logs.contains("not found"),
             "scale failure must be logged: {logs}"
         );
+    }
+
+    /// The deployment selector, pod template and metadata carry the current
+    /// and legacy labels, and the configuration hash is annotated under both
+    /// keys (#136). The selector is immutable: it must be complete at creation.
+    #[tokio::test]
+    async fn deployment_carries_current_and_legacy_labels_and_hash() {
+        let connector = connector();
+        let labels = build_labels("test-manager", &connector);
+        let expected: BTreeMap<String, String> = labels.clone().into_iter().collect();
+
+        let deployment =
+            orchestrator("http://127.0.0.1:1").build_configuration(&connector, labels, None);
+
+        assert_eq!(expected.len(), 6);
+        assert_eq!(deployment.metadata.labels.as_ref(), Some(&expected));
+        let spec = deployment.spec.unwrap();
+        assert_eq!(spec.selector.match_labels.as_ref(), Some(&expected));
+        assert_eq!(spec.template.metadata.unwrap().labels.as_ref(), Some(&expected));
+        let annotations = deployment.metadata.annotations.unwrap();
+        for hash_key in [ENV_CONFIG_HASH, LEGACY_ENV_CONFIG_HASH] {
+            assert_eq!(annotations.get(hash_key), Some(&connector.contract_hash));
+        }
     }
 }
 

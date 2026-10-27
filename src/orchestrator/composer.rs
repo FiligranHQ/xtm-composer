@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 /// Detects a connector **name collision**: the container fetched by name for this
-/// connector carries an `opencti-connector-id` label that belongs to a *different*
+/// connector carries a workload id label that belongs to a *different*
 /// connector. This happens when two connectors share the same name (which OpenCTI is
 /// meant to forbid) — the orchestrator looks a deployment up by name and returns the
 /// wrong one, later surfacing as an obscure Kubernetes
@@ -22,7 +22,7 @@ fn detect_connector_id_mismatch(
     container: &OrchestratorContainer,
     connector_id: &str,
 ) -> Option<String> {
-    match container.labels.get("opencti-connector-id") {
+    match container.workload_id() {
         Some(found) if found != connector_id => Some(found.clone()),
         Some(_) => None,
         None => Some("<unlabeled>".to_string()),
@@ -152,7 +152,7 @@ async fn orchestrate_existing(
     }
     // In case of platform upgrade, we need to align all deployed connectors
     let requested_connector_hash = connector.contract_hash.clone();
-    let current_container_hash = container.extract_opencti_hash();
+    let current_container_hash = container.extract_config_hash();
     if !requested_connector_hash.eq(current_container_hash)
         && !refuse_incomplete_configuration(connector, "refresh")
     {
@@ -256,15 +256,12 @@ pub async fn orchestrate(
         let platform = api.platform();
         let existing_containers = orchestrator.list().await;
         for container in existing_containers {
-            let container_platform = container
-                .labels
-                .get("opencti-platform")
-                .map(|value| value.as_str());
+            let container_platform = container.platform().map(|value| value.as_str());
             // Only skip containers explicitly belonging to another platform
             if container_platform.is_some() && container_platform != Some(platform) {
                 continue;
             }
-            let connector_id = container.extract_opencti_id();
+            let connector_id = container.extract_workload_id();
             match connectors_by_id.get(&connector_id) {
                 None => {
                     // Connector no longer exists — remove the orphaned container
@@ -290,6 +287,10 @@ mod tests {
     use super::*;
     use crate::api::ApiContractConfig;
     use crate::config::settings::Daemon;
+    use crate::orchestrator::{
+        build_labels, config_hash_entries, ENV_CONFIG_HASH, LABEL_MANAGER, LABEL_PLATFORM,
+        LABEL_WORKLOAD_ID, LEGACY_LABEL_MANAGER,
+    };
     use std::sync::{Arc, Mutex};
 
     fn connector(id: &str) -> ApiConnector {
@@ -306,14 +307,13 @@ mod tests {
         }
     }
 
+    /// Container as deployed by this version: current and legacy keys.
     fn managed_container(id: &str, platform: &str) -> OrchestratorContainer {
-        let mut labels = HashMap::new();
-        labels.insert("opencti-manager".to_string(), "shared-manager".to_string());
-        labels.insert("opencti-connector-id".to_string(), id.to_string());
-        labels.insert("opencti-platform".to_string(), platform.to_string());
-
-        let mut envs = HashMap::new();
-        envs.insert("OPENCTI_CONFIG_HASH".to_string(), format!("hash-{id}"));
+        let mut owner = connector(id);
+        owner.platform = platform.to_string();
+        let labels = build_labels("shared-manager", &owner);
+        let envs: HashMap<String, String> =
+            config_hash_entries(&owner.contract_hash).into_iter().collect();
 
         OrchestratorContainer {
             id: format!("container-{id}"),
@@ -326,6 +326,7 @@ mod tests {
         }
     }
 
+    /// Container deployed by a composer older than the platform label.
     fn legacy_container(id: &str) -> OrchestratorContainer {
         let mut labels = HashMap::new();
         labels.insert("opencti-manager".to_string(), "shared-manager".to_string());
@@ -343,6 +344,37 @@ mod tests {
             restart_count: 0,
             started_at: None,
         }
+    }
+
+    /// Container carrying only the current (xtm-*) keys, as deployed once the
+    /// legacy keys are no longer written.
+    fn current_container(id: &str, platform: &str) -> OrchestratorContainer {
+        let mut labels = HashMap::new();
+        labels.insert(LABEL_MANAGER.to_string(), "shared-manager".to_string());
+        labels.insert(LABEL_WORKLOAD_ID.to_string(), id.to_string());
+        labels.insert(LABEL_PLATFORM.to_string(), platform.to_string());
+
+        let mut envs = HashMap::new();
+        envs.insert(ENV_CONFIG_HASH.to_string(), format!("hash-{id}"));
+
+        OrchestratorContainer {
+            id: format!("container-{id}"),
+            name: format!("connector-{}", id.to_lowercase()),
+            state: "exited".to_string(),
+            labels,
+            envs,
+            restart_count: 0,
+            started_at: None,
+        }
+    }
+
+    fn set_config_hash(container: &mut OrchestratorContainer, hash: &str) {
+        container.envs.extend(config_hash_entries(hash));
+    }
+
+    fn remove_manager_labels(container: &mut OrchestratorContainer) {
+        container.labels.remove(LABEL_MANAGER);
+        container.labels.remove(LEGACY_LABEL_MANAGER);
     }
 
     struct FakeApi {
@@ -450,7 +482,10 @@ mod tests {
             // Real orchestrators only list containers labeled with the manager.
             self.containers
                 .iter()
-                .filter(|container| container.labels.contains_key("opencti-manager"))
+                .filter(|container| {
+                    container.labels.contains_key(LABEL_MANAGER)
+                        || container.labels.contains_key(LEGACY_LABEL_MANAGER)
+                })
                 .cloned()
                 .collect()
         }
@@ -467,7 +502,7 @@ mod tests {
             self.removed_ids
                 .lock()
                 .expect("mutex should not be poisoned")
-                .push(container.extract_opencti_id());
+                .push(container.extract_workload_id());
         }
 
         async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
@@ -700,9 +735,7 @@ mod tests {
     #[tokio::test]
     async fn orchestrate_reconciles_connector_without_collision() {
         let mut outdated = managed_container("A", "opencti");
-        outdated
-            .envs
-            .insert("OPENCTI_CONFIG_HASH".to_string(), "old-hash".to_string());
+        set_config_hash(&mut outdated, "old-hash");
         let mut running = managed_container("B", "opencti");
         running.state = "running".to_string();
 
@@ -722,7 +755,7 @@ mod tests {
     async fn orchestrate_skips_connector_on_name_collision_with_foreign_deployment() {
         let mut foreign = managed_container("OTHER", "opencti");
         foreign.name = connector("A").container_name();
-        foreign.labels.remove("opencti-manager");
+        remove_manager_labels(&mut foreign);
 
         let (actions, removed) = run_cycle(vec![foreign], vec![starting_connector("A")]).await;
 
@@ -812,7 +845,7 @@ mod tests {
     async fn collision_is_reported_to_the_platform_once_per_schedule() {
         let mut foreign = managed_container("OTHER", "opencti");
         foreign.name = connector("A").container_name();
-        foreign.labels.remove("opencti-manager");
+        remove_manager_labels(&mut foreign);
 
         let pushed = run_cycles_with_due_logs(vec![foreign], vec![connector("A")], 2).await;
 
@@ -833,9 +866,7 @@ mod tests {
 
     fn outdated_container(id: &str) -> OrchestratorContainer {
         let mut container = managed_container(id, "opencti");
-        container
-            .envs
-            .insert("OPENCTI_CONFIG_HASH".to_string(), "old-hash".to_string());
+        set_config_hash(&mut container, "old-hash");
         container
     }
 
@@ -887,6 +918,101 @@ mod tests {
 
         assert_eq!(actions, vec!["stop:A"]);
         assert!(removed.is_empty(), "deployment must not be removed: {removed:?}");
+    }
+
+    /// Regression test for #136: the platform filter must read the current
+    /// platform label, otherwise the other platform's workloads look like
+    /// orphans and get deleted.
+    #[tokio::test]
+    async fn cleanup_does_not_delete_other_platform_workloads_with_current_labels() {
+        let (_, removed) = run_cycle(
+            vec![
+                current_container("A", "opencti"),
+                current_container("X", "openaev"),
+                current_container("Y", "openaev"),
+            ],
+            vec![connector("A")],
+        )
+        .await;
+
+        assert!(
+            removed.is_empty(),
+            "cleanup removed workloads from another platform: {removed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_removes_orphans_with_current_labels() {
+        let (_, removed) = run_cycle(
+            vec![
+                current_container("A", "opencti"),
+                current_container("D", "opencti"),
+                current_container("X", "openaev"),
+            ],
+            vec![connector("A")],
+        )
+        .await;
+
+        assert_eq!(removed, vec!["D".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn orchestrate_refreshes_outdated_container_with_current_hash_key() {
+        let mut outdated = current_container("A", "opencti");
+        outdated
+            .envs
+            .insert(ENV_CONFIG_HASH.to_string(), "old-hash".to_string());
+        let up_to_date = current_container("B", "opencti");
+
+        let (actions, removed) =
+            run_cycle(vec![outdated, up_to_date], vec![connector("A"), connector("B")]).await;
+
+        assert_eq!(actions, vec!["refresh:A"]);
+        assert!(removed.is_empty(), "nothing should be removed: {removed:?}");
+    }
+
+    /// A container deployed before #136 is only refreshed when its legacy
+    /// hash differs: upgrading the composer alone does not redeploy it.
+    #[tokio::test]
+    async fn orchestrate_compares_legacy_hash_of_containers_deployed_before_136() {
+        let mut outdated = legacy_container("A");
+        outdated
+            .envs
+            .insert("OPENCTI_CONFIG_HASH".to_string(), "old-hash".to_string());
+        let up_to_date = legacy_container("B");
+
+        let (actions, removed) =
+            run_cycle(vec![outdated, up_to_date], vec![connector("A"), connector("B")]).await;
+
+        assert_eq!(actions, vec!["refresh:A"]);
+        assert!(removed.is_empty(), "nothing should be removed: {removed:?}");
+    }
+
+    /// After a rollback, a composer refreshing a workload with an older version
+    /// only updates its legacy hash: the stale current one must not hide a
+    /// configuration change once the composer is upgraded again.
+    #[tokio::test]
+    async fn orchestrate_compares_the_legacy_hash_updated_by_an_older_composer() {
+        let mut refreshed_by_older = managed_container("A", "opencti");
+        refreshed_by_older
+            .envs
+            .insert("OPENCTI_CONFIG_HASH".to_string(), "older-composer-hash".to_string());
+
+        let (actions, removed) = run_cycle(vec![refreshed_by_older], vec![connector("A")]).await;
+
+        assert_eq!(actions, vec!["refresh:A"]);
+        assert!(removed.is_empty(), "nothing should be removed: {removed:?}");
+    }
+
+    #[tokio::test]
+    async fn orchestrate_detects_name_collision_with_current_labels() {
+        let mut orphan = current_container("OTHER", "opencti");
+        orphan.name = connector("A").container_name();
+
+        let (actions, removed) = run_cycle(vec![orphan], vec![starting_connector("A")]).await;
+
+        assert!(actions.is_empty(), "colliding deployment must not be reconciled: {actions:?}");
+        assert_eq!(removed, vec!["OTHER".to_string()]);
     }
 
     #[test]

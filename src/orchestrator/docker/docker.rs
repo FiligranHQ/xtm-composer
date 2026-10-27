@@ -5,7 +5,9 @@ use crate::orchestrator::docker::{ContainerEngine, DockerOrchestrator};
 use crate::orchestrator::image::Image;
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::orchestrator::ensure_proxy_ca_file;
-use crate::orchestrator::{Orchestrator, OrchestratorContainer};
+use crate::orchestrator::{
+    dedup_containers, manager_label_filters, Orchestrator, OrchestratorContainer,
+};
 use async_trait::async_trait;
 use bollard::auth::DockerCredentials;
 use bollard::errors::Error as BollardError;
@@ -103,6 +105,56 @@ impl DockerOrchestrator {
         match self.engine {
             ContainerEngine::Podman => self.compat.as_ref(),
             ContainerEngine::Docker => None,
+        }
+    }
+
+    /// List the containers carrying the given `key=value` label.
+    async fn list_by_label(&self, label: String) -> Vec<OrchestratorContainer> {
+        if let Some(compat) = self.podman_api() {
+            return match compat.list_containers(&label).await {
+                Ok(containers) => containers.into_iter().map(container_from_summary).collect(),
+                Err(err) => {
+                    error!(error = err, "Error fetching containers");
+                    Vec::new()
+                }
+            };
+        }
+        let list_container_filters: HashMap<String, Vec<String>> =
+            HashMap::from([("label".to_string(), Vec::from([label]))]);
+
+        let container_result = self
+            .docker
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                filters: Some(list_container_filters),
+                ..Default::default()
+            }))
+            .await;
+        match container_result {
+            Ok(containers) => containers
+                .into_iter()
+                .map(|docker_container| {
+                    let container_name: Option<String> = docker_container
+                        .names
+                        .and_then(|names| names.into_iter().next());
+                    OrchestratorContainer {
+                        id: docker_container.id.unwrap_or_default(),
+                        name: DockerOrchestrator::normalize_name(container_name),
+                        state: docker_container
+                            .state
+                            .map(|state| state.to_string())
+                            .unwrap_or_default(),
+                        envs: HashMap::new(),
+                        labels: docker_container.labels.unwrap_or_default(),
+                        restart_count: 0, // Not available in list, will be updated by get()
+                        started_at: None, // Not available in list, will be updated by get()
+                    }
+                })
+                .collect(),
+            Err(err) => {
+                error!(error = err.to_string(), "Error fetching containers");
+                Vec::new()
+            }
         }
     }
 
@@ -321,53 +373,11 @@ impl Orchestrator for DockerOrchestrator {
 
     async fn list(&self) -> Vec<OrchestratorContainer> {
         let settings = crate::settings();
-        let manager_label = format!("opencti-manager={}", settings.manager.id.clone());
-        if let Some(compat) = self.podman_api() {
-            return match compat.list_containers(&manager_label).await {
-                Ok(containers) => containers.into_iter().map(container_from_summary).collect(),
-                Err(err) => {
-                    error!(error = err, "Error fetching containers");
-                    Vec::new()
-                }
-            };
+        let mut containers = Vec::new();
+        for manager_label in manager_label_filters(&settings.manager.id) {
+            containers.extend(self.list_by_label(manager_label).await);
         }
-        let list_container_filters: HashMap<String, Vec<String>> =
-            HashMap::from([("label".to_string(), Vec::from([manager_label]))]);
-
-        let container_result = self
-            .docker
-            .list_containers(Some(ListContainersOptions {
-                all: true,
-                filters: Some(list_container_filters),
-                ..Default::default()
-            }))
-            .await;
-        match container_result {
-            Ok(containers) => containers
-                .into_iter()
-                .map(|docker_container| {
-                    let container_name: Option<String> = docker_container
-                        .names
-                        .and_then(|names| names.into_iter().next());
-                    OrchestratorContainer {
-                        id: docker_container.id.unwrap_or_default(),
-                        name: DockerOrchestrator::normalize_name(container_name),
-                        state: docker_container
-                            .state
-                            .map(|state| state.to_string())
-                            .unwrap_or_default(),
-                        envs: HashMap::new(),
-                        labels: docker_container.labels.unwrap_or_default(),
-                        restart_count: 0, // Not available in list, will be updated by get()
-                        started_at: None, // Not available in list, will be updated by get()
-                    }
-                })
-                .collect(),
-            Err(err) => {
-                error!(error = err.to_string(), "Error fetching containers");
-                Vec::new()
-            }
-        }
+        dedup_containers(containers)
     }
 
     async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
@@ -568,8 +578,8 @@ mod tests {
         assert_eq!(container.state, "exited");
         assert_eq!(container.restart_count, 4);
         assert_eq!(container.started_at.as_deref(), Some("2026-10-21T10:00:00Z"));
-        assert_eq!(container.extract_opencti_hash(), "h1");
-        assert_eq!(container.extract_opencti_id(), "A");
+        assert_eq!(container.extract_config_hash(), "h1");
+        assert_eq!(container.extract_workload_id(), "A");
     }
 
     #[test]
@@ -592,7 +602,7 @@ mod tests {
         let container = container_from_summary(summary);
         assert_eq!(container.name, "connector-b");
         assert_eq!(container.state, "exited");
-        assert_eq!(container.extract_opencti_id(), "B");
+        assert_eq!(container.extract_workload_id(), "B");
     }
 
     fn proxy_ca_bind(engine: ContainerEngine) -> Vec<String> {

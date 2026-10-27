@@ -203,22 +203,35 @@ async fn connector_lifecycle_with_private_registry_credentials() {
         .await
         .expect("connector deployed");
     assert!(deployed.is_managed());
-    assert_eq!(deployed.extract_opencti_id(), connector.id);
-    assert_eq!(deployed.extract_opencti_hash(), "hash-1");
+    assert_eq!(deployed.extract_workload_id(), connector.id);
+    assert_eq!(deployed.extract_config_hash(), "hash-1");
     assert_eq!(
         deployed.envs.get("XTM_IT_VALUE").map(String::as_str),
         Some("a=b")
     );
-    assert_eq!(
-        deployed.labels.get("opencti-platform").map(String::as_str),
-        Some("opencti")
-    );
+    for platform_label in ["xtm-platform", "opencti-platform"] {
+        assert_eq!(
+            deployed.labels.get(platform_label).map(String::as_str),
+            Some("opencti")
+        );
+    }
+    for hash_env in ["XTM_CONFIG_HASH", "OPENCTI_CONFIG_HASH"] {
+        assert_eq!(deployed.envs.get(hash_env).map(String::as_str), Some("hash-1"));
+    }
 
     let running = wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
     assert!(running.started_at.is_some());
     let containers = orchestrator.list().await;
     assert_eq!(
-        listed(&containers, &connector).extract_opencti_id(),
+        containers
+            .iter()
+            .filter(|container| container.name == connector.container_name())
+            .count(),
+        1,
+        "a workload carrying the current and legacy manager labels is listed once"
+    );
+    assert_eq!(
+        listed(&containers, &connector).extract_workload_id(),
         connector.id
     );
     wait_for_logs(&orchestrator, &running, &connector).await;
@@ -241,7 +254,7 @@ async fn connector_lifecycle_with_private_registry_credentials() {
         .await
         .expect("connector refreshed");
     assert_ne!(refreshed.id, running.id);
-    assert_eq!(refreshed.extract_opencti_hash(), "hash-2");
+    assert_eq!(refreshed.extract_config_hash(), "hash-2");
     let refreshed = wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
 
     orchestrator.remove(&refreshed).await;
