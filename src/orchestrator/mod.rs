@@ -87,11 +87,15 @@ impl OrchestratorContainer {
         self.workload_id().unwrap().clone()
     }
 
-    /// Configuration hash env, falling back to the legacy key.
+    /// Configuration hash env, read from the legacy key first. Both keys are
+    /// written with the same value, but a composer rolled back to an older
+    /// version only updates the legacy one when it refreshes a workload (on
+    /// Kubernetes, its merge patch leaves the current annotation untouched):
+    /// the legacy value is the up-to-date one as long as it is written.
     pub fn extract_config_hash(&self) -> &String {
         self.envs
-            .get(ENV_CONFIG_HASH)
-            .or_else(|| self.envs.get(LEGACY_ENV_CONFIG_HASH))
+            .get(LEGACY_ENV_CONFIG_HASH)
+            .or_else(|| self.envs.get(ENV_CONFIG_HASH))
             .unwrap()
     }
 
@@ -294,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn accessors_prefer_current_keys_over_legacy_ones() {
+    fn accessors_prefer_current_labels_over_legacy_ones() {
         let container = container_with(
             &[
                 (LABEL_WORKLOAD_ID, "new"),
@@ -302,11 +306,20 @@ mod tests {
                 (LABEL_PLATFORM, "openaev"),
                 (LEGACY_LABEL_PLATFORM, "opencti"),
             ],
-            &[(ENV_CONFIG_HASH, "new-hash"), (LEGACY_ENV_CONFIG_HASH, "old-hash")],
+            &[],
         );
         assert_eq!(container.extract_workload_id(), "new");
         assert_eq!(container.platform().map(String::as_str), Some("openaev"));
-        assert_eq!(container.extract_config_hash(), "new-hash");
+    }
+
+    /// A composer rolled back to an older version only updates the legacy hash.
+    #[test]
+    fn config_hash_prefers_the_legacy_key() {
+        let container = container_with(
+            &[],
+            &[(ENV_CONFIG_HASH, "stale-hash"), (LEGACY_ENV_CONFIG_HASH, "refreshed-hash")],
+        );
+        assert_eq!(container.extract_config_hash(), "refreshed-hash");
     }
 
     #[test]

@@ -988,6 +988,22 @@ mod tests {
         assert!(removed.is_empty(), "nothing should be removed: {removed:?}");
     }
 
+    /// After a rollback, a composer refreshing a workload with an older version
+    /// only updates its legacy hash: the stale current one must not hide a
+    /// configuration change once the composer is upgraded again.
+    #[tokio::test]
+    async fn orchestrate_compares_the_legacy_hash_updated_by_an_older_composer() {
+        let mut refreshed_by_older = managed_container("A", "opencti");
+        refreshed_by_older
+            .envs
+            .insert("OPENCTI_CONFIG_HASH".to_string(), "older-composer-hash".to_string());
+
+        let (actions, removed) = run_cycle(vec![refreshed_by_older], vec![connector("A")]).await;
+
+        assert_eq!(actions, vec!["refresh:A"]);
+        assert!(removed.is_empty(), "nothing should be removed: {removed:?}");
+    }
+
     #[tokio::test]
     async fn orchestrate_detects_name_collision_with_current_labels() {
         let mut orphan = current_container("OTHER", "opencti");
