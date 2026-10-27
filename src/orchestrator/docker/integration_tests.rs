@@ -8,7 +8,7 @@
 //! - `XTM_IT_IMAGE`: image of that registry printing [`LOG_MARKER`], then running until stopped
 
 use super::{ContainerEngine, DockerOrchestrator};
-use crate::api::{ApiWorkload, ApiContractConfig, ConnectorStatus};
+use crate::api::{ApiWorkload, ApiContractConfig, WorkloadStatus};
 use crate::config::settings::{Daemon, Docker as DockerOptions, Registry};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::podman::{self, PodmanMode};
@@ -109,7 +109,7 @@ async fn remove_leftover(orchestrator: &DockerOrchestrator, connector: &ApiWorkl
 async fn wait_for_status(
     orchestrator: &DockerOrchestrator,
     connector: &ApiWorkload,
-    expected: ConnectorStatus,
+    expected: WorkloadStatus,
 ) -> OrchestratorContainer {
     let deadline = Instant::now() + WAIT_TIMEOUT;
     loop {
@@ -219,7 +219,7 @@ async fn connector_lifecycle_with_private_registry_credentials() {
         assert_eq!(deployed.envs.get(hash_env).map(String::as_str), Some("hash-1"));
     }
 
-    let running = wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
+    let running = wait_for_status(&orchestrator, &connector, WorkloadStatus::Started).await;
     assert!(running.started_at.is_some());
     let containers = orchestrator.list().await;
     assert_eq!(
@@ -237,16 +237,16 @@ async fn connector_lifecycle_with_private_registry_credentials() {
     wait_for_logs(&orchestrator, &running, &connector).await;
 
     orchestrator.stop(&running, &connector).await;
-    let stopped = wait_for_status(&orchestrator, &connector, ConnectorStatus::Stopped).await;
+    let stopped = wait_for_status(&orchestrator, &connector, WorkloadStatus::Stopped).await;
     let containers = orchestrator.list().await;
     assert_eq!(
         orchestrator.state_converter(listed(&containers, &connector)),
-        ConnectorStatus::Stopped
+        WorkloadStatus::Stopped
     );
     assert!(orchestrator.logs(&stopped, &connector).await.is_some());
 
     orchestrator.start(&stopped, &connector).await;
-    wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
+    wait_for_status(&orchestrator, &connector, WorkloadStatus::Started).await;
 
     connector.contract_hash = "hash-2".to_string();
     let refreshed = orchestrator
@@ -255,7 +255,7 @@ async fn connector_lifecycle_with_private_registry_credentials() {
         .expect("connector refreshed");
     assert_ne!(refreshed.id, running.id);
     assert_eq!(refreshed.extract_config_hash(), "hash-2");
-    let refreshed = wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
+    let refreshed = wait_for_status(&orchestrator, &connector, WorkloadStatus::Started).await;
 
     orchestrator.remove(&refreshed).await;
     assert!(orchestrator.get(&connector).await.is_none());
@@ -337,7 +337,7 @@ async fn delegated_registry_authentication_to_the_podman_host() {
         .deploy(&connector)
         .await
         .expect("connector deployed");
-    let running = wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
+    let running = wait_for_status(&orchestrator, &connector, WorkloadStatus::Started).await;
     wait_for_logs(&orchestrator, &running, &connector).await;
 
     orchestrator.remove(&running).await;

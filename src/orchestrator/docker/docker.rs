@@ -1,4 +1,4 @@
-use crate::api::{ApiWorkload, ConnectorStatus};
+use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::config::settings::{Daemon, Docker as DockerOptions, Registry};
 use crate::orchestrator::docker::compat::{self, CompatApi};
 use crate::orchestrator::docker::{ContainerEngine, DockerOrchestrator};
@@ -528,10 +528,10 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
+    fn state_converter(&self, container: &OrchestratorContainer) -> WorkloadStatus {
         match container.state.as_str() {
-            "running" => ConnectorStatus::Started,
-            _ => ConnectorStatus::Stopped,
+            "running" => WorkloadStatus::Started,
+            _ => WorkloadStatus::Stopped,
         }
     }
 }

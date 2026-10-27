@@ -1,4 +1,4 @@
-use crate::api::{ApiWorkload, ComposerApi, ConnectorStatus, RequestedStatus};
+use crate::api::{ApiWorkload, ComposerApi, WorkloadStatus, RequestedStatus};
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -77,7 +77,7 @@ async fn orchestrate_missing(
     match deploy_action {
         // Update the connector status
         Some(_) => {
-            api.patch_status(id, ConnectorStatus::Stopped).await;
+            api.patch_status(id, WorkloadStatus::Stopped).await;
         }
         None => {
             warn!(id = id, "Deployment canceled");
@@ -96,7 +96,7 @@ async fn orchestrate_existing(
     // Connector is provisioned
     let connector_id = connector.id.clone();
     let current_status_fetch = connector.current_status.clone().unwrap_or("stopped".into()); // Default current to created
-    let connector_status = ConnectorStatus::from_str(current_status_fetch.as_str()).unwrap();
+    let connector_status = WorkloadStatus::from_str(current_status_fetch.as_str()).unwrap();
     let requested_status_fetch = connector.requested_status.clone();
     let container_status = orchestrator.state_converter(&container);
     // Check for reboot loop and send health metrics
@@ -108,7 +108,7 @@ async fn orchestrate_existing(
             "Reboot loop detected"
         );
         // For now, we still report it as Started but with a warning log
-        // In the future, we could add a new status like ConnectorStatus::Critical
+        // In the future, we could add a new status like WorkloadStatus::Critical
         container_status
     } else {
         container_status
@@ -119,15 +119,15 @@ async fn orchestrate_existing(
     
     // Detect if connector just started
     let just_started = container_status_not_aligned && 
-                       final_status == ConnectorStatus::Started && 
-                       connector_status == ConnectorStatus::Stopped;
+                       final_status == WorkloadStatus::Started && 
+                       connector_status == WorkloadStatus::Stopped;
     
     // Send health metrics if:
     // - Connector just started (immediate reporting)
     // - OR connector is running and 30 seconds have elapsed
     let now = Instant::now();
     let should_send_health = just_started || 
-        (final_status == ConnectorStatus::Started && 
+        (final_status == WorkloadStatus::Started && 
          now.duration_since(health_tick.clone()) >= Duration::from_secs(30));
     
     if should_send_health {
@@ -141,7 +141,7 @@ async fn orchestrate_existing(
             ).await;
         }
         // Reset timer only for running connectors
-        if final_status == ConnectorStatus::Started {
+        if final_status == WorkloadStatus::Started {
             *health_tick = now;
         }
     }
@@ -167,11 +167,11 @@ async fn orchestrate_existing(
     // Align existing and requested status
     let requested_status = RequestedStatus::from_str(requested_status_fetch.as_str()).unwrap();
     match (requested_status, container_status) {
-        (RequestedStatus::Stopping, ConnectorStatus::Started) => {
+        (RequestedStatus::Stopping, WorkloadStatus::Started) => {
             info!(id = connector_id, "Stopping");
             orchestrator.stop(&container, connector).await;
         }
-        (RequestedStatus::Starting, ConnectorStatus::Stopped) => {
+        (RequestedStatus::Starting, WorkloadStatus::Stopped) => {
             info!(id = connector_id, "Starting");
             orchestrator.start(&container, connector).await;
         }
@@ -421,7 +421,7 @@ mod tests {
             Some(self.connectors.clone())
         }
 
-        async fn patch_status(&self, _id: String, _status: ConnectorStatus) -> Option<ApiWorkload> {
+        async fn patch_status(&self, _id: String, _status: WorkloadStatus) -> Option<ApiWorkload> {
             None
         }
 
@@ -523,11 +523,11 @@ mod tests {
             Some(vec!["connector log line".to_string()])
         }
 
-        fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
+        fn state_converter(&self, container: &OrchestratorContainer) -> WorkloadStatus {
             if container.state == "running" {
-                ConnectorStatus::Started
+                WorkloadStatus::Started
             } else {
-                ConnectorStatus::Stopped
+                WorkloadStatus::Stopped
             }
         }
     }
