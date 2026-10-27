@@ -113,12 +113,12 @@ impl OrchestratorContainer {
 }
 
 /// Labels of a deployed workload, under both the current and the legacy keys.
-pub fn build_labels(manager_id: &str, connector: &ApiWorkload) -> HashMap<String, String> {
+pub fn build_labels(manager_id: &str, workload: &ApiWorkload) -> HashMap<String, String> {
     let mut labels: HashMap<String, String> = HashMap::new();
     for (key, legacy_key, value) in [
         (LABEL_MANAGER, LEGACY_LABEL_MANAGER, manager_id),
-        (LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID, connector.id.as_str()),
-        (LABEL_PLATFORM, LEGACY_LABEL_PLATFORM, connector.platform.as_str()),
+        (LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID, workload.id.as_str()),
+        (LABEL_PLATFORM, LEGACY_LABEL_PLATFORM, workload.platform.as_str()),
     ] {
         labels.insert(key.into(), value.to_string());
         labels.insert(legacy_key.into(), value.to_string());
@@ -135,8 +135,8 @@ pub fn config_hash_entries(hash: &str) -> [(String, String); 2] {
     ]
 }
 
-pub fn ensure_proxy_ca_file(connector: &ApiWorkload) -> Option<String> {
-    let cert_content = connector.proxy_ca_bundle()?;
+pub fn ensure_proxy_ca_file(workload: &ApiWorkload) -> Option<String> {
+    let cert_content = workload.proxy_ca_bundle()?;
 
     let base_dir: PathBuf = std::env::temp_dir().join("xtm-composer-proxy-ca");
     if let Err(err) = fs::create_dir_all(&base_dir) {
@@ -148,14 +148,14 @@ pub fn ensure_proxy_ca_file(connector: &ApiWorkload) -> Option<String> {
         return None;
     }
 
-    let normalized_id: String = connector
+    let normalized_id: String = workload
         .id
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let target_path = base_dir.join(format!(
         "{}-{}-proxy-ca.crt",
-        connector.platform, normalized_id
+        workload.platform, normalized_id
     ));
     if let Err(err) = fs::write(&target_path, &cert_content) {
         error!(
@@ -171,28 +171,28 @@ pub fn ensure_proxy_ca_file(connector: &ApiWorkload) -> Option<String> {
 
 #[async_trait]
 pub trait Orchestrator {
-    fn labels(&self, connector: &ApiWorkload) -> HashMap<String, String> {
-        build_labels(&crate::settings().manager.id, connector)
+    fn labels(&self, workload: &ApiWorkload) -> HashMap<String, String> {
+        build_labels(&crate::settings().manager.id, workload)
     }
 
-    async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer>;
+    async fn get(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer>;
 
     async fn list(&self) -> Vec<OrchestratorContainer>;
 
-    async fn start(&self, container: &OrchestratorContainer, connector: &ApiWorkload) -> ();
+    async fn start(&self, container: &OrchestratorContainer, workload: &ApiWorkload) -> ();
 
-    async fn stop(&self, container: &OrchestratorContainer, connector: &ApiWorkload) -> ();
+    async fn stop(&self, container: &OrchestratorContainer, workload: &ApiWorkload) -> ();
 
     async fn remove(&self, container: &OrchestratorContainer) -> ();
 
-    async fn refresh(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer>;
+    async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer>;
 
-    async fn deploy(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer>;
+    async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer>;
 
     async fn logs(
         &self,
         container: &OrchestratorContainer,
-        connector: &ApiWorkload,
+        workload: &ApiWorkload,
     ) -> Option<Vec<String>>;
 
     fn state_converter(&self, container: &OrchestratorContainer) -> WorkloadStatus;
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn labels_include_platform_discriminator() {
-        let connector = ApiWorkload {
+        let workload = ApiWorkload {
             id: "connector-1".to_string(),
             platform: "opencti".to_string(),
             name: String::new(),
@@ -217,10 +217,10 @@ mod tests {
             undecryptable_keys: vec![],
         };
 
-        let labels = build_labels("test-manager", &connector);
+        let labels = build_labels("test-manager", &workload);
 
-        assert_eq!(labels.get(LABEL_WORKLOAD_ID), Some(&connector.id));
-        assert_eq!(labels.get(LABEL_PLATFORM), Some(&connector.platform));
+        assert_eq!(labels.get(LABEL_WORKLOAD_ID), Some(&workload.id));
+        assert_eq!(labels.get(LABEL_PLATFORM), Some(&workload.platform));
         assert_eq!(labels.get(LABEL_MANAGER), Some(&"test-manager".to_string()));
     }
 
@@ -228,7 +228,7 @@ mod tests {
     /// recognizing the workloads after a rollback.
     #[test]
     fn labels_keep_the_legacy_keys() {
-        let connector = ApiWorkload {
+        let workload = ApiWorkload {
             id: "connector-1".to_string(),
             platform: "openaev".to_string(),
             name: String::new(),
@@ -240,11 +240,11 @@ mod tests {
             undecryptable_keys: vec![],
         };
 
-        let labels = build_labels("test-manager", &connector);
+        let labels = build_labels("test-manager", &workload);
 
         assert_eq!(labels.len(), 6);
-        assert_eq!(labels.get("opencti-connector-id"), Some(&connector.id));
-        assert_eq!(labels.get("opencti-platform"), Some(&connector.platform));
+        assert_eq!(labels.get("opencti-connector-id"), Some(&workload.id));
+        assert_eq!(labels.get("opencti-platform"), Some(&workload.platform));
         assert_eq!(labels.get("opencti-manager"), Some(&"test-manager".to_string()));
     }
 

@@ -18,12 +18,12 @@ use tracing::{error, info, warn};
 ///
 /// Returns the mismatched connector-id found on the container (or `<unlabeled>`)
 /// when a collision is present, or `None` when the ids match.
-fn detect_connector_id_mismatch(
+fn detect_workload_id_mismatch(
     container: &OrchestratorContainer,
-    connector_id: &str,
+    workload_id: &str,
 ) -> Option<String> {
     match container.workload_id() {
-        Some(found) if found != connector_id => Some(found.clone()),
+        Some(found) if found != workload_id => Some(found.clone()),
         Some(_) => None,
         None => Some("<unlabeled>".to_string()),
     }
@@ -33,9 +33,9 @@ fn detect_connector_id_mismatch(
 /// Each connector has its own schedule: a single shared timer would let only the
 /// first connector of each cycle report its logs. A connector seen for the first
 /// time reports after one full schedule, as at startup.
-fn logs_due(log_ticks: &mut HashMap<String, Instant>, connector_id: &str, schedule: Duration) -> bool {
+fn logs_due(log_ticks: &mut HashMap<String, Instant>, workload_id: &str, schedule: Duration) -> bool {
     let now = Instant::now();
-    let last = log_ticks.entry(connector_id.to_string()).or_insert(now);
+    let last = log_ticks.entry(workload_id.to_string()).or_insert(now);
     if now.duration_since(*last) >= schedule {
         *last = now;
         true
@@ -48,14 +48,14 @@ fn logs_due(log_ticks: &mut HashMap<String, Instant>, connector_id: &str, schedu
 /// Such a configuration must never be deployed: the undecryptable secrets
 /// would be written as blanks, breaking connectors that were working fine.
 /// The existing deployment (if any) is left untouched until decryption works.
-fn refuse_incomplete_configuration(connector: &ApiWorkload, action: &str) -> bool {
-    if connector.undecryptable_keys.is_empty() {
+fn refuse_incomplete_configuration(workload: &ApiWorkload, action: &str) -> bool {
+    if workload.undecryptable_keys.is_empty() {
         return false;
     }
     error!(
-        id = connector.id,
-        name = connector.name,
-        keys = ?connector.undecryptable_keys,
+        id = workload.id,
+        name = workload.name,
+        keys = ?workload.undecryptable_keys,
         "Refusing to {} connector: some encrypted configuration values cannot be decrypted (check manager.credentials_key matches the key registered in the platform)",
         action
     );
@@ -65,15 +65,15 @@ fn refuse_incomplete_configuration(connector: &ApiWorkload, action: &str) -> boo
 async fn orchestrate_missing(
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
-    connector: &ApiWorkload,
+    workload: &ApiWorkload,
 ) {
     // Connector is not provisioned, deploy the images
-    if refuse_incomplete_configuration(connector, "deploy") {
+    if refuse_incomplete_configuration(workload, "deploy") {
         return;
     }
-    let id = connector.id.clone();
+    let id = workload.id.clone();
     info!(id = id, "Deploying the container");
-    let deploy_action = orchestrator.deploy(connector).await;
+    let deploy_action = orchestrator.deploy(workload).await;
     match deploy_action {
         // Update the connector status
         Some(_) => {
@@ -90,20 +90,20 @@ async fn orchestrate_existing(
     health_tick: &mut Instant,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
-    connector: &ApiWorkload,
+    workload: &ApiWorkload,
     container: OrchestratorContainer,
 ) {
     // Connector is provisioned
-    let connector_id = connector.id.clone();
-    let current_status_fetch = connector.current_status.clone().unwrap_or("stopped".into()); // Default current to created
-    let connector_status = WorkloadStatus::from_str(current_status_fetch.as_str()).unwrap();
-    let requested_status_fetch = connector.requested_status.clone();
+    let workload_id = workload.id.clone();
+    let current_status_fetch = workload.current_status.clone().unwrap_or("stopped".into()); // Default current to created
+    let workload_status = WorkloadStatus::from_str(current_status_fetch.as_str()).unwrap();
+    let requested_status_fetch = workload.requested_status.clone();
     let container_status = orchestrator.state_converter(&container);
     // Check for reboot loop and send health metrics
     let is_in_reboot_loop = container.is_in_reboot_loop();
     let final_status = if is_in_reboot_loop {
         warn!(
-            id = connector_id,
+            id = workload_id,
             restart_count = container.restart_count,
             "Reboot loop detected"
         );
@@ -115,12 +115,12 @@ async fn orchestrate_existing(
     };
     
     // Update the connector status if needed
-    let container_status_not_aligned = final_status != connector_status;
+    let container_status_not_aligned = final_status != workload_status;
     
     // Detect if connector just started
     let just_started = container_status_not_aligned && 
                        final_status == WorkloadStatus::Started && 
-                       connector_status == WorkloadStatus::Stopped;
+                       workload_status == WorkloadStatus::Stopped;
     
     // Send health metrics if:
     // - Connector just started (immediate reporting)
@@ -132,9 +132,9 @@ async fn orchestrate_existing(
     
     if should_send_health {
         if let Some(started_at) = &container.started_at {
-            info!(id = connector_id, "Reporting health metrics");
+            info!(id = workload_id, "Reporting health metrics");
             api.patch_health(
-                connector_id.clone(),
+                workload_id.clone(),
                 container.restart_count,
                 started_at.clone(),
                 is_in_reboot_loop,
@@ -146,46 +146,46 @@ async fn orchestrate_existing(
         }
     }
     if container_status_not_aligned {
-        api.patch_status(connector.id.clone(), final_status)
+        api.patch_status(workload.id.clone(), final_status)
             .await;
-        info!(id = connector_id, "Patch status");
+        info!(id = workload_id, "Patch status");
     }
     // In case of platform upgrade, we need to align all deployed connectors
-    let requested_connector_hash = connector.contract_hash.clone();
+    let requested_workload_hash = workload.contract_hash.clone();
     let current_container_hash = container.extract_config_hash();
-    if !requested_connector_hash.eq(current_container_hash)
-        && !refuse_incomplete_configuration(connector, "refresh")
+    if !requested_workload_hash.eq(current_container_hash)
+        && !refuse_incomplete_configuration(workload, "refresh")
     {
         // Versions are not aligned
         info!(
-            id = connector_id,
-            hash = requested_connector_hash,
+            id = workload_id,
+            hash = requested_workload_hash,
             "Refreshing"
         );
-        orchestrator.refresh(connector).await;
+        orchestrator.refresh(workload).await;
     }
     // Align existing and requested status
     let requested_status = RequestedStatus::from_str(requested_status_fetch.as_str()).unwrap();
     match (requested_status, container_status) {
         (RequestedStatus::Stopping, WorkloadStatus::Started) => {
-            info!(id = connector_id, "Stopping");
-            orchestrator.stop(&container, connector).await;
+            info!(id = workload_id, "Stopping");
+            orchestrator.stop(&container, workload).await;
         }
         (RequestedStatus::Starting, WorkloadStatus::Stopped) => {
-            info!(id = connector_id, "Starting");
-            orchestrator.start(&container, connector).await;
+            info!(id = workload_id, "Starting");
+            orchestrator.start(&container, workload).await;
         }
         _ => {
-            info!(id = connector_id, "Nothing to execute");
+            info!(id = workload_id, "Nothing to execute");
         }
     }
     // Get latest logs and update the platform on the logs schedule
-    if logs_due(log_ticks, &connector_id, api.post_logs_schedule()) {
-        let connector_logs = orchestrator.logs(&container, connector).await;
-        match connector_logs {
+    if logs_due(log_ticks, &workload_id, api.post_logs_schedule()) {
+        let workload_logs = orchestrator.logs(&container, workload).await;
+        match workload_logs {
             Some(logs) => {
-                info!(id = connector_id, "Reporting logs");
-                api.patch_logs(connector_id, logs).await;
+                info!(id = workload_id, "Reporting logs");
+                api.patch_logs(workload_id, logs).await;
             }
             None => {
                 // No logs
@@ -201,14 +201,14 @@ pub async fn orchestrate(
     api: &Box<dyn ComposerApi + Send + Sync>,
 ) {
     // Get the current definition from OpenCTI
-    let connectors_response = api.workloads().await;
-    if connectors_response.is_some() {
+    let workloads_response = api.workloads().await;
+    if workloads_response.is_some() {
         // First round trip to instantiate and control if needed
-        let connectors = connectors_response.unwrap();
+        let workloads = workloads_response.unwrap();
         // Iter on each definition and check alignment between the status and the container
-        for connector in &connectors {
+        for workload in &workloads {
             // Get current containers in the orchestrator
-            let container_get = orchestrator.get(connector).await;
+            let container_get = orchestrator.get(workload).await;
             match container_get {
                 Some(container) => {
                     // Surface connector name collisions clearly: if the container we
@@ -222,37 +222,37 @@ pub async fn orchestrate(
                     // deployed on the next cycle; otherwise (another manager's, or
                     // unlabeled, e.g. deployed by hand) it is left untouched.
                     if let Some(found_id) =
-                        detect_connector_id_mismatch(&container, &connector.id)
+                        detect_workload_id_mismatch(&container, &workload.id)
                     {
                         error!(
-                            name = connector.name,
-                            expected_id = connector.id,
+                            name = workload.name,
+                            expected_id = workload.id,
                             found_id = found_id,
                             "Connector name collision detected: an existing deployment with this name belongs to a different connector id (duplicate connector name?), skipping"
                         );
                         // The connector is stuck until the clash is resolved: tell the
                         // platform, not only the manager logs.
-                        if logs_due(log_ticks, &connector.id, api.post_logs_schedule()) {
+                        if logs_due(log_ticks, &workload.id, api.post_logs_schedule()) {
                             let message = format!(
                                 "[XTM Composer] Connector not deployed: a deployment named \"{}\" already exists and belongs to another owner ({}). Rename this connector or remove that deployment.",
-                                connector.container_name(),
+                                workload.container_name(),
                                 found_id
                             );
-                            api.patch_logs(connector.id.clone(), vec![message]).await;
+                            api.patch_logs(workload.id.clone(), vec![message]).await;
                         }
                         continue;
                     }
-                    orchestrate_existing(log_ticks, health_tick, orchestrator, api, connector, container).await
+                    orchestrate_existing(log_ticks, health_tick, orchestrator, api, workload, container).await
                 }
-                None => orchestrate_missing(orchestrator, api, connector).await,
+                None => orchestrate_missing(orchestrator, api, workload).await,
             }
         }
         // Iter on each existing container to clean the containers
-        let connectors_by_id: HashMap<String, ApiWorkload> = connectors
+        let workloads_by_id: HashMap<String, ApiWorkload> = workloads
             .iter()
             .map(|n| (n.id.clone(), n.clone()))
             .collect();
-        log_ticks.retain(|id, _| connectors_by_id.contains_key(id));
+        log_ticks.retain(|id, _| workloads_by_id.contains_key(id));
         let platform = api.platform();
         let existing_containers = orchestrator.list().await;
         for container in existing_containers {
@@ -261,18 +261,18 @@ pub async fn orchestrate(
             if container_platform.is_some() && container_platform != Some(platform) {
                 continue;
             }
-            let connector_id = container.extract_workload_id();
-            match connectors_by_id.get(&connector_id) {
+            let workload_id = container.extract_workload_id();
+            match workloads_by_id.get(&workload_id) {
                 None => {
                     // Connector no longer exists — remove the orphaned container
                     orchestrator.remove(&container).await;
                 }
-                Some(connector) => {
+                Some(workload) => {
                     // Connector still exists but the deployment name may be stale
                     // after a connector instance name change while the connector ID
                     // remains the same. Remove the old deployment so the next
                     // orchestration cycle deploys with the correct name.
-                    let expected_name = connector.container_name();
+                    let expected_name = workload.container_name();
                     if container.name != expected_name {
                         orchestrator.remove(&container).await;
                     }
@@ -293,7 +293,7 @@ mod tests {
     };
     use std::sync::{Arc, Mutex};
 
-    fn connector(id: &str) -> ApiWorkload {
+    fn workload(id: &str) -> ApiWorkload {
         ApiWorkload {
             id: id.to_string(),
             platform: "opencti".to_string(),
@@ -309,7 +309,7 @@ mod tests {
 
     /// Container as deployed by this version: current and legacy keys.
     fn managed_container(id: &str, platform: &str) -> OrchestratorContainer {
-        let mut owner = connector(id);
+        let mut owner = workload(id);
         owner.platform = platform.to_string();
         let labels = build_labels("shared-manager", &owner);
         let envs: HashMap<String, String> =
@@ -378,14 +378,14 @@ mod tests {
     }
 
     struct FakeApi {
-        connectors: Vec<ApiWorkload>,
+        workloads: Vec<ApiWorkload>,
         pushed_logs: Arc<Mutex<Vec<(String, Vec<String>)>>>,
     }
 
     impl FakeApi {
-        fn new(connectors: Vec<ApiWorkload>) -> Self {
+        fn new(workloads: Vec<ApiWorkload>) -> Self {
             Self {
-                connectors,
+                workloads,
                 pushed_logs: Arc::new(Mutex::new(Vec::new())),
             }
         }
@@ -418,7 +418,7 @@ mod tests {
         }
 
         async fn workloads(&self) -> Option<Vec<ApiWorkload>> {
-            Some(self.connectors.clone())
+            Some(self.workloads.clone())
         }
 
         async fn patch_status(&self, _id: String, _status: WorkloadStatus) -> Option<ApiWorkload> {
@@ -459,22 +459,22 @@ mod tests {
             }
         }
 
-        fn record(&self, action: &str, connector: &ApiWorkload) {
+        fn record(&self, action: &str, workload: &ApiWorkload) {
             self.actions
                 .lock()
                 .expect("mutex should not be poisoned")
-                .push(format!("{action}:{}", connector.id));
+                .push(format!("{action}:{}", workload.id));
         }
     }
 
     #[async_trait::async_trait]
     impl Orchestrator for FakeOrchestrator {
-        async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
+        async fn get(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
             // Real orchestrators look containers up by name, which is what makes
             // name collisions possible.
             self.containers
                 .iter()
-                .find(|container| container.name == connector.container_name())
+                .find(|container| container.name == workload.container_name())
                 .cloned()
         }
 
@@ -490,12 +490,12 @@ mod tests {
                 .collect()
         }
 
-        async fn start(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
-            self.record("start", connector);
+        async fn start(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
+            self.record("start", workload);
         }
 
-        async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
-            self.record("stop", connector);
+        async fn stop(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
+            self.record("stop", workload);
         }
 
         async fn remove(&self, container: &OrchestratorContainer) -> () {
@@ -505,20 +505,20 @@ mod tests {
                 .push(container.extract_workload_id());
         }
 
-        async fn refresh(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
-            self.record("refresh", connector);
+        async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+            self.record("refresh", workload);
             None
         }
 
-        async fn deploy(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
-            self.record("deploy", connector);
+        async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+            self.record("deploy", workload);
             None
         }
 
         async fn logs(
             &self,
             _container: &OrchestratorContainer,
-            _connector: &ApiWorkload,
+            _workload: &ApiWorkload,
         ) -> Option<Vec<String>> {
             Some(vec!["connector log line".to_string()])
         }
@@ -533,7 +533,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_does_not_delete_other_platform_connectors_in_shared_mode() {
+    async fn cleanup_does_not_delete_other_platform_workloads_in_shared_mode() {
         let all_containers = vec![
             managed_container("A", "opencti"),
             managed_container("B", "opencti"),
@@ -546,7 +546,7 @@ mod tests {
         let orchestrator: Box<dyn Orchestrator + Send + Sync> =
             Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
         let api: Box<dyn ComposerApi + Send + Sync> =
-            Box::new(FakeApi::new(vec![connector("A"), connector("B"), connector("C")]));
+            Box::new(FakeApi::new(vec![workload("A"), workload("B"), workload("C")]));
 
         let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
@@ -577,7 +577,7 @@ mod tests {
         let orchestrator: Box<dyn Orchestrator + Send + Sync> =
             Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
         let api: Box<dyn ComposerApi + Send + Sync> =
-            Box::new(FakeApi::new(vec![connector("A"), connector("B"), connector("C")]));
+            Box::new(FakeApi::new(vec![workload("A"), workload("B"), workload("C")]));
 
         let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
@@ -602,7 +602,7 @@ mod tests {
         let orchestrator: Box<dyn Orchestrator + Send + Sync> =
             Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
         let api: Box<dyn ComposerApi + Send + Sync> =
-            Box::new(FakeApi::new(vec![connector("A")]));
+            Box::new(FakeApi::new(vec![workload("A")]));
 
         let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
@@ -617,7 +617,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_keeps_legacy_container_with_active_connector() {
+    async fn cleanup_keeps_legacy_container_with_active_workload() {
         let all_containers = vec![
             managed_container("A", "opencti"),
             legacy_container("B"),
@@ -627,7 +627,7 @@ mod tests {
         let orchestrator: Box<dyn Orchestrator + Send + Sync> =
             Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
         let api: Box<dyn ComposerApi + Send + Sync> =
-            Box::new(FakeApi::new(vec![connector("A"), connector("B")]));
+            Box::new(FakeApi::new(vec![workload("A"), workload("B")]));
 
         let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
@@ -642,7 +642,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_removes_stale_named_container_after_connector_rename() {
+    async fn cleanup_removes_stale_named_container_after_workload_rename() {
         // Simulates OpenAEV 2.4.0 scenario: connector ID stays the same but the
         // name changes (e.g. "connector-A" → "connector-a-0f2a85c1").
         // The old deployment should be removed as orphaned.
@@ -658,7 +658,7 @@ mod tests {
         let orchestrator: Box<dyn Orchestrator + Send + Sync> =
             Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
         let api: Box<dyn ComposerApi + Send + Sync> =
-            Box::new(FakeApi::new(vec![connector("A"), connector("B")]));
+            Box::new(FakeApi::new(vec![workload("A"), workload("B")]));
 
         let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
@@ -688,7 +688,7 @@ mod tests {
         let orchestrator: Box<dyn Orchestrator + Send + Sync> =
             Box::new(FakeOrchestrator::new(all_containers, Arc::clone(&removed_ids)));
         let api: Box<dyn ComposerApi + Send + Sync> =
-            Box::new(FakeApi::new(vec![connector("A"), connector("B")]));
+            Box::new(FakeApi::new(vec![workload("A"), workload("B")]));
 
         let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
@@ -706,13 +706,13 @@ mod tests {
     /// by the fake orchestrator.
     async fn run_cycle(
         containers: Vec<OrchestratorContainer>,
-        connectors: Vec<ApiWorkload>,
+        workloads: Vec<ApiWorkload>,
     ) -> (Vec<String>, Vec<String>) {
         let removed_ids = Arc::new(Mutex::new(Vec::new()));
         let orchestrator = FakeOrchestrator::new(containers, Arc::clone(&removed_ids));
         let actions = Arc::clone(&orchestrator.actions);
         let orchestrator: Box<dyn Orchestrator + Send + Sync> = Box::new(orchestrator);
-        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(FakeApi::new(connectors));
+        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(FakeApi::new(workloads));
 
         let mut log_ticks = HashMap::new();
         let mut health_tick = Instant::now();
@@ -724,16 +724,16 @@ mod tests {
         (actions, removed)
     }
 
-    fn starting_connector(id: &str) -> ApiWorkload {
-        let mut connector = connector(id);
-        connector.requested_status = "starting".to_string();
-        connector
+    fn starting_workload(id: &str) -> ApiWorkload {
+        let mut workload = workload(id);
+        workload.requested_status = "starting".to_string();
+        workload
     }
 
     /// Control case for the collision tests below: without a collision, the
     /// connector is reconciled (refreshed on hash change, started/stopped).
     #[tokio::test]
-    async fn orchestrate_reconciles_connector_without_collision() {
+    async fn orchestrate_reconciles_workload_without_collision() {
         let mut outdated = managed_container("A", "opencti");
         set_config_hash(&mut outdated, "old-hash");
         let mut running = managed_container("B", "opencti");
@@ -741,7 +741,7 @@ mod tests {
 
         let (actions, removed) = run_cycle(
             vec![outdated, running],
-            vec![starting_connector("A"), connector("B")],
+            vec![starting_workload("A"), workload("B")],
         )
         .await;
 
@@ -752,12 +752,12 @@ mod tests {
     /// Regression test for #162: a same-named deployment not managed by this
     /// manager (e.g. deployed the "old way") must be left completely untouched.
     #[tokio::test]
-    async fn orchestrate_skips_connector_on_name_collision_with_foreign_deployment() {
+    async fn orchestrate_skips_workload_on_name_collision_with_foreign_deployment() {
         let mut foreign = managed_container("OTHER", "opencti");
-        foreign.name = connector("A").container_name();
+        foreign.name = workload("A").container_name();
         remove_manager_labels(&mut foreign);
 
-        let (actions, removed) = run_cycle(vec![foreign], vec![starting_connector("A")]).await;
+        let (actions, removed) = run_cycle(vec![foreign], vec![starting_workload("A")]).await;
 
         assert!(actions.is_empty(), "colliding deployment must not be reconciled: {actions:?}");
         assert!(removed.is_empty(), "foreign deployment must not be removed: {removed:?}");
@@ -767,11 +767,11 @@ mod tests {
     /// connector of this manager is not reconciled for the new connector, but
     /// cleaned up as an orphan so the new connector deploys on the next cycle.
     #[tokio::test]
-    async fn orchestrate_skips_connector_on_name_collision_and_cleans_orphan() {
+    async fn orchestrate_skips_workload_on_name_collision_and_cleans_orphan() {
         let mut orphan = managed_container("OTHER", "opencti");
-        orphan.name = connector("A").container_name();
+        orphan.name = workload("A").container_name();
 
-        let (actions, removed) = run_cycle(vec![orphan], vec![starting_connector("A")]).await;
+        let (actions, removed) = run_cycle(vec![orphan], vec![starting_workload("A")]).await;
 
         assert!(actions.is_empty(), "colliding deployment must not be reconciled: {actions:?}");
         assert_eq!(removed, vec!["OTHER".to_string()]);
@@ -781,13 +781,13 @@ mod tests {
     /// deployed by hand) used to be reconciled, panicking on the missing config
     /// hash. It must be skipped and left untouched.
     #[tokio::test]
-    async fn orchestrate_skips_connector_on_name_collision_with_unlabeled_deployment() {
+    async fn orchestrate_skips_workload_on_name_collision_with_unlabeled_deployment() {
         let mut unlabeled = managed_container("OTHER", "opencti");
-        unlabeled.name = connector("A").container_name();
+        unlabeled.name = workload("A").container_name();
         unlabeled.labels.clear();
         unlabeled.envs.clear();
 
-        let (actions, removed) = run_cycle(vec![unlabeled], vec![starting_connector("A")]).await;
+        let (actions, removed) = run_cycle(vec![unlabeled], vec![starting_workload("A")]).await;
 
         assert!(actions.is_empty(), "unlabeled deployment must not be reconciled: {actions:?}");
         assert!(removed.is_empty(), "unlabeled deployment must not be removed: {removed:?}");
@@ -798,10 +798,10 @@ mod tests {
     /// logs pushed to the platform.
     async fn run_cycles_with_due_logs(
         containers: Vec<OrchestratorContainer>,
-        connectors: Vec<ApiWorkload>,
+        workloads: Vec<ApiWorkload>,
         cycles: usize,
     ) -> Vec<(String, Vec<String>)> {
-        let api = FakeApi::new(connectors.clone());
+        let api = FakeApi::new(workloads.clone());
         let pushed_logs = Arc::clone(&api.pushed_logs);
         let orchestrator: Box<dyn Orchestrator + Send + Sync> =
             Box::new(FakeOrchestrator::new(containers, Arc::new(Mutex::new(Vec::new()))));
@@ -810,7 +810,7 @@ mod tests {
         // FakeApi's logs schedule is 1h: pretend the last push was 2h ago.
         let overdue = Instant::now().checked_sub(Duration::from_secs(7200)).unwrap();
         let mut log_ticks: HashMap<String, Instant> =
-            connectors.iter().map(|c| (c.id.clone(), overdue)).collect();
+            workloads.iter().map(|c| (c.id.clone(), overdue)).collect();
         let mut health_tick = Instant::now();
         for _ in 0..cycles {
             orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
@@ -823,14 +823,14 @@ mod tests {
     /// Regression test: logs used to share a single timer, so only the first
     /// connector of each cycle ever had its logs pushed to the platform.
     #[tokio::test]
-    async fn logs_are_pushed_for_every_due_connector_once_per_schedule() {
+    async fn logs_are_pushed_for_every_due_workload_once_per_schedule() {
         let pushed = run_cycles_with_due_logs(
             vec![
                 managed_container("A", "opencti"),
                 managed_container("B", "opencti"),
                 managed_container("C", "opencti"),
             ],
-            vec![connector("A"), connector("B"), connector("C")],
+            vec![workload("A"), workload("B"), workload("C")],
             2,
         )
         .await;
@@ -844,10 +844,10 @@ mod tests {
     #[tokio::test]
     async fn collision_is_reported_to_the_platform_once_per_schedule() {
         let mut foreign = managed_container("OTHER", "opencti");
-        foreign.name = connector("A").container_name();
+        foreign.name = workload("A").container_name();
         remove_manager_labels(&mut foreign);
 
-        let pushed = run_cycles_with_due_logs(vec![foreign], vec![connector("A")], 2).await;
+        let pushed = run_cycles_with_due_logs(vec![foreign], vec![workload("A")], 2).await;
 
         assert_eq!(pushed.len(), 1, "one message per schedule, not every cycle: {pushed:?}");
         let (id, logs) = &pushed[0];
@@ -858,10 +858,10 @@ mod tests {
         );
     }
 
-    fn undecryptable_connector(id: &str) -> ApiWorkload {
-        let mut connector = connector(id);
-        connector.undecryptable_keys = vec!["OPENCTI_TOKEN".to_string()];
-        connector
+    fn undecryptable_workload(id: &str) -> ApiWorkload {
+        let mut workload = workload(id);
+        workload.undecryptable_keys = vec!["OPENCTI_TOKEN".to_string()];
+        workload
     }
 
     fn outdated_container(id: &str) -> OrchestratorContainer {
@@ -872,10 +872,10 @@ mod tests {
 
     /// Control case: a decryptable configuration change is applied.
     #[tokio::test]
-    async fn orchestrate_refreshes_and_deploys_decryptable_connectors() {
+    async fn orchestrate_refreshes_and_deploys_decryptable_workloads() {
         let (actions, removed) = run_cycle(
             vec![outdated_container("A")],
-            vec![connector("A"), connector("B")],
+            vec![workload("A"), workload("B")],
         )
         .await;
 
@@ -890,7 +890,7 @@ mod tests {
     async fn orchestrate_keeps_existing_deployment_when_secrets_cannot_be_decrypted() {
         let (actions, removed) = run_cycle(
             vec![outdated_container("A")],
-            vec![undecryptable_connector("A")],
+            vec![undecryptable_workload("A")],
         )
         .await;
 
@@ -902,7 +902,7 @@ mod tests {
     /// is not deployed with blank values.
     #[tokio::test]
     async fn orchestrate_does_not_deploy_when_secrets_cannot_be_decrypted() {
-        let (actions, _) = run_cycle(vec![], vec![undecryptable_connector("A")]).await;
+        let (actions, _) = run_cycle(vec![], vec![undecryptable_workload("A")]).await;
 
         assert!(actions.is_empty(), "connector must not be deployed: {actions:?}");
     }
@@ -910,11 +910,11 @@ mod tests {
     /// Start/stop reuse the existing deployment and its previous configuration,
     /// so they keep being honored while secrets cannot be decrypted.
     #[tokio::test]
-    async fn orchestrate_still_stops_connector_when_secrets_cannot_be_decrypted() {
+    async fn orchestrate_still_stops_workload_when_secrets_cannot_be_decrypted() {
         let mut running = outdated_container("A");
         running.state = "running".to_string();
 
-        let (actions, removed) = run_cycle(vec![running], vec![undecryptable_connector("A")]).await;
+        let (actions, removed) = run_cycle(vec![running], vec![undecryptable_workload("A")]).await;
 
         assert_eq!(actions, vec!["stop:A"]);
         assert!(removed.is_empty(), "deployment must not be removed: {removed:?}");
@@ -931,7 +931,7 @@ mod tests {
                 current_container("X", "openaev"),
                 current_container("Y", "openaev"),
             ],
-            vec![connector("A")],
+            vec![workload("A")],
         )
         .await;
 
@@ -949,7 +949,7 @@ mod tests {
                 current_container("D", "opencti"),
                 current_container("X", "openaev"),
             ],
-            vec![connector("A")],
+            vec![workload("A")],
         )
         .await;
 
@@ -965,7 +965,7 @@ mod tests {
         let up_to_date = current_container("B", "opencti");
 
         let (actions, removed) =
-            run_cycle(vec![outdated, up_to_date], vec![connector("A"), connector("B")]).await;
+            run_cycle(vec![outdated, up_to_date], vec![workload("A"), workload("B")]).await;
 
         assert_eq!(actions, vec!["refresh:A"]);
         assert!(removed.is_empty(), "nothing should be removed: {removed:?}");
@@ -982,7 +982,7 @@ mod tests {
         let up_to_date = legacy_container("B");
 
         let (actions, removed) =
-            run_cycle(vec![outdated, up_to_date], vec![connector("A"), connector("B")]).await;
+            run_cycle(vec![outdated, up_to_date], vec![workload("A"), workload("B")]).await;
 
         assert_eq!(actions, vec!["refresh:A"]);
         assert!(removed.is_empty(), "nothing should be removed: {removed:?}");
@@ -998,7 +998,7 @@ mod tests {
             .envs
             .insert("OPENCTI_CONFIG_HASH".to_string(), "older-composer-hash".to_string());
 
-        let (actions, removed) = run_cycle(vec![refreshed_by_older], vec![connector("A")]).await;
+        let (actions, removed) = run_cycle(vec![refreshed_by_older], vec![workload("A")]).await;
 
         assert_eq!(actions, vec!["refresh:A"]);
         assert!(removed.is_empty(), "nothing should be removed: {removed:?}");
@@ -1007,9 +1007,9 @@ mod tests {
     #[tokio::test]
     async fn orchestrate_detects_name_collision_with_current_labels() {
         let mut orphan = current_container("OTHER", "opencti");
-        orphan.name = connector("A").container_name();
+        orphan.name = workload("A").container_name();
 
-        let (actions, removed) = run_cycle(vec![orphan], vec![starting_connector("A")]).await;
+        let (actions, removed) = run_cycle(vec![orphan], vec![starting_workload("A")]).await;
 
         assert!(actions.is_empty(), "colliding deployment must not be reconciled: {actions:?}");
         assert_eq!(removed, vec!["OTHER".to_string()]);
@@ -1020,16 +1020,16 @@ mod tests {
         let container = managed_container("A", "opencti");
         // Same container (name-based lookup) but reconciled for a different id.
         assert_eq!(
-            detect_connector_id_mismatch(&container, "B"),
+            detect_workload_id_mismatch(&container, "B"),
             Some("A".to_string())
         );
         // No false positive when the ids match.
-        assert_eq!(detect_connector_id_mismatch(&container, "A"), None);
+        assert_eq!(detect_workload_id_mismatch(&container, "A"), None);
         // A container without the label was not deployed by the composer.
         let mut unlabeled = managed_container("A", "opencti");
         unlabeled.labels.clear();
         assert_eq!(
-            detect_connector_id_mismatch(&unlabeled, "A"),
+            detect_workload_id_mismatch(&unlabeled, "A"),
             Some("<unlabeled>".to_string())
         );
     }

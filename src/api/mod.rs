@@ -952,7 +952,7 @@ mod tests {
         std::fs::write(&test_config_path, config_content).expect("write e2e config");
         unsafe { std::env::set_var("COMPOSER_ENV", "proxy_list_e2e"); }
 
-        let connector = ApiWorkload {
+        let workload = ApiWorkload {
             id: "e2e-proxy-ca-list".to_string(),
             platform: "opencti".to_string(),
             name: "e2e-proxy-ca-list".to_string(),
@@ -964,11 +964,11 @@ mod tests {
             undecryptable_keys: vec![],
         };
 
-        let bundle = connector.proxy_ca_bundle().expect("bundle should exist");
+        let bundle = workload.proxy_ca_bundle().expect("bundle should exist");
         assert!(bundle.contains("FILE-CA"), "bundle should include file CA");
         assert!(bundle.contains("INLINE-CA"), "bundle should include inline CA");
 
-        let envs = connector.container_envs();
+        let envs = workload.container_envs();
         let env_map: std::collections::HashMap<String, String> = envs
             .into_iter()
             .map(|v| (v.key, v.value))
