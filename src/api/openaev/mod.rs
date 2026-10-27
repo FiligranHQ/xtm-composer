@@ -2,7 +2,7 @@ mod connector;
 mod manager;
 mod api_handler;
 
-use crate::api::{ApiConnector, ComposerApi, ConnectorStatus, HttpClientConfig, build_http_client};
+use crate::api::{ApiWorkload, ComposerApi, ConnectorStatus, HttpClientConfig, build_http_client};
 use crate::config::settings::Daemon;
 use async_trait::async_trait;
 use std::time::Duration;
@@ -105,11 +105,11 @@ impl ComposerApi for ApiOpenAEV {
         manager::post_register::register(self).await
     }
 
-    async fn connectors(&self) -> Option<Vec<ApiConnector>> {
+    async fn workloads(&self) -> Option<Vec<ApiWorkload>> {
         connector::get_connector_instances::get_connector_instances(self).await
     }
 
-    async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiConnector> {
+    async fn patch_status(&self, id: String, status: ConnectorStatus) -> Option<ApiWorkload> {
         connector::patch_status::update_status(id, status, self).await
     }
 

@@ -8,7 +8,7 @@
 //! - `XTM_IT_IMAGE`: image of that registry printing [`LOG_MARKER`], then running until stopped
 
 use super::{ContainerEngine, DockerOrchestrator};
-use crate::api::{ApiConnector, ApiContractConfig, ConnectorStatus};
+use crate::api::{ApiWorkload, ApiContractConfig, ConnectorStatus};
 use crate::config::settings::{Daemon, Docker as DockerOptions, Registry};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::podman::{self, PodmanMode};
@@ -76,14 +76,14 @@ async fn orchestrator(daemon: &Daemon) -> DockerOrchestrator {
         .expect("the engine API must answer")
 }
 
-fn connector(test: &str) -> ApiConnector {
+fn connector(test: &str) -> ApiWorkload {
     let name = format!(
         "xtm-it-{}-{}-{}",
         env("XTM_IT_ENGINE"),
         test,
         std::process::id()
     );
-    ApiConnector {
+    ApiWorkload {
         id: format!("{}-id", name),
         platform: "opencti".to_string(),
         name,
@@ -100,7 +100,7 @@ fn connector(test: &str) -> ApiConnector {
     }
 }
 
-async fn remove_leftover(orchestrator: &DockerOrchestrator, connector: &ApiConnector) {
+async fn remove_leftover(orchestrator: &DockerOrchestrator, connector: &ApiWorkload) {
     if let Some(container) = orchestrator.get(connector).await {
         orchestrator.remove(&container).await;
     }
@@ -108,7 +108,7 @@ async fn remove_leftover(orchestrator: &DockerOrchestrator, connector: &ApiConne
 
 async fn wait_for_status(
     orchestrator: &DockerOrchestrator,
-    connector: &ApiConnector,
+    connector: &ApiWorkload,
     expected: ConnectorStatus,
 ) -> OrchestratorContainer {
     let deadline = Instant::now() + WAIT_TIMEOUT;
@@ -132,7 +132,7 @@ async fn wait_for_status(
 async fn wait_for_logs(
     orchestrator: &DockerOrchestrator,
     container: &OrchestratorContainer,
-    connector: &ApiConnector,
+    connector: &ApiWorkload,
 ) -> Vec<String> {
     let deadline = Instant::now() + WAIT_TIMEOUT;
     loop {
@@ -154,7 +154,7 @@ async fn wait_for_logs(
 
 fn listed<'a>(
     containers: &'a [OrchestratorContainer],
-    connector: &ApiConnector,
+    connector: &ApiWorkload,
 ) -> &'a OrchestratorContainer {
     containers
         .iter()

@@ -1,5 +1,5 @@
 use serde::Serialize;
-use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::{ApiWorkload, ConnectorStatus};
 use crate::api::openaev::api_handler::handle_api_response;
 use crate::api::openaev::ApiOpenAEV;
 use crate::api::openaev::connector::ConnectorInstances;
@@ -10,7 +10,7 @@ struct UpdateConnectorInstanceStatusInput {
     connector_instance_current_status: ConnectorCurrentStatus,
 }
 
-pub async fn update_status(id: String, status: ConnectorStatus, api: &ApiOpenAEV) -> Option<ApiConnector> {
+pub async fn update_status(id: String, status: ConnectorStatus, api: &ApiOpenAEV) -> Option<ApiWorkload> {
     let update_status = match status {
         ConnectorStatus::Started => ConnectorCurrentStatus::Started,
         _ => ConnectorCurrentStatus::Stopped,

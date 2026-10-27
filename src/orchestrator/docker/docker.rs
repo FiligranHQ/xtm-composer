@@ -1,4 +1,4 @@
-use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::{ApiWorkload, ConnectorStatus};
 use crate::config::settings::{Daemon, Docker as DockerOptions, Registry};
 use crate::orchestrator::docker::compat::{self, CompatApi};
 use crate::orchestrator::docker::{ContainerEngine, DockerOrchestrator};
@@ -320,7 +320,7 @@ pub(crate) fn build_host_config(
 
 #[async_trait]
 impl Orchestrator for DockerOrchestrator {
-    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         let container_name = connector.container_name();
         if let Some(compat) = self.podman_api() {
             return match compat.inspect_container(&container_name).await {
@@ -380,7 +380,7 @@ impl Orchestrator for DockerOrchestrator {
         dedup_containers(containers)
     }
 
-    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
         connector.display_env_variables();
         let container_name = connector.container_name();
         let _ = self
@@ -389,7 +389,7 @@ impl Orchestrator for DockerOrchestrator {
             .await;
     }
 
-    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
         let container_name = connector.container_name();
         let _ = self
             .docker
@@ -424,7 +424,7 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
-    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn refresh(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         // Remove the current container if needed
         let container = self.get(connector).await;
         if container.is_some() {
@@ -434,7 +434,7 @@ impl Orchestrator for DockerOrchestrator {
         self.deploy(connector).await
     }
 
-    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn deploy(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         let resolver = Image::new(self.registry.clone());
         let auth = resolver.get_credentials();
         let image = resolver.build_name(connector.image.clone());
@@ -498,7 +498,7 @@ impl Orchestrator for DockerOrchestrator {
     async fn logs(
         &self,
         _container: &OrchestratorContainer,
-        connector: &ApiConnector,
+        connector: &ApiWorkload,
     ) -> Option<Vec<String>> {
         let opts = Some(LogsOptions {
             follow: false,

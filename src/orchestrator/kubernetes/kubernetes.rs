@@ -1,4 +1,4 @@
-use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::{ApiWorkload, ConnectorStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::config::settings::Kubernetes;
 use crate::orchestrator::image::Image;
@@ -104,7 +104,7 @@ impl KubeOrchestrator {
         base
     }
 
-    async fn upsert_proxy_ca_secret(&self, connector: &ApiConnector) -> Option<String> {
+    async fn upsert_proxy_ca_secret(&self, connector: &ApiWorkload) -> Option<String> {
         let cert = connector.proxy_ca_bundle()?;
         let secret_name = Self::proxy_ca_secret_name(&connector.container_name());
 
@@ -140,7 +140,7 @@ impl KubeOrchestrator {
         }
     }
 
-    pub fn container_envs(&self, connector: &ApiConnector) -> Vec<EnvVar> {
+    pub fn container_envs(&self, connector: &ApiWorkload) -> Vec<EnvVar> {
         let env_vars = connector.container_envs();
         env_vars
             .iter()
@@ -156,7 +156,7 @@ impl KubeOrchestrator {
         labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
-    async fn set_deployment_scale(&self, connector: &ApiConnector, scale: i32) {
+    async fn set_deployment_scale(&self, connector: &ApiWorkload, scale: i32) {
         let deployment_patch = Deployment {
             spec: Some(DeploymentSpec {
                 replicas: Some(scale),
@@ -224,7 +224,7 @@ impl KubeOrchestrator {
 
     pub fn build_configuration(
         &self,
-        connector: &ApiConnector,
+        connector: &ApiWorkload,
         labels: HashMap<String, String>,
         proxy_ca_secret_name: Option<String>,
     ) -> Deployment {
@@ -366,7 +366,7 @@ impl KubeOrchestrator {
 
 #[async_trait]
 impl Orchestrator for KubeOrchestrator {
-    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         let deployment = match self
             .deployments
             .get(connector.container_name().as_str())
@@ -404,12 +404,12 @@ impl Orchestrator for KubeOrchestrator {
         dedup_containers(containers)
     }
 
-    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
         connector.display_env_variables();
         self.set_deployment_scale(connector, 1).await;
     }
 
-    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
         self.set_deployment_scale(connector, 0).await;
     }
 
@@ -436,7 +436,7 @@ impl Orchestrator for KubeOrchestrator {
             .await;
     }
 
-    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn refresh(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         let labels = self.labels(connector);
         let proxy_ca_secret_name = self.upsert_proxy_ca_secret(connector).await;
         let deployment_patch = self.build_configuration(connector, labels, proxy_ca_secret_name);
@@ -492,7 +492,7 @@ impl Orchestrator for KubeOrchestrator {
         }
     }
 
-    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn deploy(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
         let labels = self.labels(connector);
         let proxy_ca_secret_name = self.upsert_proxy_ca_secret(connector).await;
         let deployment_creation =
@@ -517,7 +517,7 @@ impl Orchestrator for KubeOrchestrator {
     async fn logs(
         &self,
         _container: &OrchestratorContainer,
-        connector: &ApiConnector,
+        connector: &ApiWorkload,
     ) -> Option<Vec<String>> {
         let deployment_pod = self.get_deployment_pod(connector.id.clone()).await;
         match deployment_pod {
@@ -617,8 +617,8 @@ mod tests {
         }
     }
 
-    fn connector() -> ApiConnector {
-        ApiConnector {
+    fn connector() -> ApiWorkload {
+        ApiWorkload {
             id: "ab2fb502".to_string(),
             platform: "opencti".to_string(),
             name: "importfilestix".to_string(),
@@ -631,7 +631,7 @@ mod tests {
         }
     }
 
-    fn container(connector: &ApiConnector) -> OrchestratorContainer {
+    fn container(connector: &ApiWorkload) -> OrchestratorContainer {
         OrchestratorContainer {
             id: "uid".to_string(),
             name: connector.container_name(),

@@ -1,4 +1,4 @@
-use crate::api::{ApiConnector, ComposerApi, ConnectorStatus, RequestedStatus};
+use crate::api::{ApiWorkload, ComposerApi, ConnectorStatus, RequestedStatus};
 use crate::orchestrator::{Orchestrator, OrchestratorContainer};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -48,7 +48,7 @@ fn logs_due(log_ticks: &mut HashMap<String, Instant>, connector_id: &str, schedu
 /// Such a configuration must never be deployed: the undecryptable secrets
 /// would be written as blanks, breaking connectors that were working fine.
 /// The existing deployment (if any) is left untouched until decryption works.
-fn refuse_incomplete_configuration(connector: &ApiConnector, action: &str) -> bool {
+fn refuse_incomplete_configuration(connector: &ApiWorkload, action: &str) -> bool {
     if connector.undecryptable_keys.is_empty() {
         return false;
     }
@@ -65,7 +65,7 @@ fn refuse_incomplete_configuration(connector: &ApiConnector, action: &str) -> bo
 async fn orchestrate_missing(
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
-    connector: &ApiConnector,
+    connector: &ApiWorkload,
 ) {
     // Connector is not provisioned, deploy the images
     if refuse_incomplete_configuration(connector, "deploy") {
@@ -90,7 +90,7 @@ async fn orchestrate_existing(
     health_tick: &mut Instant,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
-    connector: &ApiConnector,
+    connector: &ApiWorkload,
     container: OrchestratorContainer,
 ) {
     // Connector is provisioned
@@ -201,7 +201,7 @@ pub async fn orchestrate(
     api: &Box<dyn ComposerApi + Send + Sync>,
 ) {
     // Get the current definition from OpenCTI
-    let connectors_response = api.connectors().await;
+    let connectors_response = api.workloads().await;
     if connectors_response.is_some() {
         // First round trip to instantiate and control if needed
         let connectors = connectors_response.unwrap();
@@ -248,7 +248,7 @@ pub async fn orchestrate(
             }
         }
         // Iter on each existing container to clean the containers
-        let connectors_by_id: HashMap<String, ApiConnector> = connectors
+        let connectors_by_id: HashMap<String, ApiWorkload> = connectors
             .iter()
             .map(|n| (n.id.clone(), n.clone()))
             .collect();
@@ -293,8 +293,8 @@ mod tests {
     };
     use std::sync::{Arc, Mutex};
 
-    fn connector(id: &str) -> ApiConnector {
-        ApiConnector {
+    fn connector(id: &str) -> ApiWorkload {
+        ApiWorkload {
             id: id.to_string(),
             platform: "opencti".to_string(),
             name: format!("connector-{id}"),
@@ -378,12 +378,12 @@ mod tests {
     }
 
     struct FakeApi {
-        connectors: Vec<ApiConnector>,
+        connectors: Vec<ApiWorkload>,
         pushed_logs: Arc<Mutex<Vec<(String, Vec<String>)>>>,
     }
 
     impl FakeApi {
-        fn new(connectors: Vec<ApiConnector>) -> Self {
+        fn new(connectors: Vec<ApiWorkload>) -> Self {
             Self {
                 connectors,
                 pushed_logs: Arc::new(Mutex::new(Vec::new())),
@@ -417,11 +417,11 @@ mod tests {
             unimplemented!()
         }
 
-        async fn connectors(&self) -> Option<Vec<ApiConnector>> {
+        async fn workloads(&self) -> Option<Vec<ApiWorkload>> {
             Some(self.connectors.clone())
         }
 
-        async fn patch_status(&self, _id: String, _status: ConnectorStatus) -> Option<ApiConnector> {
+        async fn patch_status(&self, _id: String, _status: ConnectorStatus) -> Option<ApiWorkload> {
             None
         }
 
@@ -459,7 +459,7 @@ mod tests {
             }
         }
 
-        fn record(&self, action: &str, connector: &ApiConnector) {
+        fn record(&self, action: &str, connector: &ApiWorkload) {
             self.actions
                 .lock()
                 .expect("mutex should not be poisoned")
@@ -469,7 +469,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Orchestrator for FakeOrchestrator {
-        async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        async fn get(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
             // Real orchestrators look containers up by name, which is what makes
             // name collisions possible.
             self.containers
@@ -490,11 +490,11 @@ mod tests {
                 .collect()
         }
 
-        async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+        async fn start(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
             self.record("start", connector);
         }
 
-        async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
+        async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiWorkload) -> () {
             self.record("stop", connector);
         }
 
@@ -505,12 +505,12 @@ mod tests {
                 .push(container.extract_workload_id());
         }
 
-        async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        async fn refresh(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
             self.record("refresh", connector);
             None
         }
 
-        async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+        async fn deploy(&self, connector: &ApiWorkload) -> Option<OrchestratorContainer> {
             self.record("deploy", connector);
             None
         }
@@ -518,7 +518,7 @@ mod tests {
         async fn logs(
             &self,
             _container: &OrchestratorContainer,
-            _connector: &ApiConnector,
+            _connector: &ApiWorkload,
         ) -> Option<Vec<String>> {
             Some(vec!["connector log line".to_string()])
         }
@@ -706,7 +706,7 @@ mod tests {
     /// by the fake orchestrator.
     async fn run_cycle(
         containers: Vec<OrchestratorContainer>,
-        connectors: Vec<ApiConnector>,
+        connectors: Vec<ApiWorkload>,
     ) -> (Vec<String>, Vec<String>) {
         let removed_ids = Arc::new(Mutex::new(Vec::new()));
         let orchestrator = FakeOrchestrator::new(containers, Arc::clone(&removed_ids));
@@ -724,7 +724,7 @@ mod tests {
         (actions, removed)
     }
 
-    fn starting_connector(id: &str) -> ApiConnector {
+    fn starting_connector(id: &str) -> ApiWorkload {
         let mut connector = connector(id);
         connector.requested_status = "starting".to_string();
         connector
@@ -798,7 +798,7 @@ mod tests {
     /// logs pushed to the platform.
     async fn run_cycles_with_due_logs(
         containers: Vec<OrchestratorContainer>,
-        connectors: Vec<ApiConnector>,
+        connectors: Vec<ApiWorkload>,
         cycles: usize,
     ) -> Vec<(String, Vec<String>)> {
         let api = FakeApi::new(connectors.clone());
@@ -858,7 +858,7 @@ mod tests {
         );
     }
 
-    fn undecryptable_connector(id: &str) -> ApiConnector {
+    fn undecryptable_connector(id: &str) -> ApiWorkload {
         let mut connector = connector(id);
         connector.undecryptable_keys = vec!["OPENCTI_TOKEN".to_string()];
         connector
