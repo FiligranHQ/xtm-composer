@@ -1,4 +1,5 @@
 use crate::config::settings::Daemon;
+use crate::orchestrator::config_hash_entries;
 use async_trait::async_trait;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -340,11 +341,13 @@ impl ApiConnector {
                 is_sensitive: false,
             });
         }
-        envs.push(EnvVariable {
-            key: "OPENCTI_CONFIG_HASH".into(),
-            value: self.contract_hash.clone(),
-            is_sensitive: false,
-        });
+        for (key, value) in config_hash_entries(&self.contract_hash) {
+            envs.push(EnvVariable {
+                key,
+                value,
+                is_sensitive: false,
+            });
+        }
 
         // Inject proxy environment variables into the connector container
         if let Some(proxy_config) = self.platform_proxy_config() {

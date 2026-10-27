@@ -4,8 +4,8 @@ use crate::config::settings::Kubernetes;
 use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{
-    dedup_containers, manager_label_filters, Orchestrator, OrchestratorContainer,
-    LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID,
+    config_hash_entries, dedup_containers, manager_label_filters, Orchestrator,
+    OrchestratorContainer, LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID,
 };
 use async_trait::async_trait;
 use k8s_openapi::DeepMerge;
@@ -272,10 +272,9 @@ impl KubeOrchestrator {
                 name: Some(connector.container_name()),
                 labels: Some(deployment_labels.clone()),
                 // Specific case to let the hash config on top level
-                annotations: Some(BTreeMap::from([(
-                    "OPENCTI_CONFIG_HASH".into(),
-                    connector.contract_hash.clone(),
-                )])),
+                annotations: Some(BTreeMap::from(config_hash_entries(
+                    &connector.contract_hash,
+                ))),
                 ..Default::default()
             },
             spec: Some(DeploymentSpec {

@@ -22,8 +22,10 @@ pub const LABEL_WORKLOAD_ID: &str = "xtm-workload-id";
 pub const LABEL_PLATFORM: &str = "xtm-platform";
 pub const ENV_CONFIG_HASH: &str = "XTM_CONFIG_HASH";
 
-/// Keys used before #136. They are still read, so that workloads deployed by
-/// older composer versions keep being recognized until they are redeployed.
+/// Keys used before #136. During the transition they are written alongside the
+/// current keys, so that an older composer still recognizes the workloads after
+/// a rollback, and read as a fallback, so that the workloads deployed by older
+/// versions keep being recognized until they are redeployed.
 pub const LEGACY_LABEL_MANAGER: &str = "opencti-manager";
 pub const LEGACY_LABEL_WORKLOAD_ID: &str = "opencti-connector-id";
 pub const LEGACY_LABEL_PLATFORM: &str = "opencti-platform";
@@ -106,12 +108,27 @@ impl OrchestratorContainer {
     }
 }
 
+/// Labels of a deployed workload, under both the current and the legacy keys.
 pub fn build_labels(manager_id: &str, connector: &ApiConnector) -> HashMap<String, String> {
     let mut labels: HashMap<String, String> = HashMap::new();
-    labels.insert("opencti-manager".into(), manager_id.to_string());
-    labels.insert("opencti-connector-id".into(), connector.id.clone());
-    labels.insert("opencti-platform".into(), connector.platform.clone());
+    for (key, legacy_key, value) in [
+        (LABEL_MANAGER, LEGACY_LABEL_MANAGER, manager_id),
+        (LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID, connector.id.as_str()),
+        (LABEL_PLATFORM, LEGACY_LABEL_PLATFORM, connector.platform.as_str()),
+    ] {
+        labels.insert(key.into(), value.to_string());
+        labels.insert(legacy_key.into(), value.to_string());
+    }
     labels
+}
+
+/// Configuration hash entries of a deployed workload, under both the current
+/// and the legacy keys.
+pub fn config_hash_entries(hash: &str) -> [(String, String); 2] {
+    [
+        (ENV_CONFIG_HASH.to_string(), hash.to_string()),
+        (LEGACY_ENV_CONFIG_HASH.to_string(), hash.to_string()),
+    ]
 }
 
 pub fn ensure_proxy_ca_file(connector: &ApiConnector) -> Option<String> {
@@ -198,9 +215,40 @@ mod tests {
 
         let labels = build_labels("test-manager", &connector);
 
+        assert_eq!(labels.get(LABEL_WORKLOAD_ID), Some(&connector.id));
+        assert_eq!(labels.get(LABEL_PLATFORM), Some(&connector.platform));
+        assert_eq!(labels.get(LABEL_MANAGER), Some(&"test-manager".to_string()));
+    }
+
+    /// The legacy labels are still written so that an older composer keeps
+    /// recognizing the workloads after a rollback.
+    #[test]
+    fn labels_keep_the_legacy_keys() {
+        let connector = ApiConnector {
+            id: "connector-1".to_string(),
+            platform: "openaev".to_string(),
+            name: String::new(),
+            image: String::new(),
+            contract_hash: String::new(),
+            current_status: None,
+            requested_status: String::new(),
+            contract_configuration: vec![],
+            undecryptable_keys: vec![],
+        };
+
+        let labels = build_labels("test-manager", &connector);
+
+        assert_eq!(labels.len(), 6);
         assert_eq!(labels.get("opencti-connector-id"), Some(&connector.id));
         assert_eq!(labels.get("opencti-platform"), Some(&connector.platform));
         assert_eq!(labels.get("opencti-manager"), Some(&"test-manager".to_string()));
+    }
+
+    #[test]
+    fn config_hash_entries_cover_current_and_legacy_keys() {
+        let entries: HashMap<String, String> = config_hash_entries("h1").into_iter().collect();
+        assert_eq!(entries.get("XTM_CONFIG_HASH").map(String::as_str), Some("h1"));
+        assert_eq!(entries.get("OPENCTI_CONFIG_HASH").map(String::as_str), Some("h1"));
     }
 
     fn container_with(labels: &[(&str, &str)], envs: &[(&str, &str)]) -> OrchestratorContainer {

@@ -209,14 +209,27 @@ async fn connector_lifecycle_with_private_registry_credentials() {
         deployed.envs.get("XTM_IT_VALUE").map(String::as_str),
         Some("a=b")
     );
-    assert_eq!(
-        deployed.labels.get("opencti-platform").map(String::as_str),
-        Some("opencti")
-    );
+    for platform_label in ["xtm-platform", "opencti-platform"] {
+        assert_eq!(
+            deployed.labels.get(platform_label).map(String::as_str),
+            Some("opencti")
+        );
+    }
+    for hash_env in ["XTM_CONFIG_HASH", "OPENCTI_CONFIG_HASH"] {
+        assert_eq!(deployed.envs.get(hash_env).map(String::as_str), Some("hash-1"));
+    }
 
     let running = wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
     assert!(running.started_at.is_some());
     let containers = orchestrator.list().await;
+    assert_eq!(
+        containers
+            .iter()
+            .filter(|container| container.name == connector.container_name())
+            .count(),
+        1,
+        "a workload carrying the current and legacy manager labels is listed once"
+    );
     assert_eq!(
         listed(&containers, &connector).extract_workload_id(),
         connector.id
