@@ -8,7 +8,7 @@
 //! - `XTM_IT_IMAGE`: image of that registry printing [`LOG_MARKER`], then running until stopped
 
 use super::{ContainerEngine, DockerOrchestrator};
-use crate::api::{ApiConnector, ApiContractConfig, ConnectorStatus};
+use crate::api::{ApiWorkload, ApiContractConfig, WorkloadStatus};
 use crate::config::settings::{Daemon, Docker as DockerOptions, Registry};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::podman::{self, PodmanMode};
@@ -76,14 +76,14 @@ async fn orchestrator(daemon: &Daemon) -> DockerOrchestrator {
         .expect("the engine API must answer")
 }
 
-fn connector(test: &str) -> ApiConnector {
+fn workload(test: &str) -> ApiWorkload {
     let name = format!(
         "xtm-it-{}-{}-{}",
         env("XTM_IT_ENGINE"),
         test,
         std::process::id()
     );
-    ApiConnector {
+    ApiWorkload {
         id: format!("{}-id", name),
         platform: "opencti".to_string(),
         name,
@@ -100,20 +100,20 @@ fn connector(test: &str) -> ApiConnector {
     }
 }
 
-async fn remove_leftover(orchestrator: &DockerOrchestrator, connector: &ApiConnector) {
-    if let Some(container) = orchestrator.get(connector).await {
+async fn remove_leftover(orchestrator: &DockerOrchestrator, workload: &ApiWorkload) {
+    if let Some(container) = orchestrator.get(workload).await {
         orchestrator.remove(&container).await;
     }
 }
 
 async fn wait_for_status(
     orchestrator: &DockerOrchestrator,
-    connector: &ApiConnector,
-    expected: ConnectorStatus,
+    workload: &ApiWorkload,
+    expected: WorkloadStatus,
 ) -> OrchestratorContainer {
     let deadline = Instant::now() + WAIT_TIMEOUT;
     loop {
-        let container = orchestrator.get(connector).await;
+        let container = orchestrator.get(workload).await;
         if let Some(container) = &container
             && orchestrator.state_converter(container) == expected
         {
@@ -132,12 +132,12 @@ async fn wait_for_status(
 async fn wait_for_logs(
     orchestrator: &DockerOrchestrator,
     container: &OrchestratorContainer,
-    connector: &ApiConnector,
+    workload: &ApiWorkload,
 ) -> Vec<String> {
     let deadline = Instant::now() + WAIT_TIMEOUT;
     loop {
         let logs = orchestrator
-            .logs(container, connector)
+            .logs(container, workload)
             .await
             .unwrap_or_default();
         if logs.iter().any(|line| line.contains(LOG_MARKER)) {
@@ -154,15 +154,15 @@ async fn wait_for_logs(
 
 fn listed<'a>(
     containers: &'a [OrchestratorContainer],
-    connector: &ApiConnector,
+    workload: &ApiWorkload,
 ) -> &'a OrchestratorContainer {
     containers
         .iter()
-        .find(|container| container.name == connector.container_name())
+        .find(|container| container.name == workload.container_name())
         .unwrap_or_else(|| {
             panic!(
                 "{} not listed in {:?}",
-                connector.container_name(),
+                workload.container_name(),
                 containers
             )
         })
@@ -193,17 +193,17 @@ async fn engine_and_podman_mode_are_detected() {
 /// a registry requiring credentials.
 #[tokio::test]
 #[ignore = "requires a container engine and an authenticated registry"]
-async fn connector_lifecycle_with_private_registry_credentials() {
+async fn workload_lifecycle_with_private_registry_credentials() {
     let orchestrator = orchestrator(&daemon_with_credentials()).await;
-    let mut connector = connector("lifecycle");
-    remove_leftover(&orchestrator, &connector).await;
+    let mut workload = workload("lifecycle");
+    remove_leftover(&orchestrator, &workload).await;
 
     let deployed = orchestrator
-        .deploy(&connector)
+        .deploy(&workload)
         .await
         .expect("connector deployed");
     assert!(deployed.is_managed());
-    assert_eq!(deployed.extract_workload_id(), connector.id);
+    assert_eq!(deployed.extract_workload_id(), workload.id);
     assert_eq!(deployed.extract_config_hash(), "hash-1");
     assert_eq!(
         deployed.envs.get("XTM_IT_VALUE").map(String::as_str),
@@ -219,52 +219,52 @@ async fn connector_lifecycle_with_private_registry_credentials() {
         assert_eq!(deployed.envs.get(hash_env).map(String::as_str), Some("hash-1"));
     }
 
-    let running = wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
+    let running = wait_for_status(&orchestrator, &workload, WorkloadStatus::Started).await;
     assert!(running.started_at.is_some());
     let containers = orchestrator.list().await;
     assert_eq!(
         containers
             .iter()
-            .filter(|container| container.name == connector.container_name())
+            .filter(|container| container.name == workload.container_name())
             .count(),
         1,
         "a workload carrying the current and legacy manager labels is listed once"
     );
     assert_eq!(
-        listed(&containers, &connector).extract_workload_id(),
-        connector.id
+        listed(&containers, &workload).extract_workload_id(),
+        workload.id
     );
-    wait_for_logs(&orchestrator, &running, &connector).await;
+    wait_for_logs(&orchestrator, &running, &workload).await;
 
-    orchestrator.stop(&running, &connector).await;
-    let stopped = wait_for_status(&orchestrator, &connector, ConnectorStatus::Stopped).await;
+    orchestrator.stop(&running, &workload).await;
+    let stopped = wait_for_status(&orchestrator, &workload, WorkloadStatus::Stopped).await;
     let containers = orchestrator.list().await;
     assert_eq!(
-        orchestrator.state_converter(listed(&containers, &connector)),
-        ConnectorStatus::Stopped
+        orchestrator.state_converter(listed(&containers, &workload)),
+        WorkloadStatus::Stopped
     );
-    assert!(orchestrator.logs(&stopped, &connector).await.is_some());
+    assert!(orchestrator.logs(&stopped, &workload).await.is_some());
 
-    orchestrator.start(&stopped, &connector).await;
-    wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
+    orchestrator.start(&stopped, &workload).await;
+    wait_for_status(&orchestrator, &workload, WorkloadStatus::Started).await;
 
-    connector.contract_hash = "hash-2".to_string();
+    workload.contract_hash = "hash-2".to_string();
     let refreshed = orchestrator
-        .refresh(&connector)
+        .refresh(&workload)
         .await
         .expect("connector refreshed");
     assert_ne!(refreshed.id, running.id);
     assert_eq!(refreshed.extract_config_hash(), "hash-2");
-    let refreshed = wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
+    let refreshed = wait_for_status(&orchestrator, &workload, WorkloadStatus::Started).await;
 
     orchestrator.remove(&refreshed).await;
-    assert!(orchestrator.get(&connector).await.is_none());
+    assert!(orchestrator.get(&workload).await.is_none());
     assert!(
         orchestrator
             .list()
             .await
             .iter()
-            .all(|container| container.name != connector.container_name())
+            .all(|container| container.name != workload.container_name())
     );
 }
 
@@ -276,16 +276,16 @@ async fn deploy_fails_with_wrong_registry_credentials() {
         Some("wrong-password".to_string()),
     );
     let orchestrator = orchestrator(&daemon).await;
-    let connector = connector("bad-credentials");
-    remove_leftover(&orchestrator, &connector).await;
+    let workload = workload("bad-credentials");
+    remove_leftover(&orchestrator, &workload).await;
 
-    assert!(orchestrator.deploy(&connector).await.is_none());
-    assert!(orchestrator.get(&connector).await.is_none());
+    assert!(orchestrator.deploy(&workload).await.is_none());
+    assert!(orchestrator.get(&workload).await.is_none());
 
     let resolver = Image::new(daemon.registry.clone());
     let error = orchestrator
         .pull_image(
-            &resolver.build_name(connector.image.clone()),
+            &resolver.build_name(workload.image.clone()),
             resolver.get_credentials(),
         )
         .await
@@ -330,16 +330,16 @@ async fn bollard_registry_auth_header_is_rejected_for_some_passwords() {
 #[ignore = "requires registry credentials stored on the Podman host"]
 async fn delegated_registry_authentication_to_the_podman_host() {
     let orchestrator = orchestrator(&daemon(None, None)).await;
-    let connector = connector("delegated-auth");
-    remove_leftover(&orchestrator, &connector).await;
+    let workload = workload("delegated-auth");
+    remove_leftover(&orchestrator, &workload).await;
 
     orchestrator
-        .deploy(&connector)
+        .deploy(&workload)
         .await
         .expect("connector deployed");
-    let running = wait_for_status(&orchestrator, &connector, ConnectorStatus::Started).await;
-    wait_for_logs(&orchestrator, &running, &connector).await;
+    let running = wait_for_status(&orchestrator, &workload, WorkloadStatus::Started).await;
+    wait_for_logs(&orchestrator, &running, &workload).await;
 
     orchestrator.remove(&running).await;
-    assert!(orchestrator.get(&connector).await.is_none());
+    assert!(orchestrator.get(&workload).await.is_none());
 }

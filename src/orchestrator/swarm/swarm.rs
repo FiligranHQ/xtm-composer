@@ -1,4 +1,4 @@
-use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::orchestrator::image::Image;
 use crate::orchestrator::swarm::SwarmOrchestrator;
@@ -112,8 +112,8 @@ impl SwarmOrchestrator {
 
 #[async_trait]
 impl Orchestrator for SwarmOrchestrator {
-    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        let service_name = connector.container_name();
+    async fn get(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+        let service_name = workload.container_name();
         let service = self
             .docker
             .inspect_service(&service_name, None::<InspectServiceOptions>)
@@ -171,9 +171,9 @@ impl Orchestrator for SwarmOrchestrator {
         dedup_containers(services)
     }
 
-    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
-        connector.display_env_variables();
-        let service_name = connector.container_name();
+    async fn start(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
+        workload.display_env_variables();
+        let service_name = workload.container_name();
         if let Ok(svc) = self
             .docker
             .inspect_service(&service_name, None::<InspectServiceOptions>)
@@ -206,8 +206,8 @@ impl Orchestrator for SwarmOrchestrator {
         }
     }
 
-    async fn stop(&self, _container: &OrchestratorContainer, _connector: &ApiConnector) -> () {
-        let service_name = _connector.container_name();
+    async fn stop(&self, _container: &OrchestratorContainer, _workload: &ApiWorkload) -> () {
+        let service_name = _workload.container_name();
         if let Ok(svc) = self
             .docker
             .inspect_service(&service_name, None::<InspectServiceOptions>)
@@ -256,20 +256,20 @@ impl Orchestrator for SwarmOrchestrator {
         }
     }
 
-    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        let container = self.get(connector).await;
+    async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+        let container = self.get(workload).await;
         if container.is_some() {
             let _ = self.remove(&container.unwrap()).await;
         }
-        self.deploy(connector).await
+        self.deploy(workload).await
     }
 
-    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
         let settings = crate::settings();
         let registry_config = settings.opencti.daemon.registry.clone();
         let resolver = Image::new(registry_config);
         let auth = resolver.get_credentials();
-        let image = resolver.build_name(connector.image.clone());
+        let image = resolver.build_name(workload.image.clone());
 
         let pull_result = self
             .docker
@@ -294,12 +294,12 @@ impl Orchestrator for SwarmOrchestrator {
 
         match pull_result {
             Ok(_) => {
-                let container_env_variables: Vec<String> = connector
+                let container_env_variables: Vec<String> = workload
                     .container_envs()
                     .into_iter()
                     .map(|config| format!("{}={}", config.key, config.value))
                     .collect();
-                let labels = self.labels(connector);
+                let labels = self.labels(workload);
                 let swarm_opts = &self.config;
 
                 // Build container spec with all swarm options
@@ -367,7 +367,7 @@ impl Orchestrator for SwarmOrchestrator {
                     container_spec.stop_grace_period = Some(stop_grace_period);
                 }
 
-                if let Some(proxy_ca_host_path) = ensure_proxy_ca_file(connector) {
+                if let Some(proxy_ca_host_path) = ensure_proxy_ca_file(workload) {
                     let mut mounts = container_spec.mounts.unwrap_or_default();
                     mounts.push(Mount {
                         typ: Some(MountType::BIND),
@@ -469,11 +469,11 @@ impl Orchestrator for SwarmOrchestrator {
                     None
                 };
 
-                let is_starting = connector.requested_status.clone().eq("starting");
+                let is_starting = workload.requested_status.clone().eq("starting");
                 let replicas = if is_starting { 1 } else { 0 };
 
                 let service_spec = ServiceSpec {
-                    name: Some(connector.container_name()),
+                    name: Some(workload.container_name()),
                     labels: Some(labels),
                     task_template: Some(TaskSpec {
                         container_spec: Some(container_spec),
@@ -505,7 +505,7 @@ impl Orchestrator for SwarmOrchestrator {
                     }
                 }
 
-                self.get(connector).await
+                self.get(workload).await
             }
             Err(e) => {
                 error!(
@@ -521,9 +521,9 @@ impl Orchestrator for SwarmOrchestrator {
     async fn logs(
         &self,
         _container: &OrchestratorContainer,
-        connector: &ApiConnector,
+        workload: &ApiWorkload,
     ) -> Option<Vec<String>> {
-        let service_name = connector.container_name();
+        let service_name = workload.container_name();
 
         // Retrieve logs via tasks: find the running task's container and get its logs
         let filters = HashMap::from([(
@@ -599,10 +599,10 @@ impl Orchestrator for SwarmOrchestrator {
         }
     }
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
+    fn state_converter(&self, container: &OrchestratorContainer) -> WorkloadStatus {
         match container.state.as_str() {
-            "running" => ConnectorStatus::Started,
-            _ => ConnectorStatus::Stopped,
+            "running" => WorkloadStatus::Started,
+            _ => WorkloadStatus::Stopped,
         }
     }
 }

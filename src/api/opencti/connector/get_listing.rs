@@ -1,4 +1,4 @@
-use crate::api::ApiConnector;
+use crate::api::ApiWorkload;
 use crate::api::opencti::ApiOpenCTI;
 use crate::api::opencti::connector::ManagedConnector;
 use crate::api::opencti::error_handler::{extract_optional_field, handle_graphql_response};
@@ -15,7 +15,7 @@ pub struct GetConnectors {
 }
 // endregion
 
-pub async fn list(api: &ApiOpenCTI) -> Option<Vec<ApiConnector>> {
+pub async fn list(api: &ApiOpenCTI) -> Option<Vec<ApiWorkload>> {
     use cynic::QueryBuilder;
 
     let query = GetConnectors::build({});
