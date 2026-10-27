@@ -382,51 +382,6 @@ mod tests {
     }
 
     #[test]
-    fn deploy_payload_includes_all_labels_in_selector() {
-        // deploy() sends the full Deployment including the selector with
-        // all labels so Kubernetes can match pods precisely.
-        use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
-        use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
-        use std::collections::BTreeMap;
-
-        let labels: BTreeMap<String, String> = BTreeMap::from([
-            ("opencti-manager".to_string(), "test-manager".to_string()),
-            ("opencti-connector-id".to_string(), "connector-42".to_string()),
-            ("opencti-platform".to_string(), "opencti".to_string()),
-        ]);
-        let deployment = Deployment {
-            spec: Some(DeploymentSpec {
-                selector: LabelSelector {
-                    match_labels: Some(labels.clone()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        let json = serde_json::to_value(&deployment).unwrap();
-        let match_labels = json
-            .pointer("/spec/selector/matchLabels")
-            .expect("matchLabels must be present");
-        assert_eq!(
-            match_labels.get("opencti-connector-id").and_then(|v| v.as_str()),
-            Some("connector-42"),
-            "selector must contain the connector-id label"
-        );
-        assert_eq!(
-            match_labels.get("opencti-manager").and_then(|v| v.as_str()),
-            Some("test-manager"),
-            "selector must contain the manager label"
-        );
-        assert_eq!(
-            match_labels.get("opencti-platform").and_then(|v| v.as_str()),
-            Some("opencti"),
-            "selector must contain the platform label"
-        );
-    }
-
-    #[test]
     fn selector_immutability_conflict_matches_kubernetes_message() {
         // Real message emitted by the Kubernetes API when the immutable
         // spec.selector no longer matches the new template labels.

@@ -552,6 +552,7 @@ impl Orchestrator for KubeOrchestrator {
 mod tests {
     use super::*;
     use crate::api::ApiContractConfig;
+    use crate::orchestrator::{build_labels, ENV_CONFIG_HASH, LEGACY_ENV_CONFIG_HASH};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpListener;
@@ -708,6 +709,29 @@ mod tests {
             logs.contains("Failed to scale deployment") && logs.contains("not found"),
             "scale failure must be logged: {logs}"
         );
+    }
+
+    /// The deployment selector, pod template and metadata carry the current
+    /// and legacy labels, and the configuration hash is annotated under both
+    /// keys (#136). The selector is immutable: it must be complete at creation.
+    #[tokio::test]
+    async fn deployment_carries_current_and_legacy_labels_and_hash() {
+        let connector = connector();
+        let labels = build_labels("test-manager", &connector);
+        let expected: BTreeMap<String, String> = labels.clone().into_iter().collect();
+
+        let deployment =
+            orchestrator("http://127.0.0.1:1").build_configuration(&connector, labels, None);
+
+        assert_eq!(expected.len(), 6);
+        assert_eq!(deployment.metadata.labels.as_ref(), Some(&expected));
+        let spec = deployment.spec.unwrap();
+        assert_eq!(spec.selector.match_labels.as_ref(), Some(&expected));
+        assert_eq!(spec.template.metadata.unwrap().labels.as_ref(), Some(&expected));
+        let annotations = deployment.metadata.annotations.unwrap();
+        for hash_key in [ENV_CONFIG_HASH, LEGACY_ENV_CONFIG_HASH] {
+            assert_eq!(annotations.get(hash_key), Some(&connector.contract_hash));
+        }
     }
 }
 
