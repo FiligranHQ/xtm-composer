@@ -221,7 +221,7 @@ fn container_from_summary(summary: compat::ContainerSummary) -> OrchestratorCont
     }
 }
 
-/// Build the host configuration of a connector container from the daemon options.
+/// Build the host configuration of a workload container from the daemon options.
 pub(crate) fn build_host_config(
     options: Option<&DockerOptions>,
     engine: ContainerEngine,
@@ -482,7 +482,7 @@ impl Orchestrator for DockerOrchestrator {
             }
         }
 
-        // Get the created connector
+        // Get the created workload
         let created = self.get(workload).await;
         // Start the container if needed
         let is_starting = workload.requested_status.clone().eq("starting");

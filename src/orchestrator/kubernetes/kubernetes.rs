@@ -168,7 +168,7 @@ impl KubeOrchestrator {
         let name = workload.container_name();
         // The deployment may have disappeared within the same cycle (e.g. deleted
         // by the refresh() self-heal): log and move on instead of panicking, which
-        // would kill the orchestration task for every connector.
+        // would kill the orchestration task for every workload.
         if let Err(err) = self
             .deployments
             .patch(name.as_str(), &PatchParams::default(), &patch)

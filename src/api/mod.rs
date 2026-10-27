@@ -137,12 +137,12 @@ impl FromStr for RequestedStatus {
 }
 
 /// Append proxy environment variables (HTTP_PROXY, HTTPS_PROXY, NO_PROXY)
-/// to the connector container env list when proxy is enabled.
+/// to the workload container env list when proxy is enabled.
 ///
 /// When `http_proxy`, `https_proxy`, or `no_proxy` is `None`, falls back to
 /// reading `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` from the Composer's own process
 /// environment, so that env-var-only proxy configurations are forwarded
-/// to deployed connectors.
+/// to deployed workloads.
 fn append_proxy_envs(
     envs: &mut Vec<EnvVariable>,
     with_proxy: bool,
@@ -195,7 +195,7 @@ fn append_proxy_envs(
     }
 }
 
-/// Append commonly-supported TLS CA env vars so connector runtimes can trust
+/// Append commonly-supported TLS CA env vars so workload runtimes can trust
 /// an injected corporate proxy root certificate.
 fn append_proxy_ca_envs(envs: &mut Vec<EnvVariable>, with_proxy: bool, has_proxy_ca: bool) {
     if !with_proxy || !has_proxy_ca {
@@ -349,7 +349,7 @@ impl ApiWorkload {
             });
         }
 
-        // Inject proxy environment variables into the connector container
+        // Inject proxy environment variables into the workload container
         if let Some(proxy_config) = self.platform_proxy_config() {
             append_proxy_envs(
                 &mut envs,
@@ -636,7 +636,7 @@ mod tests {
         unsafe { std::env::remove_var("HTTP_PROXY"); }
     }
 
-    // --- Tests for connector proxy env injection ---
+    // --- Tests for workload proxy env injection ---
 
     #[test]
     fn append_proxy_envs_injects_http_and_https_proxy() {

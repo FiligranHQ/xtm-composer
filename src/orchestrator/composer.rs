@@ -5,18 +5,18 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
-/// Detects a connector **name collision**: the container fetched by name for this
-/// connector carries a workload id label that belongs to a *different*
-/// connector. This happens when two connectors share the same name (which OpenCTI is
+/// Detects a workload **name collision**: the container fetched by name for this
+/// workload carries a workload id label that belongs to a *different*
+/// workload. This happens when two workloads share the same name (which the platform is
 /// meant to forbid) — the orchestrator looks a deployment up by name and returns the
 /// wrong one, later surfacing as an obscure Kubernetes
 /// "`selector` does not match template `labels`" error.
 ///
 /// A container without the label is a collision too: the composer has always
-/// labeled what it deploys, so it was created by someone else (e.g. a connector
+/// labeled what it deploys, so it was created by someone else (e.g. a workload
 /// deployed by hand) and must not be reconciled, let alone refreshed.
 ///
-/// Returns the mismatched connector-id found on the container (or `<unlabeled>`)
+/// Returns the mismatched workload id found on the container (or `<unlabeled>`)
 /// when a collision is present, or `None` when the ids match.
 fn detect_workload_id_mismatch(
     container: &OrchestratorContainer,
@@ -29,9 +29,9 @@ fn detect_workload_id_mismatch(
     }
 }
 
-/// Returns true when logs are due for this connector, and marks them as pushed.
-/// Each connector has its own schedule: a single shared timer would let only the
-/// first connector of each cycle report its logs. A connector seen for the first
+/// Returns true when logs are due for this workload, and marks them as pushed.
+/// Each workload has its own schedule: a single shared timer would let only the
+/// first workload of each cycle report its logs. A workload seen for the first
 /// time reports after one full schedule, as at startup.
 fn logs_due(log_ticks: &mut HashMap<String, Instant>, workload_id: &str, schedule: Duration) -> bool {
     let now = Instant::now();
@@ -44,9 +44,9 @@ fn logs_due(log_ticks: &mut HashMap<String, Instant>, workload_id: &str, schedul
     }
 }
 
-/// Returns true when the connector configuration could not be fully decrypted.
+/// Returns true when the workload configuration could not be fully decrypted.
 /// Such a configuration must never be deployed: the undecryptable secrets
-/// would be written as blanks, breaking connectors that were working fine.
+/// would be written as blanks, breaking workloads that were working fine.
 /// The existing deployment (if any) is left untouched until decryption works.
 fn refuse_incomplete_configuration(workload: &ApiWorkload, action: &str) -> bool {
     if workload.undecryptable_keys.is_empty() {
@@ -67,7 +67,7 @@ async fn orchestrate_missing(
     api: &Box<dyn ComposerApi + Send + Sync>,
     workload: &ApiWorkload,
 ) {
-    // Connector is not provisioned, deploy the images
+    // Workload is not provisioned, deploy the images
     if refuse_incomplete_configuration(workload, "deploy") {
         return;
     }
@@ -75,7 +75,7 @@ async fn orchestrate_missing(
     info!(id = id, "Deploying the container");
     let deploy_action = orchestrator.deploy(workload).await;
     match deploy_action {
-        // Update the connector status
+        // Update the workload status
         Some(_) => {
             api.patch_status(id, WorkloadStatus::Stopped).await;
         }
@@ -93,7 +93,7 @@ async fn orchestrate_existing(
     workload: &ApiWorkload,
     container: OrchestratorContainer,
 ) {
-    // Connector is provisioned
+    // Workload is provisioned
     let workload_id = workload.id.clone();
     let current_status_fetch = workload.current_status.clone().unwrap_or("stopped".into()); // Default current to created
     let workload_status = WorkloadStatus::from_str(current_status_fetch.as_str()).unwrap();
@@ -114,17 +114,17 @@ async fn orchestrate_existing(
         container_status
     };
     
-    // Update the connector status if needed
+    // Update the workload status if needed
     let container_status_not_aligned = final_status != workload_status;
     
-    // Detect if connector just started
+    // Detect if workload just started
     let just_started = container_status_not_aligned && 
                        final_status == WorkloadStatus::Started && 
                        workload_status == WorkloadStatus::Stopped;
     
     // Send health metrics if:
-    // - Connector just started (immediate reporting)
-    // - OR connector is running and 30 seconds have elapsed
+    // - Workload just started (immediate reporting)
+    // - OR workload is running and 30 seconds have elapsed
     let now = Instant::now();
     let should_send_health = just_started || 
         (final_status == WorkloadStatus::Started && 
@@ -140,7 +140,7 @@ async fn orchestrate_existing(
                 is_in_reboot_loop,
             ).await;
         }
-        // Reset timer only for running connectors
+        // Reset timer only for running workloads
         if final_status == WorkloadStatus::Started {
             *health_tick = now;
         }
@@ -150,7 +150,7 @@ async fn orchestrate_existing(
             .await;
         info!(id = workload_id, "Patch status");
     }
-    // In case of platform upgrade, we need to align all deployed connectors
+    // In case of platform upgrade, we need to align all deployed workloads
     let requested_workload_hash = workload.contract_hash.clone();
     let current_container_hash = container.extract_config_hash();
     if !requested_workload_hash.eq(current_container_hash)
@@ -200,7 +200,7 @@ pub async fn orchestrate(
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
 ) {
-    // Get the current definition from OpenCTI
+    // Get the current definitions from the platform
     let workloads_response = api.workloads().await;
     if workloads_response.is_some() {
         // First round trip to instantiate and control if needed
@@ -211,14 +211,14 @@ pub async fn orchestrate(
             let container_get = orchestrator.get(workload).await;
             match container_get {
                 Some(container) => {
-                    // Surface connector name collisions clearly: if the container we
-                    // got back by name belongs to a different connector-id, two
-                    // connectors likely share the same name (OpenCTI should forbid
+                    // Surface workload name collisions clearly: if the container we
+                    // got back by name belongs to a different workload id, two
+                    // workloads likely share the same name (the platform should forbid
                     // this). Without this, the only symptom is an obscure Kubernetes
                     // selector-mismatch error.
-                    // The deployment belongs to another connector, so don't reconcile
+                    // The deployment belongs to another workload, so don't reconcile
                     // it (refresh/start/stop) for this one. If it is an orphan of this
-                    // manager, the cleanup below removes it and the connector gets
+                    // manager, the cleanup below removes it and the workload gets
                     // deployed on the next cycle; otherwise (another manager's, or
                     // unlabeled, e.g. deployed by hand) it is left untouched.
                     if let Some(found_id) =
@@ -230,7 +230,7 @@ pub async fn orchestrate(
                             found_id = found_id,
                             "Connector name collision detected: an existing deployment with this name belongs to a different connector id (duplicate connector name?), skipping"
                         );
-                        // The connector is stuck until the clash is resolved: tell the
+                        // The workload is stuck until the clash is resolved: tell the
                         // platform, not only the manager logs.
                         if logs_due(log_ticks, &workload.id, api.post_logs_schedule()) {
                             let message = format!(
@@ -264,12 +264,12 @@ pub async fn orchestrate(
             let workload_id = container.extract_workload_id();
             match workloads_by_id.get(&workload_id) {
                 None => {
-                    // Connector no longer exists — remove the orphaned container
+                    // Workload no longer exists — remove the orphaned container
                     orchestrator.remove(&container).await;
                 }
                 Some(workload) => {
-                    // Connector still exists but the deployment name may be stale
-                    // after a connector instance name change while the connector ID
+                    // Workload still exists but the deployment name may be stale
+                    // after a connector instance name change while the workload ID
                     // remains the same. Remove the old deployment so the next
                     // orchestration cycle deploys with the correct name.
                     let expected_name = workload.container_name();
@@ -731,7 +731,7 @@ mod tests {
     }
 
     /// Control case for the collision tests below: without a collision, the
-    /// connector is reconciled (refreshed on hash change, started/stopped).
+    /// workload is reconciled (refreshed on hash change, started/stopped).
     #[tokio::test]
     async fn orchestrate_reconciles_workload_without_collision() {
         let mut outdated = managed_container("A", "opencti");
@@ -764,8 +764,8 @@ mod tests {
     }
 
     /// Regression test for #162: a same-named deployment left by a deleted
-    /// connector of this manager is not reconciled for the new connector, but
-    /// cleaned up as an orphan so the new connector deploys on the next cycle.
+    /// workload of this manager is not reconciled for the new workload, but
+    /// cleaned up as an orphan so the new workload deploys on the next cycle.
     #[tokio::test]
     async fn orchestrate_skips_workload_on_name_collision_and_cleans_orphan() {
         let mut orphan = managed_container("OTHER", "opencti");
@@ -794,7 +794,7 @@ mod tests {
     }
 
     /// Runs `cycles` orchestration cycles sharing the same log schedule state,
-    /// starting with the given connectors' logs already due, and returns the
+    /// starting with the given workloads' logs already due, and returns the
     /// logs pushed to the platform.
     async fn run_cycles_with_due_logs(
         containers: Vec<OrchestratorContainer>,
@@ -821,7 +821,7 @@ mod tests {
     }
 
     /// Regression test: logs used to share a single timer, so only the first
-    /// connector of each cycle ever had its logs pushed to the platform.
+    /// workload of each cycle ever had its logs pushed to the platform.
     #[tokio::test]
     async fn logs_are_pushed_for_every_due_workload_once_per_schedule() {
         let pushed = run_cycles_with_due_logs(
@@ -839,7 +839,7 @@ mod tests {
         assert_eq!(ids, vec!["A", "B", "C"], "each connector once, not again on the 2nd cycle");
     }
 
-    /// A skipped colliding connector reports why to the platform (on the logs
+    /// A skipped colliding workload reports why to the platform (on the logs
     /// schedule), not only in the manager logs.
     #[tokio::test]
     async fn collision_is_reported_to_the_platform_once_per_schedule() {
@@ -898,7 +898,7 @@ mod tests {
         assert!(removed.is_empty(), "deployment must not be removed: {removed:?}");
     }
 
-    /// Regression test for #164: a connector whose secrets cannot be decrypted
+    /// Regression test for #164: a workload whose secrets cannot be decrypted
     /// is not deployed with blank values.
     #[tokio::test]
     async fn orchestrate_does_not_deploy_when_secrets_cannot_be_decrypted() {
