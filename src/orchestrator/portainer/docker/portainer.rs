@@ -1,6 +1,6 @@
 use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
-use crate::config::settings::Portainer;
+use crate::config::settings::{Portainer, Registry};
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::image::Image;
 use crate::orchestrator::ensure_proxy_ca_file;
@@ -26,7 +26,7 @@ use tracing::{debug, error, info};
 const X_API_KEY: &str = "X-API-KEY";
 
 impl PortainerDockerOrchestrator {
-    pub fn new(config: Portainer) -> Self {
+    pub fn new(config: Portainer, registry: Option<Registry>) -> Self {
         let container_uri = format!(
             "{}/api/endpoints/{}/docker/{}/containers",
             config.api, config.env_id, config.api_version
@@ -50,6 +50,7 @@ impl PortainerDockerOrchestrator {
             container_uri,
             client,
             config,
+            registry,
         }
     }
 
@@ -191,9 +192,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
     }
 
     async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
+        let resolver = Image::new(self.registry.clone());
         let auth = resolver.get_credentials();
         let auth_header =
             auth.map(|c| general_purpose::STANDARD.encode(serde_json::to_string(&c).unwrap()));
