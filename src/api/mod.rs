@@ -40,6 +40,7 @@ pub struct HttpClientConfig {
 const HTTP_PROXY_ENV_VARS: &[&str] = &["HTTP_PROXY", "http_proxy"];
 const HTTPS_PROXY_ENV_VARS: &[&str] = &["HTTPS_PROXY", "https_proxy"];
 const NO_PROXY_ENV_VARS: &[&str] = &["NO_PROXY", "no_proxy"];
+const ALL_PROXY_ENV_VARS: &[&str] = &["ALL_PROXY", "all_proxy"];
 
 /// Resolve a proxy setting: the configured value wins, else the first of
 /// `env_vars` set in the Composer's own process environment.
@@ -49,13 +50,22 @@ fn resolve_proxy_setting(configured: Option<&str>, env_vars: &[&str]) -> Option<
         .or_else(|| env_vars.iter().find_map(|key| std::env::var(key).ok()))
 }
 
+/// The proxy URL the system proxies would use for a scheme: the first of `env_vars`
+/// set, else ALL_PROXY/all_proxy, a blank value counting as unset.
+fn system_proxy_url(env_vars: &[&str]) -> Option<String> {
+    let first_set = |vars: &[&str]| {
+        resolve_proxy_setting(None, vars).filter(|url| !url.trim().is_empty())
+    };
+    first_set(env_vars).or_else(|| first_set(ALL_PROXY_ENV_VARS))
+}
+
 /// Build a reqwest HTTP client configured with proxy and TLS settings.
 ///
 /// - `with_proxy: false` → disables all proxies (ignores system env vars).
 /// - `with_proxy: true` + explicit `http_proxy`/`https_proxy` → uses configured proxies,
 ///   bypassed for the `no_proxy` hosts (else the NO_PROXY env var).
 /// - `with_proxy: true` + no explicit proxy + `no_proxy` → uses the HTTP_PROXY/HTTPS_PROXY
-///   env vars, bypassed for the `no_proxy` hosts, as forwarded to connectors.
+///   (else ALL_PROXY) env vars, as the system proxies would, bypassed for the `no_proxy` hosts.
 /// - `with_proxy: true` + no explicit proxy and no `no_proxy` → uses system proxies
 ///   (HTTP_PROXY/HTTPS_PROXY env vars, bypassed for the NO_PROXY env var).
 pub fn build_http_client(config: &HttpClientConfig) -> Result<reqwest::Client, reqwest::Error> {
@@ -72,8 +82,8 @@ pub fn build_http_client(config: &HttpClientConfig) -> Result<reqwest::Client, r
         let explicit = config.http_proxy.is_some() || config.https_proxy.is_some();
         let (http_proxy, https_proxy, source) = if !explicit && configured_no_proxy.is_some() {
             (
-                resolve_proxy_setting(None, HTTP_PROXY_ENV_VARS),
-                resolve_proxy_setting(None, HTTPS_PROXY_ENV_VARS),
+                system_proxy_url(HTTP_PROXY_ENV_VARS),
+                system_proxy_url(HTTPS_PROXY_ENV_VARS),
                 "environment",
             )
         } else {
@@ -670,13 +680,35 @@ mod tests {
         "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
     ];
 
+    /// Holds ENV_LOCK with the proxy env vars cleared, and restores them when dropped.
+    struct ProxyEnvGuard {
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for ProxyEnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: ENV_LOCK is still held, _lock is dropped after this
+            unsafe {
+                for (key, value) in &self.saved {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+    }
+
     /// Lock the process env and clear the proxy env vars, so that a test only sees
-    /// the ones it sets (and not, e.g., a NO_PROXY set on the developer machine).
-    fn lock_clean_proxy_env() -> MutexGuard<'static, ()> {
-        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    /// the ones it sets (and not, e.g., a NO_PROXY set on the developer machine), and
+    /// doesn't leak them to the next test.
+    fn lock_clean_proxy_env() -> ProxyEnvGuard {
+        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = PROXY_ENV_VARS.iter().map(|key| (*key, std::env::var_os(key))).collect();
         // SAFETY: guarded by ENV_LOCK
         unsafe { for key in PROXY_ENV_VARS { std::env::remove_var(key); } }
-        guard
+        ProxyEnvGuard { saved, _lock: lock }
     }
 
     fn set_env(key: &str, value: &str) {
@@ -883,6 +915,65 @@ mod tests {
         assert_eq!(result, Ok(reqwest::StatusCode::SERVICE_UNAVAILABLE));
         assert_eq!(proxied, vec![format!("GET {} HTTP/1.1", url)]);
         assert_eq!(direct, 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn env_proxy_ignores_blank_proxy_env_vars() {
+        // e.g. HTTP_PROXY="" rendered by a chart: like the system proxies, treat it as
+        // unset instead of failing to build the client
+        let _env_guard = lock_clean_proxy_env();
+        let (target_addr, target) = spawn_target().await;
+        let (_, proxy) = spawn_proxy().await;
+        set_env("HTTP_PROXY", "");
+        set_env("HTTPS_PROXY", " ");
+        let url = format!("http://{}/graphql", target_addr);
+
+        let config = proxied_config(None, None, Some("opencti-ingest"));
+        let (result, direct, proxied) = send_and_trace(&config, &url, &target, &proxy).await;
+        assert_eq!(result, Ok(reqwest::StatusCode::OK));
+        assert_eq!((direct, proxied.len()), (1, 0));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn env_proxy_falls_back_to_all_proxy() {
+        // Like the system proxies: ALL_PROXY applies to each scheme without its own proxy
+        let _env_guard = lock_clean_proxy_env();
+        let (target_addr, target) = spawn_target().await;
+        let (all_addr, all_proxy) = spawn_proxy().await;
+        set_env("ALL_PROXY", &format!("http://{}", all_addr));
+        let http_url = format!("http://{}/graphql", target_addr);
+        let https_url = format!("https://{}/graphql", target_addr);
+
+        // ALL_PROXY only: the configured no_proxy applies to it
+        let config = proxied_config(None, None, Some("opencti-ingest,127.0.0.1"));
+        let (result, direct, proxied) = send_and_trace(&config, &http_url, &target, &all_proxy).await;
+        assert_eq!(result, Ok(reqwest::StatusCode::OK));
+        assert_eq!((direct, proxied.len()), (1, 0));
+
+        let config = proxied_config(None, None, Some("opencti-ingest"));
+        let (_, direct, proxied) = send_and_trace(&config, &http_url, &target, &all_proxy).await;
+        assert_eq!(direct, 0);
+        assert_eq!(proxied, vec![format!("GET {} HTTP/1.1", http_url)]);
+
+        // HTTP_PROXY + ALL_PROXY: HTTP goes through HTTP_PROXY, HTTPS still through ALL_PROXY
+        let (http_addr, http_proxy) = spawn_proxy().await;
+        set_env("HTTP_PROXY", &format!("http://{}", http_addr));
+        let (_, direct, proxied) = send_and_trace(&config, &http_url, &target, &http_proxy).await;
+        assert_eq!(direct, 0);
+        assert_eq!(proxied, vec![format!("GET {} HTTP/1.1", http_url)]);
+        let (_, direct, proxied) = send_and_trace(&config, &https_url, &target, &all_proxy).await;
+        assert_eq!(direct, 0, "HTTPS should not go direct");
+        assert_eq!(proxied, vec![format!("CONNECT {} HTTP/1.1", target_addr)]);
+    }
+
+    #[test]
+    fn proxy_env_guard_restores_the_environment() {
+        {
+            let _env_guard = lock_clean_proxy_env();
+            set_env("NO_PROXY", "leaked-by-a-test");
+        }
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert_ne!(std::env::var("NO_PROXY").ok().as_deref(), Some("leaked-by-a-test"));
     }
 
     #[tokio::test(flavor = "current_thread")]
