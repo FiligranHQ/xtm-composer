@@ -2,7 +2,7 @@ pub mod openaev;
 pub mod opencti;
 
 use crate::api::ComposerApi;
-use crate::config::settings::{Daemon, OpenCTI};
+use crate::config::settings::{Daemon, OpenCTI, Registry};
 use crate::orchestrator::docker::DockerOrchestrator;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::podman;
@@ -24,6 +24,16 @@ use tokio::time::interval;
 /// future version.
 fn maintains_legacy_registry_secret(platform: &str, opencti: &OpenCTI) -> bool {
     platform == "opencti" || !(opencti.enable && opencti.daemon.selector == "kubernetes")
+}
+
+/// Registry the legacy secret is built from, for the platform in charge of it:
+/// the OpenCTI one, which all platforms used back then.
+fn legacy_registry(platform: &str, opencti: &OpenCTI) -> Option<Registry> {
+    if maintains_legacy_registry_secret(platform, opencti) {
+        opencti.daemon.registry.clone()
+    } else {
+        None
+    }
 }
 
 async fn build_orchestrator(
@@ -49,7 +59,7 @@ async fn build_orchestrator(
                     config,
                     daemon_configuration.registry.clone(),
                     platform,
-                    maintains_legacy_registry_secret(platform, &settings().opencti),
+                    legacy_registry(platform, &settings().opencti),
                 )
                 .await,
             ),
@@ -178,5 +188,25 @@ mod tests {
             "openaev",
             &opencti(false, "kubernetes")
         ));
+    }
+
+    /// OpenAEV keeps the legacy secret with the OpenCTI registry, the one the
+    /// deployments created before reference, whatever its own registry.
+    #[test]
+    fn legacy_registry_secret_is_maintained_with_the_opencti_registry() {
+        let mut opencti = opencti(true, "docker");
+        opencti.daemon.registry = Some(Registry {
+            server: Some("cti.example.com".to_string()),
+            username: Some("cti-user".to_string()),
+            password: Some("cti-password".to_string()),
+            email: None,
+        });
+        let registry = legacy_registry("openaev", &opencti).expect("legacy registry");
+        assert_eq!(registry.server.as_deref(), Some("cti.example.com"));
+        assert_eq!(registry.username.as_deref(), Some("cti-user"));
+
+        opencti.daemon.selector = "kubernetes".to_string();
+        assert!(legacy_registry("openaev", &opencti).is_none());
+        assert!(legacy_registry("opencti", &opencti).is_some());
     }
 }

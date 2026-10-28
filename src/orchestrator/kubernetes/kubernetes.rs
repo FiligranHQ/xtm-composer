@@ -28,13 +28,13 @@ impl KubeOrchestrator {
         config: Kubernetes,
         registry: Option<Registry>,
         platform: &'static str,
-        legacy_secret: bool,
+        legacy_registry: Option<Registry>,
     ) -> Self {
         let client = Client::try_default().await.unwrap();
         let pods: Api<Pod> = Api::default_namespaced(client.clone());
         let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
         let secrets: Api<Secret> = Api::default_namespaced(client.clone());
-        Self::register_secret(&secrets, registry.clone(), platform, legacy_secret).await;
+        Self::register_secret(&secrets, registry.clone(), platform, legacy_registry).await;
         Self {
             pods,
             deployments,
@@ -54,62 +54,72 @@ impl KubeOrchestrator {
         secrets: &Api<Secret>,
         registry: Option<Registry>,
         platform: &str,
-        legacy_secret: bool,
+        legacy_registry: Option<Registry>,
     ) {
-        let resolver = Image::new(registry);
-        let registry_secret = resolver.get_kubernetes_registry_secret();
-        if registry_secret.is_some() {
-            for secret_name in Self::registry_secret_names(&resolver, platform, legacy_secret) {
-                // region Start by removing the secret if it already exists
-                let params = &DeleteParams::default();
-                match secrets.delete(secret_name.as_str(), params).await {
-                    Ok(_) => info!(
-                        secret_name = secret_name,
-                        "Kubernetes registry secret deleted"
-                    ),
-                    Err(_) => info!(
-                        secret_name = secret_name,
-                        "Kubernetes registry doesnt exists"
-                    ),
-                }
-                // endregion
-                // region Then initialize the secret
-                let kube_secret = Secret {
-                    metadata: ObjectMeta {
-                        name: Some(secret_name.clone()),
-                        ..Default::default()
-                    },
-                    string_data: registry_secret.clone(),
-                    type_: Some("kubernetes.io/dockerconfigjson".to_string()),
-                    ..Default::default()
-                };
-                match secrets.create(&PostParams::default(), &kube_secret).await {
-                    Ok(_) => info!(
-                        secret_name = secret_name,
-                        "Kubernetes registry secret created"
-                    ),
-                    Err(err) => error!(
-                        error = err.to_string(),
-                        secret_name = secret_name,
-                        "Kubernetes registry secret creation failed"
-                    ),
-                }
-                // endregion
+        for (secret_name, registry_secret) in
+            Self::registry_secrets(registry, platform, legacy_registry)
+        {
+            // region Start by removing the secret if it already exists
+            let params = &DeleteParams::default();
+            match secrets.delete(secret_name.as_str(), params).await {
+                Ok(_) => info!(
+                    secret_name = secret_name,
+                    "Kubernetes registry secret deleted"
+                ),
+                Err(_) => info!(
+                    secret_name = secret_name,
+                    "Kubernetes registry doesnt exists"
+                ),
             }
+            // endregion
+            // region Then initialize the secret
+            let kube_secret = Secret {
+                metadata: ObjectMeta {
+                    name: Some(secret_name.clone()),
+                    ..Default::default()
+                },
+                string_data: Some(registry_secret),
+                type_: Some("kubernetes.io/dockerconfigjson".to_string()),
+                ..Default::default()
+            };
+            match secrets.create(&PostParams::default(), &kube_secret).await {
+                Ok(_) => info!(
+                    secret_name = secret_name,
+                    "Kubernetes registry secret created"
+                ),
+                Err(err) => error!(
+                    error = err.to_string(),
+                    secret_name = secret_name,
+                    "Kubernetes registry secret creation failed"
+                ),
+            }
+            // endregion
         }
     }
 
-    /// Registry secrets maintained for a platform: its own one, plus the legacy
-    /// one shared by all platforms when it is in charge of it.
-    fn registry_secret_names(resolver: &Image, platform: &str, legacy_secret: bool) -> Vec<String> {
-        let mut names: Vec<String> = resolver
-            .get_kubernetes_secret_name(platform)
-            .into_iter()
-            .collect();
-        if legacy_secret {
-            names.extend(resolver.get_kubernetes_legacy_secret_name());
-        }
-        names
+    /// Registry secrets maintained for a platform, by name: its own one, built
+    /// from its registry, plus the legacy one shared by all platforms when it is
+    /// in charge of it, built from the registry given for it.
+    fn registry_secrets(
+        registry: Option<Registry>,
+        platform: &str,
+        legacy_registry: Option<Registry>,
+    ) -> Vec<(String, BTreeMap<String, String>)> {
+        let resolver = Image::new(registry);
+        let legacy_resolver = Image::new(legacy_registry);
+        [
+            (
+                resolver.get_kubernetes_secret_name(platform),
+                resolver.get_kubernetes_registry_secret(),
+            ),
+            (
+                legacy_resolver.get_kubernetes_legacy_secret_name(),
+                legacy_resolver.get_kubernetes_registry_secret(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(name, secret)| Some((name?, secret?)))
+        .collect()
     }
 
     fn get_image_pull_policy(&self) -> String {
@@ -814,26 +824,72 @@ mod tests {
         }
     }
 
+    /// Registry secrets maintained for a platform, as `name:username`.
+    fn registry_secret_users(
+        registry: Option<Registry>,
+        platform: &str,
+        legacy_registry: Option<Registry>,
+    ) -> Vec<String> {
+        KubeOrchestrator::registry_secrets(registry, platform, legacy_registry)
+            .into_iter()
+            .map(|(name, secret)| {
+                let config: serde_json::Value =
+                    serde_json::from_str(&secret[".dockerconfigjson"]).unwrap();
+                let auths = config["auths"].as_object().unwrap();
+                let username = auths.values().next().unwrap()["username"].as_str().unwrap();
+                format!("{name}:{username}")
+            })
+            .collect()
+    }
+
+    fn openaev_registry() -> Registry {
+        Registry {
+            server: Some("aev.example.com".to_string()),
+            username: Some("aev-user".to_string()),
+            password: Some("aev-password".to_string()),
+            email: None,
+        }
+    }
+
     /// Platforms deployed in the same namespace may use the same registry
     /// server with different credentials: each one maintains its own secret.
     /// The platform in charge of the legacy secret shared by all platforms,
     /// still referenced by the deployments created before, also maintains it.
     #[test]
     fn registry_secrets_are_named_after_the_platform() {
-        let resolver = Image::new(Some(registry_with_credentials()));
         assert_eq!(
-            KubeOrchestrator::registry_secret_names(&resolver, "opencti", true),
+            registry_secret_users(
+                Some(registry_with_credentials()),
+                "opencti",
+                Some(registry_with_credentials())
+            ),
             vec![
-                "registry-example-com-5000-opencti".to_string(),
-                "registry-example-com-5000".to_string(),
+                "registry-example-com-5000-opencti:user",
+                "registry-example-com-5000:user",
             ]
         );
         assert_eq!(
-            KubeOrchestrator::registry_secret_names(&resolver, "openaev", false),
-            vec!["registry-example-com-5000-openaev".to_string()]
+            registry_secret_users(Some(registry_with_credentials()), "openaev", None),
+            vec!["registry-example-com-5000-openaev:user"]
         );
-        assert!(
-            KubeOrchestrator::registry_secret_names(&Image::new(None), "opencti", true).is_empty()
+        assert!(KubeOrchestrator::registry_secrets(None, "opencti", None).is_empty());
+    }
+
+    /// The deployments created before reference the legacy secret with images
+    /// of the OpenCTI registry: a platform with another registry in charge of
+    /// it must keep it with the OpenCTI one, not create one for its own.
+    #[test]
+    fn legacy_registry_secret_is_built_from_the_legacy_registry() {
+        assert_eq!(
+            registry_secret_users(
+                Some(openaev_registry()),
+                "openaev",
+                Some(registry_with_credentials())
+            ),
+            vec![
+                "aev-example-com-openaev:aev-user",
+                "registry-example-com-5000:user",
+            ]
         );
     }
 
