@@ -183,7 +183,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
         let settings = crate::settings();
         let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
+        let resolver = Image::new(registry_config, settings.manager.image_tag_suffix.clone());
         let auth = resolver.get_credentials();
         let auth_header =
             auth.map(|c| general_purpose::STANDARD.encode(serde_json::to_string(&c).unwrap()));

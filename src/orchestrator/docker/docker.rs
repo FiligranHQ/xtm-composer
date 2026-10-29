@@ -425,7 +425,10 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        let resolver = Image::new(self.registry.clone());
+        let resolver = Image::new(
+            self.registry.clone(),
+            crate::settings().manager.image_tag_suffix.clone(),
+        );
         let auth = resolver.get_credentials();
         let image = resolver.build_name(connector.image.clone());
 
