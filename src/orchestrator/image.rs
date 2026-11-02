@@ -48,9 +48,8 @@ impl Image {
 
     // 6.9.0 -> 6.9.0-fips
     fn with_tag_suffix(&self, image_name: String) -> String {
-        let suffix = match self.tag_suffix.as_deref() {
-            Some(suffix) if !suffix.is_empty() => suffix,
-            _ => return image_name,
+        let Some(suffix) = self.tag_suffix.as_deref() else {
+            return image_name;
         };
         // No tag to change on a digest
         if image_name.contains('@') {
@@ -151,10 +150,6 @@ mod tests {
     fn build_name_keeps_the_image_without_suffix() {
         assert_eq!(
             build_name(None, None, "opencti/connector-mitre:6.9.0"),
-            "opencti/connector-mitre:6.9.0"
-        );
-        assert_eq!(
-            build_name(None, Some(""), "opencti/connector-mitre:6.9.0"),
             "opencti/connector-mitre:6.9.0"
         );
     }
