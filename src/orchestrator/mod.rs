@@ -62,6 +62,16 @@ pub struct OrchestratorContainer {
     pub envs: HashMap<String, String>,
     pub restart_count: u32,
     pub started_at: Option<String>,
+    /// Set when the orchestrator cannot pull the image of the running deployment
+    #[serde(skip)]
+    pub image_pull_error: Option<ImagePullError>,
+}
+
+/// An image that cannot be pulled, with the error of the engine
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImagePullError {
+    pub image: String,
+    pub error: String,
 }
 
 impl OrchestratorContainer {
@@ -185,6 +195,13 @@ pub trait Orchestrator {
 
     async fn remove(&self, container: &OrchestratorContainer) -> ();
 
+    /// Pull the image of the workload, called before deploy and refresh so that a
+    /// missing image never replaces a running deployment. Orchestrators whose nodes
+    /// pull the image themselves keep the default.
+    async fn pull(&self, _workload: &ApiWorkload) -> Result<(), ImagePullError> {
+        Ok(())
+    }
+
     async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer>;
 
     async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer>;
@@ -270,6 +287,7 @@ mod tests {
                 .collect(),
             restart_count: 0,
             started_at: None,
+            image_pull_error: None,
         }
     }
 

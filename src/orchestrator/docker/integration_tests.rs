@@ -198,6 +198,7 @@ async fn workload_lifecycle_with_private_registry_credentials() {
     let mut workload = workload("lifecycle");
     remove_leftover(&orchestrator, &workload).await;
 
+    orchestrator.pull(&workload).await.expect("image pulled");
     let deployed = orchestrator
         .deploy(&workload)
         .await
@@ -279,18 +280,20 @@ async fn deploy_fails_with_wrong_registry_credentials() {
     let workload = workload("bad-credentials");
     remove_leftover(&orchestrator, &workload).await;
 
-    assert!(orchestrator.deploy(&workload).await.is_none());
-    assert!(orchestrator.get(&workload).await.is_none());
-
-    let resolver = Image::new(daemon.registry.clone());
     let error = orchestrator
-        .pull_image(
-            &resolver.build_name(workload.image.clone()),
-            resolver.get_credentials(),
-        )
+        .pull(&workload)
         .await
         .expect_err("the pull must be rejected");
-    assert!(error.to_lowercase().contains("auth"), "{}", error);
+    assert_eq!(
+        error.image,
+        Image::new(daemon.registry.clone()).build_name(workload.image.clone())
+    );
+    assert!(
+        error.error.to_lowercase().contains("auth"),
+        "{}",
+        error.error
+    );
+    assert!(orchestrator.get(&workload).await.is_none());
 }
 
 /// Why pulls with credentials do not go through bollard. Once this fails, bollard
@@ -333,6 +336,7 @@ async fn delegated_registry_authentication_to_the_podman_host() {
     let workload = workload("delegated-auth");
     remove_leftover(&orchestrator, &workload).await;
 
+    orchestrator.pull(&workload).await.expect("image pulled");
     orchestrator
         .deploy(&workload)
         .await

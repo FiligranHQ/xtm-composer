@@ -5,7 +5,8 @@ use crate::orchestrator::image::Image;
 use crate::orchestrator::swarm::SwarmOrchestrator;
 use crate::orchestrator::ensure_proxy_ca_file;
 use crate::orchestrator::{
-    dedup_containers, manager_label_filters, Orchestrator, OrchestratorContainer,
+    dedup_containers, manager_label_filters, ImagePullError, Orchestrator,
+    OrchestratorContainer,
 };
 use async_trait::async_trait;
 use bollard::auth::DockerCredentials;
@@ -104,6 +105,7 @@ impl SwarmOrchestrator {
                         labels,
                         restart_count: 0,
                         started_at: None,
+                        image_pull_error: None,
                     })
                 })
                 .collect(),
@@ -158,6 +160,7 @@ impl Orchestrator for SwarmOrchestrator {
                     envs,
                     restart_count,
                     started_at,
+                    image_pull_error: None,
                 })
             }
             Err(_) => {
@@ -269,20 +272,18 @@ impl Orchestrator for SwarmOrchestrator {
         self.deploy(workload).await
     }
 
-    async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+    async fn pull(&self, workload: &ApiWorkload) -> Result<(), ImagePullError> {
         let resolver = Image::new(self.registry.clone());
         let auth = resolver.get_credentials();
         let image = resolver.build_name(workload.image.clone());
-
-        let pull_result = self
-            .docker
+        self.docker
             .create_image(
                 Some(CreateImageOptions {
                     from_image: Some(image.clone()),
                     ..Default::default()
                 }),
                 None,
-                auth.clone(),
+                auth,
             )
             .try_for_each(|info| {
                 info!(
@@ -293,232 +294,220 @@ impl Orchestrator for SwarmOrchestrator {
                 );
                 future::ok(())
             })
-            .await;
+            .await
+            .map_err(|err| ImagePullError {
+                image: image.clone(),
+                error: err.to_string(),
+            })
+    }
 
-        match pull_result {
-            Ok(_) => {
-                let container_env_variables: Vec<String> = workload
-                    .container_envs()
-                    .into_iter()
-                    .map(|config| format!("{}={}", config.key, config.value))
-                    .collect();
-                let labels = self.labels(workload);
-                let swarm_opts = &self.config;
+    async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+        let resolver = Image::new(self.registry.clone());
+        let auth = resolver.get_credentials();
+        let image = resolver.build_name(workload.image.clone());
 
-                // Build container spec with all swarm options
-                let mut container_spec = TaskSpecContainerSpec {
-                    image: Some(image.clone()),
-                    env: Some(container_env_variables),
-                    ..Default::default()
-                };
+        let container_env_variables: Vec<String> = workload
+            .container_envs()
+            .into_iter()
+            .map(|config| format!("{}={}", config.key, config.value))
+            .collect();
+        let labels = self.labels(workload);
+        let swarm_opts = &self.config;
 
-                if let Some(extra_hosts) = &swarm_opts.extra_hosts {
-                    container_spec.hosts = Some(extra_hosts.clone());
-                }
-                if swarm_opts.dns.is_some() || swarm_opts.dns_search.is_some() {
-                    container_spec.dns_config = Some(TaskSpecContainerSpecDnsConfig {
-                        nameservers: swarm_opts.dns.clone(),
-                        search: swarm_opts.dns_search.clone(),
-                        options: None,
-                    });
-                }
-                if let Some(cap_add) = &swarm_opts.cap_add {
-                    container_spec.capability_add = Some(cap_add.clone());
-                }
-                if let Some(cap_drop) = &swarm_opts.cap_drop {
-                    container_spec.capability_drop = Some(cap_drop.clone());
-                }
-                if let Some(sysctls) = &swarm_opts.sysctls {
-                    container_spec.sysctls = Some(sysctls.clone());
-                }
-                if let Some(ulimits) = &swarm_opts.ulimits {
-                    let ulimits_vec: Vec<ResourcesUlimits> = ulimits
-                        .iter()
-                        .filter_map(|ulimit_map| {
-                            if let (Some(name), Some(soft), Some(hard)) = (
-                                ulimit_map.get("name").and_then(|v| v.as_str()),
-                                ulimit_map.get("soft").and_then(|v| v.as_i64()),
-                                ulimit_map.get("hard").and_then(|v| v.as_i64()),
-                            ) {
-                                Some(ResourcesUlimits {
-                                    name: Some(name.to_string()),
-                                    soft: Some(soft),
-                                    hard: Some(hard),
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if !ulimits_vec.is_empty() {
-                        container_spec.ulimits = Some(ulimits_vec);
-                    }
-                }
-                if let Some(hostname) = &swarm_opts.hostname {
-                    container_spec.hostname = Some(hostname.clone());
-                }
-                if let Some(user) = &swarm_opts.user {
-                    container_spec.user = Some(user.clone());
-                }
-                if let Some(read_only) = swarm_opts.read_only {
-                    container_spec.read_only = Some(read_only);
-                }
-                if let Some(init) = swarm_opts.init {
-                    container_spec.init = Some(init);
-                }
-                if let Some(stop_grace_period) = swarm_opts.stop_grace_period {
-                    container_spec.stop_grace_period = Some(stop_grace_period);
-                }
+        // Build container spec with all swarm options
+        let mut container_spec = TaskSpecContainerSpec {
+            image: Some(image.clone()),
+            env: Some(container_env_variables),
+            ..Default::default()
+        };
 
-                if let Some(proxy_ca_host_path) = ensure_proxy_ca_file(workload) {
-                    let mut mounts = container_spec.mounts.unwrap_or_default();
-                    mounts.push(Mount {
-                        typ: Some(MountType::BIND),
-                        source: Some(proxy_ca_host_path),
-                        target: Some(PROXY_CA_CERT_MOUNT_PATH.to_string()),
-                        read_only: Some(true),
-                        ..Default::default()
-                    });
-                    container_spec.mounts = Some(mounts);
-                }
-
-                // Build network attachments
-                let networks = swarm_opts.network.as_ref().map(|net| {
-                    vec![NetworkAttachmentConfig {
-                        target: Some(net.clone()),
-                        ..Default::default()
-                    }]
-                });
-
-                // Build resource limits and reservations
-                let resources = swarm_opts.resources.as_ref().map(|res| {
-                    let limits = if res.cpu_limit.is_some() || res.memory_limit.is_some() {
-                        Some(Limit {
-                            nano_cpus: res.cpu_limit,
-                            memory_bytes: res.memory_limit,
-                            ..Default::default()
+        if let Some(extra_hosts) = &swarm_opts.extra_hosts {
+            container_spec.hosts = Some(extra_hosts.clone());
+        }
+        if swarm_opts.dns.is_some() || swarm_opts.dns_search.is_some() {
+            container_spec.dns_config = Some(TaskSpecContainerSpecDnsConfig {
+                nameservers: swarm_opts.dns.clone(),
+                search: swarm_opts.dns_search.clone(),
+                options: None,
+            });
+        }
+        if let Some(cap_add) = &swarm_opts.cap_add {
+            container_spec.capability_add = Some(cap_add.clone());
+        }
+        if let Some(cap_drop) = &swarm_opts.cap_drop {
+            container_spec.capability_drop = Some(cap_drop.clone());
+        }
+        if let Some(sysctls) = &swarm_opts.sysctls {
+            container_spec.sysctls = Some(sysctls.clone());
+        }
+        if let Some(ulimits) = &swarm_opts.ulimits {
+            let ulimits_vec: Vec<ResourcesUlimits> = ulimits
+                .iter()
+                .filter_map(|ulimit_map| {
+                    if let (Some(name), Some(soft), Some(hard)) = (
+                        ulimit_map.get("name").and_then(|v| v.as_str()),
+                        ulimit_map.get("soft").and_then(|v| v.as_i64()),
+                        ulimit_map.get("hard").and_then(|v| v.as_i64()),
+                    ) {
+                        Some(ResourcesUlimits {
+                            name: Some(name.to_string()),
+                            soft: Some(soft),
+                            hard: Some(hard),
                         })
                     } else {
                         None
-                    };
-                    let reservations =
-                        if res.cpu_reservation.is_some() || res.memory_reservation.is_some() {
-                            Some(ResourceObject {
-                                nano_cpus: res.cpu_reservation,
-                                memory_bytes: res.memory_reservation,
-                                ..Default::default()
-                            })
-                        } else {
-                            None
-                        };
-                    TaskSpecResources {
-                        limits,
-                        reservations,
-                        memory_swappiness: None,
-                        swap_bytes: None,
                     }
-                });
-
-                // Build placement constraints and preferences
-                let placement = if swarm_opts.placement_constraints.is_some()
-                    || swarm_opts.placement_preferences.is_some()
-                {
-                    let preferences =
-                        swarm_opts
-                            .placement_preferences
-                            .as_ref()
-                            .map(|prefs| {
-                                prefs
-                                    .iter()
-                                    .map(|p| TaskSpecPlacementPreferences {
-                                        spread: Some(TaskSpecPlacementSpread {
-                                            spread_descriptor: Some(p.clone()),
-                                        }),
-                                    })
-                                    .collect()
-                            });
-                    Some(TaskSpecPlacement {
-                        constraints: swarm_opts.placement_constraints.clone(),
-                        preferences,
-                        ..Default::default()
-                    })
-                } else {
-                    None
-                };
-
-                // Build restart policy
-                let restart_policy = if swarm_opts.restart_condition.is_some()
-                    || swarm_opts.restart_delay.is_some()
-                    || swarm_opts.restart_max_attempts.is_some()
-                {
-                    let condition =
-                        swarm_opts
-                            .restart_condition
-                            .as_ref()
-                            .map(|c| match c.as_str() {
-                                "none" => TaskSpecRestartPolicyConditionEnum::NONE,
-                                "on-failure" => {
-                                    TaskSpecRestartPolicyConditionEnum::ON_FAILURE
-                                }
-                                _ => TaskSpecRestartPolicyConditionEnum::ANY,
-                            });
-                    Some(TaskSpecRestartPolicy {
-                        condition,
-                        delay: swarm_opts.restart_delay,
-                        max_attempts: swarm_opts.restart_max_attempts,
-                        ..Default::default()
-                    })
-                } else {
-                    None
-                };
-
-                let is_starting = workload.requested_status.clone().eq("starting");
-                let replicas = if is_starting { 1 } else { 0 };
-
-                let service_spec = ServiceSpec {
-                    name: Some(workload.container_name()),
-                    labels: Some(labels),
-                    task_template: Some(TaskSpec {
-                        container_spec: Some(container_spec),
-                        networks,
-                        resources,
-                        placement,
-                        restart_policy,
-                        ..Default::default()
-                    }),
-                    mode: Some(ServiceSpecMode {
-                        replicated: Some(ServiceSpecModeReplicated {
-                            replicas: Some(replicas),
-                        }),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                };
-
-                match self.docker.create_service(service_spec, auth).await {
-                    Ok(response) => {
-                        debug!(id = ?response.id, "Swarm service created");
-                    }
-                    Err(err) => {
-                        error!(
-                            error = err.to_string(),
-                            "Error creating swarm service"
-                        );
-                        return None;
-                    }
-                }
-
-                self.get(workload).await
-            }
-            Err(e) => {
-                error!(
-                    image = image,
-                    error = e.to_string(),
-                    "Error fetching container image"
-                );
-                None
+                })
+                .collect();
+            if !ulimits_vec.is_empty() {
+                container_spec.ulimits = Some(ulimits_vec);
             }
         }
+        if let Some(hostname) = &swarm_opts.hostname {
+            container_spec.hostname = Some(hostname.clone());
+        }
+        if let Some(user) = &swarm_opts.user {
+            container_spec.user = Some(user.clone());
+        }
+        if let Some(read_only) = swarm_opts.read_only {
+            container_spec.read_only = Some(read_only);
+        }
+        if let Some(init) = swarm_opts.init {
+            container_spec.init = Some(init);
+        }
+        if let Some(stop_grace_period) = swarm_opts.stop_grace_period {
+            container_spec.stop_grace_period = Some(stop_grace_period);
+        }
+
+        if let Some(proxy_ca_host_path) = ensure_proxy_ca_file(workload) {
+            let mut mounts = container_spec.mounts.unwrap_or_default();
+            mounts.push(Mount {
+                typ: Some(MountType::BIND),
+                source: Some(proxy_ca_host_path),
+                target: Some(PROXY_CA_CERT_MOUNT_PATH.to_string()),
+                read_only: Some(true),
+                ..Default::default()
+            });
+            container_spec.mounts = Some(mounts);
+        }
+
+        // Build network attachments
+        let networks = swarm_opts.network.as_ref().map(|net| {
+            vec![NetworkAttachmentConfig {
+                target: Some(net.clone()),
+                ..Default::default()
+            }]
+        });
+
+        // Build resource limits and reservations
+        let resources = swarm_opts.resources.as_ref().map(|res| {
+            let limits = if res.cpu_limit.is_some() || res.memory_limit.is_some() {
+                Some(Limit {
+                    nano_cpus: res.cpu_limit,
+                    memory_bytes: res.memory_limit,
+                    ..Default::default()
+                })
+            } else {
+                None
+            };
+            let reservations = if res.cpu_reservation.is_some() || res.memory_reservation.is_some()
+            {
+                Some(ResourceObject {
+                    nano_cpus: res.cpu_reservation,
+                    memory_bytes: res.memory_reservation,
+                    ..Default::default()
+                })
+            } else {
+                None
+            };
+            TaskSpecResources {
+                limits,
+                reservations,
+                memory_swappiness: None,
+                swap_bytes: None,
+            }
+        });
+
+        // Build placement constraints and preferences
+        let placement = if swarm_opts.placement_constraints.is_some()
+            || swarm_opts.placement_preferences.is_some()
+        {
+            let preferences = swarm_opts.placement_preferences.as_ref().map(|prefs| {
+                prefs
+                    .iter()
+                    .map(|p| TaskSpecPlacementPreferences {
+                        spread: Some(TaskSpecPlacementSpread {
+                            spread_descriptor: Some(p.clone()),
+                        }),
+                    })
+                    .collect()
+            });
+            Some(TaskSpecPlacement {
+                constraints: swarm_opts.placement_constraints.clone(),
+                preferences,
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        // Build restart policy
+        let restart_policy = if swarm_opts.restart_condition.is_some()
+            || swarm_opts.restart_delay.is_some()
+            || swarm_opts.restart_max_attempts.is_some()
+        {
+            let condition = swarm_opts
+                .restart_condition
+                .as_ref()
+                .map(|c| match c.as_str() {
+                    "none" => TaskSpecRestartPolicyConditionEnum::NONE,
+                    "on-failure" => TaskSpecRestartPolicyConditionEnum::ON_FAILURE,
+                    _ => TaskSpecRestartPolicyConditionEnum::ANY,
+                });
+            Some(TaskSpecRestartPolicy {
+                condition,
+                delay: swarm_opts.restart_delay,
+                max_attempts: swarm_opts.restart_max_attempts,
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        let is_starting = workload.requested_status.clone().eq("starting");
+        let replicas = if is_starting { 1 } else { 0 };
+
+        let service_spec = ServiceSpec {
+            name: Some(workload.container_name()),
+            labels: Some(labels),
+            task_template: Some(TaskSpec {
+                container_spec: Some(container_spec),
+                networks,
+                resources,
+                placement,
+                restart_policy,
+                ..Default::default()
+            }),
+            mode: Some(ServiceSpecMode {
+                replicated: Some(ServiceSpecModeReplicated {
+                    replicas: Some(replicas),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        match self.docker.create_service(service_spec, auth).await {
+            Ok(response) => {
+                debug!(id = ?response.id, "Swarm service created");
+            }
+            Err(err) => {
+                error!(error = err.to_string(), "Error creating swarm service");
+                return None;
+            }
+        }
+
+        self.get(workload).await
     }
 
     async fn logs(
