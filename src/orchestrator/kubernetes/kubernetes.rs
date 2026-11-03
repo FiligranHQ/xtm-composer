@@ -1,6 +1,6 @@
-use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
-use crate::config::settings::Kubernetes;
+use crate::config::settings::{Kubernetes, Registry};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{
@@ -24,17 +24,24 @@ use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, error, info, warn};
 
 impl KubeOrchestrator {
-    pub async fn new(config: Kubernetes) -> Self {
+    pub async fn new(
+        config: Kubernetes,
+        registry: Option<Registry>,
+        platform: &'static str,
+        legacy_registry: Option<Registry>,
+    ) -> Self {
         let client = Client::try_default().await.unwrap();
         let pods: Api<Pod> = Api::default_namespaced(client.clone());
         let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
         let secrets: Api<Secret> = Api::default_namespaced(client.clone());
-        Self::register_secret(&secrets).await;
+        Self::register_secret(&secrets, registry.clone(), platform, legacy_registry).await;
         Self {
             pods,
             deployments,
             secrets,
             config,
+            registry,
+            platform,
         }
     }
 
@@ -43,18 +50,26 @@ impl KubeOrchestrator {
     }
 
     // Validate and return image pull policy
-    async fn register_secret(secrets: &Api<Secret>) {
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
-        let registry_secret = resolver.get_kubernetes_registry_secret();
-        if registry_secret.is_some() {
-            let secret_name = resolver.get_kubernetes_secret_name().unwrap();
+    async fn register_secret(
+        secrets: &Api<Secret>,
+        registry: Option<Registry>,
+        platform: &str,
+        legacy_registry: Option<Registry>,
+    ) {
+        for (secret_name, registry_secret) in
+            Self::registry_secrets(registry, platform, legacy_registry)
+        {
             // region Start by removing the secret if it already exists
             let params = &DeleteParams::default();
             match secrets.delete(secret_name.as_str(), params).await {
-                Ok(_) => info!("Kubernetes registry secret deleted"),
-                Err(_) => info!("Kubernetes registry doesnt exists"),
+                Ok(_) => info!(
+                    secret_name = secret_name,
+                    "Kubernetes registry secret deleted"
+                ),
+                Err(_) => info!(
+                    secret_name = secret_name,
+                    "Kubernetes registry doesnt exists"
+                ),
             }
             // endregion
             // region Then initialize the secret
@@ -63,12 +78,15 @@ impl KubeOrchestrator {
                     name: Some(secret_name.clone()),
                     ..Default::default()
                 },
-                string_data: registry_secret,
+                string_data: Some(registry_secret),
                 type_: Some("kubernetes.io/dockerconfigjson".to_string()),
                 ..Default::default()
             };
             match secrets.create(&PostParams::default(), &kube_secret).await {
-                Ok(_) => info!("Kubernetes registry secret created"),
+                Ok(_) => info!(
+                    secret_name = secret_name,
+                    "Kubernetes registry secret created"
+                ),
                 Err(err) => error!(
                     error = err.to_string(),
                     secret_name = secret_name,
@@ -77,6 +95,31 @@ impl KubeOrchestrator {
             }
             // endregion
         }
+    }
+
+    /// Registry secrets maintained for a platform, by name: its own one, built
+    /// from its registry, plus the legacy one shared by all platforms when it is
+    /// in charge of it, built from the registry given for it.
+    fn registry_secrets(
+        registry: Option<Registry>,
+        platform: &str,
+        legacy_registry: Option<Registry>,
+    ) -> Vec<(String, BTreeMap<String, String>)> {
+        let resolver = Image::new(registry);
+        let legacy_resolver = Image::new(legacy_registry);
+        [
+            (
+                resolver.get_kubernetes_secret_name(platform),
+                resolver.get_kubernetes_registry_secret(),
+            ),
+            (
+                legacy_resolver.get_kubernetes_legacy_secret_name(),
+                legacy_resolver.get_kubernetes_registry_secret(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(name, secret)| Some((name?, secret?)))
+        .collect()
     }
 
     fn get_image_pull_policy(&self) -> String {
@@ -104,9 +147,9 @@ impl KubeOrchestrator {
         base
     }
 
-    async fn upsert_proxy_ca_secret(&self, connector: &ApiConnector) -> Option<String> {
-        let cert = connector.proxy_ca_bundle()?;
-        let secret_name = Self::proxy_ca_secret_name(&connector.container_name());
+    async fn upsert_proxy_ca_secret(&self, workload: &ApiWorkload) -> Option<String> {
+        let cert = workload.proxy_ca_bundle()?;
+        let secret_name = Self::proxy_ca_secret_name(&workload.container_name());
 
         let _ = self
             .secrets
@@ -131,7 +174,7 @@ impl KubeOrchestrator {
             Ok(_) => Some(secret_name),
             Err(err) => {
                 error!(
-                    connector_id = connector.id,
+                    connector_id = workload.id,
                     error = err.to_string(),
                     "Failed to create proxy CA secret"
                 );
@@ -140,8 +183,8 @@ impl KubeOrchestrator {
         }
     }
 
-    pub fn container_envs(&self, connector: &ApiConnector) -> Vec<EnvVar> {
-        let env_vars = connector.container_envs();
+    pub fn container_envs(&self, workload: &ApiWorkload) -> Vec<EnvVar> {
+        let env_vars = workload.container_envs();
         env_vars
             .iter()
             .map(|config| EnvVar {
@@ -156,7 +199,7 @@ impl KubeOrchestrator {
         labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
-    async fn set_deployment_scale(&self, connector: &ApiConnector, scale: i32) {
+    async fn set_deployment_scale(&self, workload: &ApiWorkload, scale: i32) {
         let deployment_patch = Deployment {
             spec: Some(DeploymentSpec {
                 replicas: Some(scale),
@@ -165,10 +208,10 @@ impl KubeOrchestrator {
             ..Default::default()
         };
         let patch = Patch::Merge(&deployment_patch);
-        let name = connector.container_name();
+        let name = workload.container_name();
         // The deployment may have disappeared within the same cycle (e.g. deleted
         // by the refresh() self-heal): log and move on instead of panicking, which
-        // would kill the orchestration task for every connector.
+        // would kill the orchestration task for every workload.
         if let Err(err) = self
             .deployments
             .patch(name.as_str(), &PatchParams::default(), &patch)
@@ -203,10 +246,10 @@ impl KubeOrchestrator {
         }
     }
 
-    async fn get_deployment_pod(&self, connector_id: String) -> Option<Pod> {
+    async fn get_deployment_pod(&self, workload_id: String) -> Option<Pod> {
         // Pods deployed by older composer versions only carry the legacy label
         for label_key in [LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID] {
-            let lp = &ListParams::default().labels(&format!("{}={}", label_key, connector_id));
+            let lp = &ListParams::default().labels(&format!("{}={}", label_key, workload_id));
             match self.pods.list(lp).await {
                 Ok(pods) => {
                     if let Some(pod) = pods.items.into_iter().next() {
@@ -224,24 +267,22 @@ impl KubeOrchestrator {
 
     pub fn build_configuration(
         &self,
-        connector: &ApiConnector,
+        workload: &ApiWorkload,
         labels: HashMap<String, String>,
         proxy_ca_secret_name: Option<String>,
     ) -> Deployment {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
-        let pod_env = self.container_envs(connector);
-        let is_starting = &connector.requested_status == "starting";
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
+        let pod_env = self.container_envs(workload);
+        let is_starting = &workload.requested_status == "starting";
+        let resolver = Image::new(self.registry.clone());
         let auth = resolver.get_credentials();
-        let image = resolver.build_name(connector.image.clone());
+        let image = resolver.build_name(workload.image.clone());
         let selector = LabelSelector {
             match_labels: Some(deployment_labels.clone()),
             ..Default::default()
         };
         let mut container = Container {
-            name: connector.container_name(),
+            name: workload.container_name(),
             image: Some(image.clone()),
             env: Some(pod_env),
             image_pull_policy: Some(self.get_image_pull_policy()),
@@ -269,11 +310,11 @@ impl KubeOrchestrator {
 
         let target_deployment = Deployment {
             metadata: ObjectMeta {
-                name: Some(connector.container_name()),
+                name: Some(workload.container_name()),
                 labels: Some(deployment_labels.clone()),
                 // Specific case to let the hash config on top level
                 annotations: Some(BTreeMap::from(config_hash_entries(
-                    &connector.contract_hash,
+                    &workload.contract_hash,
                 ))),
                 ..Default::default()
             },
@@ -288,7 +329,9 @@ impl KubeOrchestrator {
                     spec: Some(PodSpec {
                         image_pull_secrets: auth.map(|_| {
                             vec![LocalObjectReference {
-                                name: resolver.get_kubernetes_secret_name().unwrap(),
+                                name: resolver
+                                    .get_kubernetes_secret_name(self.platform)
+                                    .unwrap(),
                             }]
                         }),
                         containers: vec![container],
@@ -366,10 +409,10 @@ impl KubeOrchestrator {
 
 #[async_trait]
 impl Orchestrator for KubeOrchestrator {
-    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn get(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
         let deployment = match self
             .deployments
-            .get(connector.container_name().as_str())
+            .get(workload.container_name().as_str())
             .await
         {
             Ok(dep) => dep,
@@ -382,7 +425,7 @@ impl Orchestrator for KubeOrchestrator {
         let mut container = KubeOrchestrator::from_deployment(deployment);
 
         // Enrich container with pod information
-        if let Some(pod) = self.get_deployment_pod(connector.id.clone()).await {
+        if let Some(pod) = self.get_deployment_pod(workload.id.clone()).await {
             self.enrich_container_from_pod(&mut container, pod);
         }
 
@@ -404,13 +447,13 @@ impl Orchestrator for KubeOrchestrator {
         dedup_containers(containers)
     }
 
-    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
-        connector.display_env_variables();
-        self.set_deployment_scale(connector, 1).await;
+    async fn start(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
+        workload.display_env_variables();
+        self.set_deployment_scale(workload, 1).await;
     }
 
-    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
-        self.set_deployment_scale(connector, 0).await;
+    async fn stop(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
+        self.set_deployment_scale(workload, 0).await;
     }
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
@@ -436,13 +479,13 @@ impl Orchestrator for KubeOrchestrator {
             .await;
     }
 
-    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        let labels = self.labels(connector);
-        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(connector).await;
-        let deployment_patch = self.build_configuration(connector, labels, proxy_ca_secret_name);
+    async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+        let labels = self.labels(workload);
+        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(workload).await;
+        let deployment_patch = self.build_configuration(workload, labels, proxy_ca_secret_name);
         let patch_value = Self::build_refresh_patch(&deployment_patch);
         let patch = Patch::Merge(&patch_value);
-        let name = connector.container_name();
+        let name = workload.container_name();
         let deployment_result = self
             .deployments
             .patch(name.as_str(), &PatchParams::default(), &patch)
@@ -492,11 +535,11 @@ impl Orchestrator for KubeOrchestrator {
         }
     }
 
-    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        let labels = self.labels(connector);
-        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(connector).await;
+    async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+        let labels = self.labels(workload);
+        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(workload).await;
         let deployment_creation =
-            self.build_configuration(connector, labels, proxy_ca_secret_name);
+            self.build_configuration(workload, labels, proxy_ca_secret_name);
         match self
             .deployments
             .create(&PostParams::default(), &deployment_creation)
@@ -517,9 +560,9 @@ impl Orchestrator for KubeOrchestrator {
     async fn logs(
         &self,
         _container: &OrchestratorContainer,
-        connector: &ApiConnector,
+        workload: &ApiWorkload,
     ) -> Option<Vec<String>> {
-        let deployment_pod = self.get_deployment_pod(connector.id.clone()).await;
+        let deployment_pod = self.get_deployment_pod(workload.id.clone()).await;
         match deployment_pod {
             Some(pod) => {
                 let lp = LogParams::default();
@@ -537,13 +580,13 @@ impl Orchestrator for KubeOrchestrator {
         }
     }
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
+    fn state_converter(&self, container: &OrchestratorContainer) -> WorkloadStatus {
         match container.state.as_str() {
-            "running" => ConnectorStatus::Started,
-            "waiting" => ConnectorStatus::Started,
-            "exited" => ConnectorStatus::Stopped,
-            "terminated" => ConnectorStatus::Stopped,
-            _ => ConnectorStatus::Stopped,
+            "running" => WorkloadStatus::Started,
+            "waiting" => WorkloadStatus::Started,
+            "exited" => WorkloadStatus::Stopped,
+            "terminated" => WorkloadStatus::Stopped,
+            _ => WorkloadStatus::Stopped,
         }
     }
 }
@@ -599,6 +642,18 @@ mod tests {
     }
 
     fn orchestrator(url: &str) -> KubeOrchestrator {
+        orchestrator_with_registry(url, None)
+    }
+
+    fn orchestrator_with_registry(url: &str, registry: Option<Registry>) -> KubeOrchestrator {
+        orchestrator_for_platform(url, registry, "opencti")
+    }
+
+    fn orchestrator_for_platform(
+        url: &str,
+        registry: Option<Registry>,
+        platform: &'static str,
+    ) -> KubeOrchestrator {
         // Mirror main(): kube builds a rustls connector even for plain http.
         let _ = rustls::crypto::CryptoProvider::install_default(
             rustls::crypto::aws_lc_rs::default_provider(),
@@ -614,11 +669,13 @@ mod tests {
                 image_pull_policy: None,
                 image_resources: None,
             },
+            registry,
+            platform,
         }
     }
 
-    fn connector() -> ApiConnector {
-        ApiConnector {
+    fn workload() -> ApiWorkload {
+        ApiWorkload {
             id: "ab2fb502".to_string(),
             platform: "opencti".to_string(),
             name: "importfilestix".to_string(),
@@ -631,10 +688,10 @@ mod tests {
         }
     }
 
-    fn container(connector: &ApiConnector) -> OrchestratorContainer {
+    fn container(workload: &ApiWorkload) -> OrchestratorContainer {
         OrchestratorContainer {
             id: "uid".to_string(),
-            name: connector.container_name(),
+            name: workload.container_name(),
             state: "running".to_string(),
             labels: HashMap::new(),
             envs: HashMap::new(),
@@ -665,10 +722,10 @@ mod tests {
             r#"{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"importfilestix"}}"#,
         )
         .await;
-        let connector = connector();
+        let workload = workload();
 
         orchestrator(&url)
-            .stop(&container(&connector), &connector)
+            .stop(&container(&workload), &workload)
             .await;
 
         let request = request.lock().unwrap().clone();
@@ -691,7 +748,7 @@ mod tests {
             r#"{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"deployments.apps \"importfilestix\" not found","reason":"NotFound","code":404}"#,
         )
         .await;
-        let connector = connector();
+        let workload = workload();
         let logs = LogBuffer::default();
         let writer = logs.clone();
         let subscriber = tracing_subscriber::fmt()
@@ -701,7 +758,7 @@ mod tests {
         let _guard = tracing::subscriber::set_default(subscriber);
 
         orchestrator(&url)
-            .stop(&container(&connector), &connector)
+            .stop(&container(&workload), &workload)
             .await;
 
         let logs = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
@@ -716,12 +773,12 @@ mod tests {
     /// keys (#136). The selector is immutable: it must be complete at creation.
     #[tokio::test]
     async fn deployment_carries_current_and_legacy_labels_and_hash() {
-        let connector = connector();
-        let labels = build_labels("test-manager", &connector);
+        let workload = workload();
+        let labels = build_labels("test-manager", &workload);
         let expected: BTreeMap<String, String> = labels.clone().into_iter().collect();
 
         let deployment =
-            orchestrator("http://127.0.0.1:1").build_configuration(&connector, labels, None);
+            orchestrator("http://127.0.0.1:1").build_configuration(&workload, labels, None);
 
         assert_eq!(expected.len(), 6);
         assert_eq!(deployment.metadata.labels.as_ref(), Some(&expected));
@@ -730,8 +787,133 @@ mod tests {
         assert_eq!(spec.template.metadata.unwrap().labels.as_ref(), Some(&expected));
         let annotations = deployment.metadata.annotations.unwrap();
         for hash_key in [ENV_CONFIG_HASH, LEGACY_ENV_CONFIG_HASH] {
-            assert_eq!(annotations.get(hash_key), Some(&connector.contract_hash));
+            assert_eq!(annotations.get(hash_key), Some(&workload.contract_hash));
         }
+    }
+
+    /// Regression test for #64: the image is resolved with the registry of the
+    /// orchestrator's platform, not always with the OpenCTI one.
+    #[tokio::test]
+    async fn deployment_image_uses_the_platform_registry() {
+        let registry = Registry {
+            server: Some("registry.openaev.example".to_string()),
+            username: None,
+            password: None,
+            email: None,
+        };
+        let workload = workload();
+
+        let deployment = orchestrator_with_registry("http://127.0.0.1:1", Some(registry))
+            .build_configuration(&workload, HashMap::new(), None);
+
+        let image = deployment.spec.unwrap().template.spec.unwrap().containers[0]
+            .image
+            .clone();
+        assert_eq!(
+            image.as_deref(),
+            Some("registry.openaev.example/ghcr.io/acme/test:latest")
+        );
+    }
+
+    fn registry_with_credentials() -> Registry {
+        Registry {
+            server: Some("registry.example.com:5000".to_string()),
+            username: Some("user".to_string()),
+            password: Some("password".to_string()),
+            email: None,
+        }
+    }
+
+    /// Registry secrets maintained for a platform, as `name:username`.
+    fn registry_secret_users(
+        registry: Option<Registry>,
+        platform: &str,
+        legacy_registry: Option<Registry>,
+    ) -> Vec<String> {
+        KubeOrchestrator::registry_secrets(registry, platform, legacy_registry)
+            .into_iter()
+            .map(|(name, secret)| {
+                let config: serde_json::Value =
+                    serde_json::from_str(&secret[".dockerconfigjson"]).unwrap();
+                let auths = config["auths"].as_object().unwrap();
+                let username = auths.values().next().unwrap()["username"].as_str().unwrap();
+                format!("{name}:{username}")
+            })
+            .collect()
+    }
+
+    fn openaev_registry() -> Registry {
+        Registry {
+            server: Some("aev.example.com".to_string()),
+            username: Some("aev-user".to_string()),
+            password: Some("aev-password".to_string()),
+            email: None,
+        }
+    }
+
+    /// Platforms deployed in the same namespace may use the same registry
+    /// server with different credentials: each one maintains its own secret.
+    /// The platform in charge of the legacy secret shared by all platforms,
+    /// still referenced by the deployments created before, also maintains it.
+    #[test]
+    fn registry_secrets_are_named_after_the_platform() {
+        assert_eq!(
+            registry_secret_users(
+                Some(registry_with_credentials()),
+                "opencti",
+                Some(registry_with_credentials())
+            ),
+            vec![
+                "registry-example-com-5000-opencti:user",
+                "registry-example-com-5000:user",
+            ]
+        );
+        assert_eq!(
+            registry_secret_users(Some(registry_with_credentials()), "openaev", None),
+            vec!["registry-example-com-5000-openaev:user"]
+        );
+        assert!(KubeOrchestrator::registry_secrets(None, "opencti", None).is_empty());
+    }
+
+    /// The deployments created before reference the legacy secret with images
+    /// of the OpenCTI registry: a platform with another registry in charge of
+    /// it must keep it with the OpenCTI one, not create one for its own.
+    #[test]
+    fn legacy_registry_secret_is_built_from_the_legacy_registry() {
+        assert_eq!(
+            registry_secret_users(
+                Some(openaev_registry()),
+                "openaev",
+                Some(registry_with_credentials())
+            ),
+            vec![
+                "aev-example-com-openaev:aev-user",
+                "registry-example-com-5000:user",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn deployment_pulls_with_the_platform_registry_secret() {
+        let workload = workload();
+
+        let deployment = orchestrator_for_platform(
+            "http://127.0.0.1:1",
+            Some(registry_with_credentials()),
+            "openaev",
+        )
+        .build_configuration(&workload, HashMap::new(), None);
+
+        let pull_secrets = deployment
+            .spec
+            .unwrap()
+            .template
+            .spec
+            .unwrap()
+            .image_pull_secrets
+            .unwrap();
+        let names: Vec<&str> = pull_secrets.iter().map(|secret| secret.name.as_str()).collect();
+        assert_eq!(names, vec!["registry-example-com-5000-openaev"]);
     }
 }
 

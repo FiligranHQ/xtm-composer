@@ -64,9 +64,20 @@ impl Image {
     // endregion
 
     // region Kubernetes
-    pub fn get_kubernetes_secret_name(&self) -> Option<String> {
+    /// Name of the registry secret of a platform: platforms deployed in the same
+    /// namespace may use the same registry server with different credentials.
+    pub fn get_kubernetes_secret_name(&self, platform: &str) -> Option<String> {
         // secret name must be slug to be compatible with kubernetes naming convention (RFC 1123)
-        self.config.server.clone().map(|server| slugify(&server))
+        self.config
+            .server
+            .as_ref()
+            .map(|server| slugify(format!("{server}-{platform}")))
+    }
+
+    /// Name of the registry secret shared by all platforms before the registry
+    /// was resolved per platform (#64).
+    pub fn get_kubernetes_legacy_secret_name(&self) -> Option<String> {
+        self.config.server.as_ref().map(slugify)
     }
 
     pub fn get_kubernetes_registry_secret(&self) -> Option<BTreeMap<String, String>> {

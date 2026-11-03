@@ -1,4 +1,4 @@
-use crate::api::{ApiConnector, ConnectorStatus};
+use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::config::settings::{Daemon, Docker as DockerOptions, Registry};
 use crate::orchestrator::docker::compat::{self, CompatApi};
 use crate::orchestrator::docker::{ContainerEngine, DockerOrchestrator};
@@ -221,7 +221,7 @@ fn container_from_summary(summary: compat::ContainerSummary) -> OrchestratorCont
     }
 }
 
-/// Build the host configuration of a connector container from the daemon options.
+/// Build the host configuration of a workload container from the daemon options.
 pub(crate) fn build_host_config(
     options: Option<&DockerOptions>,
     engine: ContainerEngine,
@@ -320,8 +320,8 @@ pub(crate) fn build_host_config(
 
 #[async_trait]
 impl Orchestrator for DockerOrchestrator {
-    async fn get(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
-        let container_name = connector.container_name();
+    async fn get(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+        let container_name = workload.container_name();
         if let Some(compat) = self.podman_api() {
             return match compat.inspect_container(&container_name).await {
                 Ok(Some(inspect)) => Some(container_from_inspect(inspect)),
@@ -380,17 +380,17 @@ impl Orchestrator for DockerOrchestrator {
         dedup_containers(containers)
     }
 
-    async fn start(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
-        connector.display_env_variables();
-        let container_name = connector.container_name();
+    async fn start(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
+        workload.display_env_variables();
+        let container_name = workload.container_name();
         let _ = self
             .docker
             .start_container(container_name.as_str(), None::<StartContainerOptions>)
             .await;
     }
 
-    async fn stop(&self, _container: &OrchestratorContainer, connector: &ApiConnector) -> () {
-        let container_name = connector.container_name();
+    async fn stop(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
+        let container_name = workload.container_name();
         let _ = self
             .docker
             .stop_container(container_name.as_str(), None::<StopContainerOptions>)
@@ -424,20 +424,20 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
-    async fn refresh(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
         // Remove the current container if needed
-        let container = self.get(connector).await;
+        let container = self.get(workload).await;
         if container.is_some() {
             let _ = self.remove(&container.unwrap()).await;
         }
         // Deploy the new one
-        self.deploy(connector).await
+        self.deploy(workload).await
     }
 
-    async fn deploy(&self, connector: &ApiConnector) -> Option<OrchestratorContainer> {
+    async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
         let resolver = Image::new(self.registry.clone());
         let auth = resolver.get_credentials();
-        let image = resolver.build_name(connector.image.clone());
+        let image = resolver.build_name(workload.image.clone());
 
         if let Err(err) = self.pull_image(&image, auth).await {
             error!(image = image, error = err, "Error fetching container image");
@@ -445,16 +445,16 @@ impl Orchestrator for DockerOrchestrator {
         }
 
         // Create the container
-        let container_env_variables = connector
+        let container_env_variables = workload
             .container_envs()
             .into_iter()
             .map(|config| format!("{}={}", config.key, config.value))
             .collect::<Vec<String>>();
-        let labels = self.labels(connector);
+        let labels = self.labels(workload);
         let host_config = build_host_config(
             self.options.as_ref(),
             self.engine,
-            ensure_proxy_ca_file(connector),
+            ensure_proxy_ca_file(workload),
         );
 
         let config = ContainerCreateBody {
@@ -469,7 +469,7 @@ impl Orchestrator for DockerOrchestrator {
             .docker
             .create_container(
                 Some(CreateContainerOptions {
-                    name: Some(connector.container_name()),
+                    name: Some(workload.container_name()),
                     ..Default::default()
                 }),
                 config,
@@ -482,14 +482,14 @@ impl Orchestrator for DockerOrchestrator {
             }
         }
 
-        // Get the created connector
-        let created = self.get(connector).await;
+        // Get the created workload
+        let created = self.get(workload).await;
         // Start the container if needed
-        let is_starting = connector.requested_status.clone().eq("starting");
+        let is_starting = workload.requested_status.clone().eq("starting");
         if is_starting
             && let Some(container) = &created
         {
-            self.start(container, connector).await;
+            self.start(container, workload).await;
         }
         // Return the created container
         created
@@ -498,7 +498,7 @@ impl Orchestrator for DockerOrchestrator {
     async fn logs(
         &self,
         _container: &OrchestratorContainer,
-        connector: &ApiConnector,
+        workload: &ApiWorkload,
     ) -> Option<Vec<String>> {
         let opts = Some(LogsOptions {
             follow: false,
@@ -507,7 +507,7 @@ impl Orchestrator for DockerOrchestrator {
             tail: "100".to_string(),
             ..Default::default()
         });
-        let logs = self.docker.logs(connector.container_name().as_str(), opts);
+        let logs = self.docker.logs(workload.container_name().as_str(), opts);
         let mut logs_content = Vec::new();
         let result = logs
             .try_for_each(|log| {
@@ -519,7 +519,7 @@ impl Orchestrator for DockerOrchestrator {
             Ok(_) => Some(logs_content),
             Err(err) => {
                 error!(
-                    name = connector.container_name(),
+                    name = workload.container_name(),
                     error = err.to_string(),
                     "Could not fetch container logs"
                 );
@@ -528,10 +528,10 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
-    fn state_converter(&self, container: &OrchestratorContainer) -> ConnectorStatus {
+    fn state_converter(&self, container: &OrchestratorContainer) -> WorkloadStatus {
         match container.state.as_str() {
-            "running" => ConnectorStatus::Started,
-            _ => ConnectorStatus::Stopped,
+            "running" => WorkloadStatus::Started,
+            _ => WorkloadStatus::Stopped,
         }
     }
 }
@@ -562,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn podman_inspect_with_internal_stopped_state_maps_to_a_stopped_connector() {
+    fn podman_inspect_with_internal_stopped_state_maps_to_a_stopped_workload() {
         let inspect: compat::ContainerInspect = serde_json::from_str(
             r#"{"Id":"abc","Name":"/connector-a","RestartCount":4,
                 "State":{"Status":"stopped","StartedAt":"2026-10-21T10:00:00Z"},
