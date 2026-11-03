@@ -215,7 +215,11 @@ async fn orchestrate_existing(
     // Align existing and requested status
     let requested_status = RequestedStatus::from_str(requested_status_fetch.as_str()).unwrap();
     match (requested_status, container_status) {
-        (RequestedStatus::Stopping, WorkloadStatus::Started) => {
+        // A deployment waiting for its image is not running, but it still has to be
+        // scaled down so that it does not start once the image is available
+        (RequestedStatus::Stopping, status)
+            if status == WorkloadStatus::Started || container.image_pull_error.is_some() =>
+        {
             info!(id = workload_id, "Stopping");
             orchestrator.stop(&container, workload).await;
         }
@@ -1224,6 +1228,22 @@ mod tests {
                 "[XTM Composer] Connector waiting for its image: the image \"ghcr.io/acme/test:latest\" cannot be pulled: ImagePullBackOff"
             )
         );
+    }
+
+    /// A deployment waiting for its image reports stopped, but a stop request still
+    /// scales it down: otherwise it would start once the image is available.
+    #[tokio::test]
+    async fn orchestrate_stops_a_deployment_waiting_for_its_image() {
+        let mut waiting = managed_container("A", "opencti");
+        waiting.image_pull_error = Some(ImagePullError {
+            image: "ghcr.io/acme/test:latest".to_string(),
+            error: "ImagePullBackOff".to_string(),
+        });
+
+        let outcome =
+            run_cycle_with_unpullable_images(vec![waiting], vec![workload("A")], &[]).await;
+
+        assert_eq!(outcome.actions, vec!["stop:A"]);
     }
 
     #[test]
