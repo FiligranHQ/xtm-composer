@@ -57,6 +57,26 @@ Connectors are deployed through the Podman API socket, in rootful or rootless mo
 
 > See the [Podman guide](dev/podman/README.md): socket setup, rootless mode, private registries and a compose example
 
+### Workload labels
+
+Whatever the orchestrator, every workload (connector, collector, injector) deployed by the composer is tagged with the
+following labels, and receives its configuration hash in an environment variable (an annotation on Kubernetes):
+
+| Key | Legacy key | Value |
+|-----|------------|-------|
+| `xtm-manager` | `opencti-manager` | Id of the manager owning the workload |
+| `xtm-workload-id` | `opencti-connector-id` | Id of the workload in its platform |
+| `xtm-platform` | `opencti-platform` | Platform of the workload: `opencti` or `openaev` |
+| `XTM_CONFIG_HASH` | `OPENCTI_CONFIG_HASH` | Hash of the deployed configuration |
+
+The legacy keys are still written alongside the current ones, so that a composer rolled back to an older version keeps
+managing the workloads, and still read, so that the workloads deployed by older versions keep being managed. Those
+workloads are not redeployed by an upgrade: they get the current keys the next time they are refreshed, on a
+configuration or image change.
+
+Tools selecting the workloads by label (monitoring, network policies, ...) should move to the current keys: the legacy
+ones will be removed in a future version.
+
 ## About
 
 XTM composer is a product designed and developed by the company [Filigran](https://filigran.io).

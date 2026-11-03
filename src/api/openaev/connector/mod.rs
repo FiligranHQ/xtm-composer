@@ -1,6 +1,6 @@
 use aws_lc_rs::rsa::PrivateDecryptingKey;
 use serde::Deserialize;
-use crate::api::ApiConnector;
+use crate::api::ApiWorkload;
 use crate::api::decrypt_value::resolve_contract_configuration;
 
 pub mod get_connector_instances;
@@ -28,7 +28,7 @@ pub struct ConnectorInstances {
 
 impl ConnectorInstances {
 
-    pub fn to_api_connector(&self, private_key: &PrivateDecryptingKey )->ApiConnector {
+    pub fn to_api_connector(&self, private_key: &PrivateDecryptingKey )->ApiWorkload {
         let (contract_configuration, undecryptable_keys) = resolve_contract_configuration(
             private_key,
             &self.connector_instance_id,
@@ -40,7 +40,7 @@ impl ConnectorInstances {
                 )
             }),
         );
-        ApiConnector {
+        ApiWorkload {
             id: self.connector_instance_id.clone(),
             platform: "openaev".to_string(),
             name: self.connector_instance_name.clone(),
