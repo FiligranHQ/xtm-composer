@@ -1,6 +1,6 @@
 use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
-use crate::config::settings::Kubernetes;
+use crate::config::settings::{Kubernetes, Registry};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{
@@ -24,17 +24,24 @@ use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, error, info, warn};
 
 impl KubeOrchestrator {
-    pub async fn new(config: Kubernetes) -> Self {
+    pub async fn new(
+        config: Kubernetes,
+        registry: Option<Registry>,
+        platform: &'static str,
+        legacy_registry: Option<Registry>,
+    ) -> Self {
         let client = Client::try_default().await.unwrap();
         let pods: Api<Pod> = Api::default_namespaced(client.clone());
         let deployments: Api<Deployment> = Api::default_namespaced(client.clone());
         let secrets: Api<Secret> = Api::default_namespaced(client.clone());
-        Self::register_secret(&secrets).await;
+        Self::register_secret(&secrets, registry.clone(), platform, legacy_registry).await;
         Self {
             pods,
             deployments,
             secrets,
             config,
+            registry,
+            platform,
         }
     }
 
@@ -43,18 +50,26 @@ impl KubeOrchestrator {
     }
 
     // Validate and return image pull policy
-    async fn register_secret(secrets: &Api<Secret>) {
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
-        let registry_secret = resolver.get_kubernetes_registry_secret();
-        if registry_secret.is_some() {
-            let secret_name = resolver.get_kubernetes_secret_name().unwrap();
+    async fn register_secret(
+        secrets: &Api<Secret>,
+        registry: Option<Registry>,
+        platform: &str,
+        legacy_registry: Option<Registry>,
+    ) {
+        for (secret_name, registry_secret) in
+            Self::registry_secrets(registry, platform, legacy_registry)
+        {
             // region Start by removing the secret if it already exists
             let params = &DeleteParams::default();
             match secrets.delete(secret_name.as_str(), params).await {
-                Ok(_) => info!("Kubernetes registry secret deleted"),
-                Err(_) => info!("Kubernetes registry doesnt exists"),
+                Ok(_) => info!(
+                    secret_name = secret_name,
+                    "Kubernetes registry secret deleted"
+                ),
+                Err(_) => info!(
+                    secret_name = secret_name,
+                    "Kubernetes registry doesnt exists"
+                ),
             }
             // endregion
             // region Then initialize the secret
@@ -63,12 +78,15 @@ impl KubeOrchestrator {
                     name: Some(secret_name.clone()),
                     ..Default::default()
                 },
-                string_data: registry_secret,
+                string_data: Some(registry_secret),
                 type_: Some("kubernetes.io/dockerconfigjson".to_string()),
                 ..Default::default()
             };
             match secrets.create(&PostParams::default(), &kube_secret).await {
-                Ok(_) => info!("Kubernetes registry secret created"),
+                Ok(_) => info!(
+                    secret_name = secret_name,
+                    "Kubernetes registry secret created"
+                ),
                 Err(err) => error!(
                     error = err.to_string(),
                     secret_name = secret_name,
@@ -77,6 +95,31 @@ impl KubeOrchestrator {
             }
             // endregion
         }
+    }
+
+    /// Registry secrets maintained for a platform, by name: its own one, built
+    /// from its registry, plus the legacy one shared by all platforms when it is
+    /// in charge of it, built from the registry given for it.
+    fn registry_secrets(
+        registry: Option<Registry>,
+        platform: &str,
+        legacy_registry: Option<Registry>,
+    ) -> Vec<(String, BTreeMap<String, String>)> {
+        let resolver = Image::new(registry);
+        let legacy_resolver = Image::new(legacy_registry);
+        [
+            (
+                resolver.get_kubernetes_secret_name(platform),
+                resolver.get_kubernetes_registry_secret(),
+            ),
+            (
+                legacy_resolver.get_kubernetes_legacy_secret_name(),
+                legacy_resolver.get_kubernetes_registry_secret(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(name, secret)| Some((name?, secret?)))
+        .collect()
     }
 
     fn get_image_pull_policy(&self) -> String {
@@ -231,9 +274,7 @@ impl KubeOrchestrator {
         let deployment_labels: BTreeMap<String, String> = labels.into_iter().collect();
         let pod_env = self.container_envs(workload);
         let is_starting = &workload.requested_status == "starting";
-        let settings = crate::settings();
-        let registry_config = settings.opencti.daemon.registry.clone();
-        let resolver = Image::new(registry_config);
+        let resolver = Image::new(self.registry.clone());
         let auth = resolver.get_credentials();
         let image = resolver.build_name(workload.image.clone());
         let selector = LabelSelector {
@@ -288,7 +329,9 @@ impl KubeOrchestrator {
                     spec: Some(PodSpec {
                         image_pull_secrets: auth.map(|_| {
                             vec![LocalObjectReference {
-                                name: resolver.get_kubernetes_secret_name().unwrap(),
+                                name: resolver
+                                    .get_kubernetes_secret_name(self.platform)
+                                    .unwrap(),
                             }]
                         }),
                         containers: vec![container],
@@ -599,6 +642,18 @@ mod tests {
     }
 
     fn orchestrator(url: &str) -> KubeOrchestrator {
+        orchestrator_with_registry(url, None)
+    }
+
+    fn orchestrator_with_registry(url: &str, registry: Option<Registry>) -> KubeOrchestrator {
+        orchestrator_for_platform(url, registry, "opencti")
+    }
+
+    fn orchestrator_for_platform(
+        url: &str,
+        registry: Option<Registry>,
+        platform: &'static str,
+    ) -> KubeOrchestrator {
         // Mirror main(): kube builds a rustls connector even for plain http.
         let _ = rustls::crypto::CryptoProvider::install_default(
             rustls::crypto::aws_lc_rs::default_provider(),
@@ -614,6 +669,8 @@ mod tests {
                 image_pull_policy: None,
                 image_resources: None,
             },
+            registry,
+            platform,
         }
     }
 
@@ -732,6 +789,131 @@ mod tests {
         for hash_key in [ENV_CONFIG_HASH, LEGACY_ENV_CONFIG_HASH] {
             assert_eq!(annotations.get(hash_key), Some(&workload.contract_hash));
         }
+    }
+
+    /// Regression test for #64: the image is resolved with the registry of the
+    /// orchestrator's platform, not always with the OpenCTI one.
+    #[tokio::test]
+    async fn deployment_image_uses_the_platform_registry() {
+        let registry = Registry {
+            server: Some("registry.openaev.example".to_string()),
+            username: None,
+            password: None,
+            email: None,
+        };
+        let workload = workload();
+
+        let deployment = orchestrator_with_registry("http://127.0.0.1:1", Some(registry))
+            .build_configuration(&workload, HashMap::new(), None);
+
+        let image = deployment.spec.unwrap().template.spec.unwrap().containers[0]
+            .image
+            .clone();
+        assert_eq!(
+            image.as_deref(),
+            Some("registry.openaev.example/ghcr.io/acme/test:latest")
+        );
+    }
+
+    fn registry_with_credentials() -> Registry {
+        Registry {
+            server: Some("registry.example.com:5000".to_string()),
+            username: Some("user".to_string()),
+            password: Some("password".to_string()),
+            email: None,
+        }
+    }
+
+    /// Registry secrets maintained for a platform, as `name:username`.
+    fn registry_secret_users(
+        registry: Option<Registry>,
+        platform: &str,
+        legacy_registry: Option<Registry>,
+    ) -> Vec<String> {
+        KubeOrchestrator::registry_secrets(registry, platform, legacy_registry)
+            .into_iter()
+            .map(|(name, secret)| {
+                let config: serde_json::Value =
+                    serde_json::from_str(&secret[".dockerconfigjson"]).unwrap();
+                let auths = config["auths"].as_object().unwrap();
+                let username = auths.values().next().unwrap()["username"].as_str().unwrap();
+                format!("{name}:{username}")
+            })
+            .collect()
+    }
+
+    fn openaev_registry() -> Registry {
+        Registry {
+            server: Some("aev.example.com".to_string()),
+            username: Some("aev-user".to_string()),
+            password: Some("aev-password".to_string()),
+            email: None,
+        }
+    }
+
+    /// Platforms deployed in the same namespace may use the same registry
+    /// server with different credentials: each one maintains its own secret.
+    /// The platform in charge of the legacy secret shared by all platforms,
+    /// still referenced by the deployments created before, also maintains it.
+    #[test]
+    fn registry_secrets_are_named_after_the_platform() {
+        assert_eq!(
+            registry_secret_users(
+                Some(registry_with_credentials()),
+                "opencti",
+                Some(registry_with_credentials())
+            ),
+            vec![
+                "registry-example-com-5000-opencti:user",
+                "registry-example-com-5000:user",
+            ]
+        );
+        assert_eq!(
+            registry_secret_users(Some(registry_with_credentials()), "openaev", None),
+            vec!["registry-example-com-5000-openaev:user"]
+        );
+        assert!(KubeOrchestrator::registry_secrets(None, "opencti", None).is_empty());
+    }
+
+    /// The deployments created before reference the legacy secret with images
+    /// of the OpenCTI registry: a platform with another registry in charge of
+    /// it must keep it with the OpenCTI one, not create one for its own.
+    #[test]
+    fn legacy_registry_secret_is_built_from_the_legacy_registry() {
+        assert_eq!(
+            registry_secret_users(
+                Some(openaev_registry()),
+                "openaev",
+                Some(registry_with_credentials())
+            ),
+            vec![
+                "aev-example-com-openaev:aev-user",
+                "registry-example-com-5000:user",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn deployment_pulls_with_the_platform_registry_secret() {
+        let workload = workload();
+
+        let deployment = orchestrator_for_platform(
+            "http://127.0.0.1:1",
+            Some(registry_with_credentials()),
+            "openaev",
+        )
+        .build_configuration(&workload, HashMap::new(), None);
+
+        let pull_secrets = deployment
+            .spec
+            .unwrap()
+            .template
+            .spec
+            .unwrap()
+            .image_pull_secrets
+            .unwrap();
+        let names: Vec<&str> = pull_secrets.iter().map(|secret| secret.name.as_str()).collect();
+        assert_eq!(names, vec!["registry-example-com-5000-openaev"]);
     }
 }
 
