@@ -30,7 +30,7 @@ opencti:
   with_proxy: false
   # http_proxy: http://my-proxy:8080    # HTTP proxy URL (used only when with_proxy is true)
   # https_proxy: http://my-proxy:8080   # HTTPS proxy URL (used only when with_proxy is true)
-  # no_proxy: "localhost,127.0.0.1,.internal" # Comma-separated hosts to exclude from proxying
+  # no_proxy: "localhost,127.0.0.1,.internal" # Comma-separated hosts, domains or CIDR ranges to exclude from proxying, for the Composer and its connectors
   # https_proxy_ca:                           # Optional list of CA entries (file path or inline PEM)
   #   - /path/to/proxy-ca.pem                # entry as a file path
   #   - |                                    # or inline PEM content
@@ -109,7 +109,7 @@ openaev:
   with_proxy: false
   # http_proxy: http://my-proxy:8080    # HTTP proxy URL (used only when with_proxy is true)
   # https_proxy: http://my-proxy:8080   # HTTPS proxy URL (used only when with_proxy is true)
-  # no_proxy: "localhost,127.0.0.1,.internal" # Comma-separated hosts to exclude from proxying
+  # no_proxy: "localhost,127.0.0.1,.internal" # Comma-separated hosts, domains or CIDR ranges to exclude from proxying, for the Composer and its connectors
   # https_proxy_ca:                           # Optional list of CA entries (file path or inline PEM)
   #   - /path/to/proxy-ca.pem                # entry as a file path
   #   - |                                    # or inline PEM content
