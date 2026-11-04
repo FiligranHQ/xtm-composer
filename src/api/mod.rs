@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::str::FromStr;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub mod openaev;
 pub mod opencti;
@@ -51,12 +51,19 @@ fn resolve_proxy_setting(configured: Option<&str>, env_vars: &[&str]) -> Option<
 }
 
 /// The proxy URL the system proxies would use for a scheme: the first of `env_vars`
-/// set, else ALL_PROXY/all_proxy, a blank value counting as unset.
+/// set, else ALL_PROXY/all_proxy, a blank or invalid value counting as unset.
 fn system_proxy_url(env_vars: &[&str]) -> Option<String> {
-    let first_set = |vars: &[&str]| {
-        resolve_proxy_setting(None, vars).filter(|url| !url.trim().is_empty())
+    let first_usable = |vars: &[&str]| {
+        let url = resolve_proxy_setting(None, vars).filter(|url| !url.trim().is_empty())?;
+        match reqwest::Proxy::all(&url) {
+            Ok(_) => Some(url),
+            Err(e) => {
+                warn!(url = %url, error = %e, "Ignoring an invalid proxy URL from the environment");
+                None
+            }
+        }
     };
-    first_set(env_vars).or_else(|| first_set(ALL_PROXY_ENV_VARS))
+    first_usable(env_vars).or_else(|| first_usable(ALL_PROXY_ENV_VARS))
 }
 
 /// Build a reqwest HTTP client configured with proxy and TLS settings.
@@ -105,6 +112,11 @@ pub fn build_http_client(config: &HttpClientConfig) -> Result<reqwest::Client, r
                 .unwrap_or_else(|e| panic!("Invalid https_proxy for platform '{}': {}", config.platform_name, e))
                 .no_proxy(bypass());
             client_builder = client_builder.proxy(proxy);
+        }
+        if source == "environment" && http_proxy.is_none() && https_proxy.is_none() {
+            // The env proxies were resolved above: the system proxies would read them again
+            // without the configured no_proxy, and accept URLs ignored above
+            client_builder = client_builder.no_proxy();
         }
         // Without any proxy URL above, reqwest uses system proxies by default
     } else {
@@ -931,6 +943,34 @@ mod tests {
         let config = proxied_config(None, None, Some("opencti-ingest"));
         let (result, direct, proxied) = send_and_trace(&config, &url, &target, &proxy).await;
         assert_eq!(result, Ok(reqwest::StatusCode::OK));
+        assert_eq!((direct, proxied.len()), (1, 0));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn env_proxy_ignores_invalid_proxy_env_vars() {
+        // e.g. HTTP_PROXY="http://": like the system proxies, ignore it and fall back to
+        // ALL_PROXY instead of panicking
+        let _env_guard = lock_clean_proxy_env();
+        let (target_addr, target) = spawn_target().await;
+        let (all_addr, all_proxy) = spawn_proxy().await;
+        let url = format!("http://{}/graphql", target_addr);
+        let config = proxied_config(None, None, Some("opencti-ingest"));
+
+        for invalid in ["http://", "http://:3128", "://proxy", "not a url"] {
+            set_env("HTTP_PROXY", invalid);
+            let (result, direct, proxied) = send_and_trace(&config, &url, &target, &all_proxy).await;
+            assert_eq!(result, Ok(reqwest::StatusCode::OK), "{}", invalid);
+            assert_eq!((direct, proxied.len()), (1, 0), "{}", invalid);
+        }
+
+        set_env("ALL_PROXY", &format!("http://{}", all_addr));
+        let (_, direct, proxied) = send_and_trace(&config, &url, &target, &all_proxy).await;
+        assert_eq!(direct, 0);
+        assert_eq!(proxied, vec![format!("GET {} HTTP/1.1", url)]);
+
+        // The configured no_proxy still applies to the ALL_PROXY fallback
+        let config = proxied_config(None, None, Some("opencti-ingest,127.0.0.1"));
+        let (_, direct, proxied) = send_and_trace(&config, &url, &target, &all_proxy).await;
         assert_eq!((direct, proxied.len()), (1, 0));
     }
 
