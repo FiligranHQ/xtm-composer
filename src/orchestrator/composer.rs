@@ -1,5 +1,5 @@
 use crate::api::{ApiWorkload, ComposerApi, WorkloadStatus, RequestedStatus};
-use crate::orchestrator::{Orchestrator, OrchestratorContainer};
+use crate::orchestrator::{ImagePullError, Orchestrator, OrchestratorContainer};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
@@ -62,7 +62,16 @@ fn refuse_incomplete_configuration(workload: &ApiWorkload, action: &str) -> bool
     true
 }
 
+/// Message telling the platform that the image of the workload cannot be pulled.
+fn image_pull_message(outcome: &str, err: &ImagePullError) -> String {
+    format!(
+        "[XTM Composer] {}: the image \"{}\" cannot be pulled: {}",
+        outcome, err.image, err.error
+    )
+}
+
 async fn orchestrate_missing(
+    log_ticks: &mut HashMap<String, Instant>,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
     workload: &ApiWorkload,
@@ -72,6 +81,23 @@ async fn orchestrate_missing(
         return;
     }
     let id = workload.id.clone();
+    if let Err(err) = orchestrator.pull(workload).await {
+        error!(
+            id = id,
+            image = err.image,
+            error = err.error,
+            "Cannot pull the workload image, deployment canceled"
+        );
+        // No deployment runs the workload
+        if workload.current_status.as_deref() == Some("started") {
+            api.patch_status(id.clone(), WorkloadStatus::Stopped).await;
+        }
+        if logs_due(log_ticks, &id, api.post_logs_schedule()) {
+            let message = image_pull_message("Connector not deployed", &err);
+            api.patch_logs(id, vec![message]).await;
+        }
+        return;
+    }
     info!(id = id, "Deploying the container");
     let deploy_action = orchestrator.deploy(workload).await;
     match deploy_action {
@@ -150,6 +176,8 @@ async fn orchestrate_existing(
             .await;
         info!(id = workload_id, "Patch status");
     }
+    // Messages of the composer, pushed to the platform with the workload logs
+    let mut composer_logs = Vec::new();
     // In case of platform upgrade, we need to align all deployed workloads
     let requested_workload_hash = workload.contract_hash.clone();
     let current_container_hash = container.extract_config_hash();
@@ -162,16 +190,49 @@ async fn orchestrate_existing(
             hash = requested_workload_hash,
             "Refreshing"
         );
-        orchestrator.refresh(workload).await;
+        // Pull first: a missing image must not replace the running deployment
+        match orchestrator.pull(workload).await {
+            Ok(()) => {
+                orchestrator.refresh(workload).await;
+            }
+            Err(err) => {
+                error!(
+                    id = workload_id,
+                    image = err.image,
+                    error = err.error,
+                    "Cannot pull the workload image, refresh canceled"
+                );
+                composer_logs.push(image_pull_message(
+                    "Connector not updated, the previous deployment is kept",
+                    &err,
+                ));
+            }
+        }
+    }
+    if let Some(err) = &container.image_pull_error {
+        // During a rolling update, the previous deployment keeps running
+        let outcome = if container_status == WorkloadStatus::Started {
+            "Connector not updated, the previous deployment is kept"
+        } else {
+            "Connector waiting for its image"
+        };
+        composer_logs.push(image_pull_message(outcome, err));
     }
     // Align existing and requested status
     let requested_status = RequestedStatus::from_str(requested_status_fetch.as_str()).unwrap();
     match (requested_status, container_status) {
-        (RequestedStatus::Stopping, WorkloadStatus::Started) => {
+        // A deployment waiting for its image is not running, but it still has to be
+        // scaled down so that it does not start once the image is available
+        (RequestedStatus::Stopping, status)
+            if status == WorkloadStatus::Started || container.image_pull_error.is_some() =>
+        {
             info!(id = workload_id, "Stopping");
             orchestrator.stop(&container, workload).await;
         }
-        (RequestedStatus::Starting, WorkloadStatus::Stopped) => {
+        // Starting again does not bring the missing image
+        (RequestedStatus::Starting, WorkloadStatus::Stopped)
+            if container.image_pull_error.is_none() =>
+        {
             info!(id = workload_id, "Starting");
             orchestrator.start(&container, workload).await;
         }
@@ -182,14 +243,11 @@ async fn orchestrate_existing(
     // Get latest logs and update the platform on the logs schedule
     if logs_due(log_ticks, &workload_id, api.post_logs_schedule()) {
         let workload_logs = orchestrator.logs(&container, workload).await;
-        match workload_logs {
-            Some(logs) => {
-                info!(id = workload_id, "Reporting logs");
-                api.patch_logs(workload_id, logs).await;
-            }
-            None => {
-                // No logs
-            }
+        if workload_logs.is_some() || !composer_logs.is_empty() {
+            let mut logs = workload_logs.unwrap_or_default();
+            logs.extend(composer_logs);
+            info!(id = workload_id, "Reporting logs");
+            api.patch_logs(workload_id, logs).await;
         }
     }
 }
@@ -244,7 +302,7 @@ pub async fn orchestrate(
                     }
                     orchestrate_existing(log_ticks, health_tick, orchestrator, api, workload, container).await
                 }
-                None => orchestrate_missing(orchestrator, api, workload).await,
+                None => orchestrate_missing(log_ticks, orchestrator, api, workload).await,
             }
         }
         // Iter on each existing container to clean the containers
@@ -323,6 +381,7 @@ mod tests {
             envs,
             restart_count: 0,
             started_at: None,
+            image_pull_error: None,
         }
     }
 
@@ -343,6 +402,7 @@ mod tests {
             envs,
             restart_count: 0,
             started_at: None,
+            image_pull_error: None,
         }
     }
 
@@ -365,6 +425,7 @@ mod tests {
             envs,
             restart_count: 0,
             started_at: None,
+            image_pull_error: None,
         }
     }
 
@@ -380,6 +441,7 @@ mod tests {
     struct FakeApi {
         workloads: Vec<ApiWorkload>,
         pushed_logs: Arc<Mutex<Vec<(String, Vec<String>)>>>,
+        patched_statuses: Arc<Mutex<Vec<(String, WorkloadStatus)>>>,
     }
 
     impl FakeApi {
@@ -387,6 +449,7 @@ mod tests {
             Self {
                 workloads,
                 pushed_logs: Arc::new(Mutex::new(Vec::new())),
+                patched_statuses: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -421,7 +484,11 @@ mod tests {
             Some(self.workloads.clone())
         }
 
-        async fn patch_status(&self, _id: String, _status: WorkloadStatus) -> Option<ApiWorkload> {
+        async fn patch_status(&self, id: String, status: WorkloadStatus) -> Option<ApiWorkload> {
+            self.patched_statuses
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push((id, status));
             None
         }
 
@@ -448,6 +515,8 @@ mod tests {
         containers: Vec<OrchestratorContainer>,
         removed_ids: Arc<Mutex<Vec<String>>>,
         actions: Arc<Mutex<Vec<String>>>,
+        /// Workloads whose image cannot be pulled
+        unpullable: Vec<String>,
     }
 
     impl FakeOrchestrator {
@@ -456,6 +525,7 @@ mod tests {
                 containers,
                 removed_ids,
                 actions: Arc::new(Mutex::new(Vec::new())),
+                unpullable: Vec::new(),
             }
         }
 
@@ -503,6 +573,16 @@ mod tests {
                 .lock()
                 .expect("mutex should not be poisoned")
                 .push(container.extract_workload_id());
+        }
+
+        async fn pull(&self, workload: &ApiWorkload) -> Result<(), ImagePullError> {
+            if self.unpullable.contains(&workload.id) {
+                return Err(ImagePullError {
+                    image: workload.image.clone(),
+                    error: "manifest unknown".to_string(),
+                });
+            }
+            Ok(())
         }
 
         async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
@@ -1013,6 +1093,192 @@ mod tests {
 
         assert!(actions.is_empty(), "colliding deployment must not be reconciled: {actions:?}");
         assert_eq!(removed, vec!["OTHER".to_string()]);
+    }
+
+    /// What one orchestration cycle did, the workloads' logs being due.
+    struct CycleOutcome {
+        actions: Vec<String>,
+        removed: Vec<String>,
+        statuses: Vec<(String, WorkloadStatus)>,
+        logs: Vec<(String, Vec<String>)>,
+    }
+
+    async fn run_cycle_with_unpullable_images(
+        containers: Vec<OrchestratorContainer>,
+        workloads: Vec<ApiWorkload>,
+        unpullable: &[&str],
+    ) -> CycleOutcome {
+        let removed_ids = Arc::new(Mutex::new(Vec::new()));
+        let mut orchestrator = FakeOrchestrator::new(containers, Arc::clone(&removed_ids));
+        orchestrator.unpullable = unpullable.iter().map(|id| id.to_string()).collect();
+        let actions = Arc::clone(&orchestrator.actions);
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> = Box::new(orchestrator);
+        let api = FakeApi::new(workloads.clone());
+        let pushed_logs = Arc::clone(&api.pushed_logs);
+        let patched_statuses = Arc::clone(&api.patched_statuses);
+        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(api);
+
+        // FakeApi's logs schedule is 1h: pretend the last push was 2h ago.
+        let overdue = Instant::now()
+            .checked_sub(Duration::from_secs(7200))
+            .unwrap();
+        let mut log_ticks: HashMap<String, Instant> =
+            workloads.iter().map(|c| (c.id.clone(), overdue)).collect();
+        let mut health_tick = Instant::now();
+        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+
+        let lock = |mutex: &Arc<Mutex<Vec<String>>>| {
+            mutex.lock().expect("mutex should not be poisoned").clone()
+        };
+        CycleOutcome {
+            actions: lock(&actions),
+            removed: lock(&removed_ids),
+            statuses: patched_statuses
+                .lock()
+                .expect("mutex should not be poisoned")
+                .clone(),
+            logs: pushed_logs
+                .lock()
+                .expect("mutex should not be poisoned")
+                .clone(),
+        }
+    }
+
+    /// Regression test for #206: the running deployment used to be removed before
+    /// the pull of the new image, which left the workload without any deployment.
+    #[tokio::test]
+    async fn orchestrate_keeps_the_running_deployment_when_the_new_image_cannot_be_pulled() {
+        let mut running = outdated_container("A");
+        running.state = "running".to_string();
+        let mut workload = starting_workload("A");
+        workload.current_status = Some("started".to_string());
+
+        let outcome = run_cycle_with_unpullable_images(vec![running], vec![workload], &["A"]).await;
+
+        assert!(
+            outcome.actions.is_empty(),
+            "deployment must not be refreshed: {:?}",
+            outcome.actions
+        );
+        assert!(
+            outcome.removed.is_empty(),
+            "deployment must not be removed: {:?}",
+            outcome.removed
+        );
+        assert!(
+            outcome.statuses.is_empty(),
+            "status must stay started: {:?}",
+            outcome.statuses
+        );
+        let (id, logs) = &outcome.logs[0];
+        assert_eq!(id, "A");
+        assert_eq!(
+            logs.last().map(String::as_str),
+            Some(
+                "[XTM Composer] Connector not updated, the previous deployment is kept: the image \"ghcr.io/acme/test:latest\" cannot be pulled: manifest unknown"
+            ),
+            "workload logs then the composer message: {logs:?}"
+        );
+    }
+
+    /// Regression test for #206: a workload whose image cannot be pulled is not
+    /// deployed, the platform is told why and no longer shows it started.
+    #[tokio::test]
+    async fn orchestrate_reports_a_workload_whose_image_cannot_be_pulled() {
+        let mut workload = starting_workload("A");
+        workload.current_status = Some("started".to_string());
+
+        let outcome = run_cycle_with_unpullable_images(vec![], vec![workload], &["A"]).await;
+
+        assert!(
+            outcome.actions.is_empty(),
+            "workload must not be deployed: {:?}",
+            outcome.actions
+        );
+        assert_eq!(
+            outcome.statuses,
+            vec![("A".to_string(), WorkloadStatus::Stopped)]
+        );
+        assert_eq!(
+            outcome.logs,
+            vec![(
+                "A".to_string(),
+                vec!["[XTM Composer] Connector not deployed: the image \"ghcr.io/acme/test:latest\" cannot be pulled: manifest unknown".to_string()]
+            )]
+        );
+    }
+
+    /// Regression test for #206: a deployment whose orchestrator cannot pull the
+    /// image (Kubernetes ErrImagePull) is reported, and not started again.
+    #[tokio::test]
+    async fn orchestrate_reports_a_deployment_waiting_for_its_image() {
+        let mut waiting = managed_container("A", "opencti");
+        waiting.image_pull_error = Some(ImagePullError {
+            image: "ghcr.io/acme/test:latest".to_string(),
+            error: "ImagePullBackOff".to_string(),
+        });
+
+        let outcome =
+            run_cycle_with_unpullable_images(vec![waiting], vec![starting_workload("A")], &[])
+                .await;
+
+        assert!(
+            outcome.actions.is_empty(),
+            "deployment must not be started: {:?}",
+            outcome.actions
+        );
+        let (_, logs) = &outcome.logs[0];
+        assert_eq!(
+            logs.last().map(String::as_str),
+            Some(
+                "[XTM Composer] Connector waiting for its image: the image \"ghcr.io/acme/test:latest\" cannot be pulled: ImagePullBackOff"
+            )
+        );
+    }
+
+    /// During a Kubernetes rolling update to a missing image, the previous pod keeps
+    /// running: the message says the deployment was not updated.
+    #[tokio::test]
+    async fn orchestrate_reports_a_rolling_update_waiting_for_its_image() {
+        let mut updating = managed_container("A", "opencti");
+        updating.state = "running".to_string();
+        updating.image_pull_error = Some(ImagePullError {
+            image: "ghcr.io/acme/test:latest".to_string(),
+            error: "ImagePullBackOff".to_string(),
+        });
+
+        let outcome =
+            run_cycle_with_unpullable_images(vec![updating], vec![starting_workload("A")], &[])
+                .await;
+
+        assert!(
+            outcome.actions.is_empty(),
+            "deployment must be left running: {:?}",
+            outcome.actions
+        );
+        let (_, logs) = &outcome.logs[0];
+        assert_eq!(
+            logs.last().map(String::as_str),
+            Some(
+                "[XTM Composer] Connector not updated, the previous deployment is kept: the image \"ghcr.io/acme/test:latest\" cannot be pulled: ImagePullBackOff"
+            )
+        );
+    }
+
+    /// A deployment waiting for its image reports stopped, but a stop request still
+    /// scales it down: otherwise it would start once the image is available.
+    #[tokio::test]
+    async fn orchestrate_stops_a_deployment_waiting_for_its_image() {
+        let mut waiting = managed_container("A", "opencti");
+        waiting.image_pull_error = Some(ImagePullError {
+            image: "ghcr.io/acme/test:latest".to_string(),
+            error: "ImagePullBackOff".to_string(),
+        });
+
+        let outcome =
+            run_cycle_with_unpullable_images(vec![waiting], vec![workload("A")], &[]).await;
+
+        assert_eq!(outcome.actions, vec!["stop:A"]);
     }
 
     #[test]

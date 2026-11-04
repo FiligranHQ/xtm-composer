@@ -4,7 +4,7 @@ use crate::config::settings::{Kubernetes, Registry};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{
-    config_hash_entries, dedup_containers, manager_label_filters, Orchestrator,
+    config_hash_entries, dedup_containers, manager_label_filters, ImagePullError, Orchestrator,
     OrchestratorContainer, LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID,
 };
 use async_trait::async_trait;
@@ -243,26 +243,86 @@ impl KubeOrchestrator {
             labels: KubeOrchestrator::convert_to_map(&deployment.labels()),
             restart_count: 0, // Will be updated from pod status
             started_at: None, // Will be updated from pod status
+            image_pull_error: None,
         }
     }
 
-    async fn get_deployment_pod(&self, workload_id: String) -> Option<Pod> {
-        // Pods deployed by older composer versions only carry the legacy label
+    async fn get_deployment_pods(&self, workload_id: &str) -> Vec<Pod> {
+        // Pods deployed by older composer versions only carry the legacy label, and
+        // they keep running next to the new ones during the first rolling update
+        let mut pods: Vec<Pod> = Vec::new();
         for label_key in [LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID] {
             let lp = &ListParams::default().labels(&format!("{}={}", label_key, workload_id));
             match self.pods.list(lp).await {
-                Ok(pods) => {
-                    if let Some(pod) = pods.items.into_iter().next() {
-                        return Some(pod);
+                Ok(listed) => {
+                    for pod in listed.items {
+                        if !pods
+                            .iter()
+                            .any(|known| known.metadata.name == pod.metadata.name)
+                        {
+                            pods.push(pod);
+                        }
                     }
                 }
                 Err(err) => {
                     error!(error = err.to_string(), "Fail to get deployment pod");
-                    return None;
+                    return pods;
                 }
             }
         }
-        None
+        pods
+    }
+
+    async fn get_deployment_pod(&self, workload_id: String) -> Option<Pod> {
+        self.get_deployment_pods(&workload_id)
+            .await
+            .into_iter()
+            .next()
+    }
+
+    /// The image pull failure a container of the pod, init containers included, is
+    /// waiting on, if any.
+    pub fn image_pull_error(pod: &Pod) -> Option<ImagePullError> {
+        const IMAGE_PULL_FAILURES: [&str; 4] = [
+            "ErrImagePull",
+            "ImagePullBackOff",
+            "InvalidImageName",
+            "ErrImageNeverPull",
+        ];
+        let pod_status = pod.status.as_ref()?;
+        let init_statuses = pod_status.init_container_statuses.iter().flatten();
+        let statuses = pod_status.container_statuses.iter().flatten();
+        init_statuses.chain(statuses).find_map(|status| {
+            let waiting = status.state.as_ref()?.waiting.as_ref()?;
+            let reason = waiting.reason.as_deref()?;
+            if !IMAGE_PULL_FAILURES.contains(&reason) {
+                return None;
+            }
+            let error = match waiting.message.as_deref() {
+                Some(message) if !message.is_empty() => format!("{}: {}", reason, message),
+                _ => reason.to_string(),
+            };
+            Some(ImagePullError {
+                image: status.image.clone(),
+                error,
+            })
+        })
+    }
+
+    /// Whether the connector container of the pod runs, whatever its sidecars do.
+    fn is_running(pod: &Pod, container_name: &str) -> bool {
+        pod.status
+            .as_ref()
+            .and_then(|status| status.container_statuses.as_ref())
+            .is_some_and(|statuses| {
+                statuses.iter().any(|status| {
+                    status.name == container_name
+                        && status
+                            .state
+                            .as_ref()
+                            .is_some_and(|state| state.running.is_some())
+                })
+            })
     }
 
     pub fn build_configuration(
@@ -423,9 +483,20 @@ impl Orchestrator for KubeOrchestrator {
         };
 
         let mut container = KubeOrchestrator::from_deployment(deployment);
+        let pods = self.get_deployment_pods(&workload.id).await;
+        container.image_pull_error = pods.iter().find_map(Self::image_pull_error);
+        // During a rolling update, the previous pod keeps running next to the new one
+        let container_name = workload.container_name();
+        if container.image_pull_error.is_some()
+            && !pods
+                .iter()
+                .any(|pod| Self::is_running(pod, &container_name))
+        {
+            container.state = "image_pull_failed".to_string();
+        }
 
         // Enrich container with pod information
-        if let Some(pod) = self.get_deployment_pod(workload.id.clone()).await {
+        if let Some(pod) = pods.into_iter().next() {
             self.enrich_container_from_pod(&mut container, pod);
         }
 
@@ -586,6 +657,7 @@ impl Orchestrator for KubeOrchestrator {
             "waiting" => WorkloadStatus::Started,
             "exited" => WorkloadStatus::Stopped,
             "terminated" => WorkloadStatus::Stopped,
+            "image_pull_failed" => WorkloadStatus::Stopped,
             _ => WorkloadStatus::Stopped,
         }
     }
@@ -697,6 +769,7 @@ mod tests {
             envs: HashMap::new(),
             restart_count: 0,
             started_at: None,
+            image_pull_error: None,
         }
     }
 
@@ -713,6 +786,113 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    fn pod(container_statuses: serde_json::Value) -> Pod {
+        serde_json::from_value(serde_json::json!({
+            "metadata": { "name": "importfilestix-abc" },
+            "status": { "containerStatuses": container_statuses }
+        }))
+        .unwrap()
+    }
+
+    fn container_status(name: &str, state: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "image": format!("opencti/{}:7.261030.1-fips", name),
+            "imageID": "",
+            "ready": false,
+            "restartCount": 0,
+            "state": state
+        })
+    }
+
+    #[test]
+    fn image_pull_error_is_read_from_a_pod_waiting_on_its_image() {
+        let pod = pod(serde_json::json!([{
+            "name": "importfilestix",
+            "image": "opencti/connector-mitre:7.261030.1-fips",
+            "imageID": "",
+            "ready": false,
+            "restartCount": 0,
+            "state": { "waiting": {
+                "reason": "ImagePullBackOff",
+                "message": "Back-off pulling image \"opencti/connector-mitre:7.261030.1-fips\""
+            } }
+        }]));
+
+        assert_eq!(
+            KubeOrchestrator::image_pull_error(&pod),
+            Some(ImagePullError {
+                image: "opencti/connector-mitre:7.261030.1-fips".to_string(),
+                error: "ImagePullBackOff: Back-off pulling image \"opencti/connector-mitre:7.261030.1-fips\"".to_string(),
+            })
+        );
+        assert!(!KubeOrchestrator::is_running(&pod, "importfilestix"));
+    }
+
+    #[test]
+    fn image_pull_error_ignores_other_pod_states() {
+        let creating = pod(serde_json::json!([{
+            "name": "importfilestix",
+            "image": "opencti/connector-mitre:7.261030.1",
+            "imageID": "",
+            "ready": false,
+            "restartCount": 0,
+            "state": { "waiting": { "reason": "ContainerCreating" } }
+        }]));
+        let running = pod(serde_json::json!([{
+            "name": "importfilestix",
+            "image": "opencti/connector-mitre:7.261030.1",
+            "imageID": "",
+            "ready": true,
+            "restartCount": 0,
+            "state": { "running": { "startedAt": "2026-11-03T10:00:00Z" } }
+        }]));
+
+        assert_eq!(KubeOrchestrator::image_pull_error(&creating), None);
+        assert_eq!(KubeOrchestrator::image_pull_error(&running), None);
+        assert!(KubeOrchestrator::is_running(&running, "importfilestix"));
+    }
+
+    #[test]
+    fn image_pull_error_is_read_from_an_init_container() {
+        let mut pod = pod(serde_json::json!([container_status(
+            "importfilestix",
+            serde_json::json!({ "waiting": { "reason": "PodInitializing" } })
+        )]));
+        pod.status.as_mut().unwrap().init_container_statuses = Some(vec![
+            serde_json::from_value(container_status(
+                "init",
+                serde_json::json!({ "waiting": { "reason": "ErrImagePull" } }),
+            ))
+            .unwrap(),
+        ]);
+
+        assert_eq!(
+            KubeOrchestrator::image_pull_error(&pod),
+            Some(ImagePullError {
+                image: "opencti/init:7.261030.1-fips".to_string(),
+                error: "ErrImagePull".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_running_sidecar_is_not_a_running_connector() {
+        let pod = pod(serde_json::json!([
+            container_status(
+                "importfilestix",
+                serde_json::json!({ "waiting": { "reason": "ImagePullBackOff" } })
+            ),
+            container_status(
+                "sidecar",
+                serde_json::json!({ "running": { "startedAt": "2026-11-04T10:00:00Z" } })
+            ),
+        ]));
+
+        assert!(!KubeOrchestrator::is_running(&pod, "importfilestix"));
+        assert!(KubeOrchestrator::image_pull_error(&pod).is_some());
     }
 
     #[tokio::test]

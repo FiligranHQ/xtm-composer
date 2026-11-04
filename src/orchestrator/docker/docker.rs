@@ -6,7 +6,8 @@ use crate::orchestrator::image::Image;
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::orchestrator::ensure_proxy_ca_file;
 use crate::orchestrator::{
-    dedup_containers, manager_label_filters, Orchestrator, OrchestratorContainer,
+    dedup_containers, manager_label_filters, ImagePullError, Orchestrator,
+    OrchestratorContainer,
 };
 use async_trait::async_trait;
 use bollard::auth::DockerCredentials;
@@ -148,6 +149,7 @@ impl DockerOrchestrator {
                         labels: docker_container.labels.unwrap_or_default(),
                         restart_count: 0, // Not available in list, will be updated by get()
                         started_at: None, // Not available in list, will be updated by get()
+                        image_pull_error: None,
                     }
                 })
                 .collect(),
@@ -204,6 +206,7 @@ fn container_from_inspect(inspect: compat::ContainerInspect) -> OrchestratorCont
         labels: config.labels.unwrap_or_default(),
         restart_count: inspect.restart_count.unwrap_or(0).max(0) as u32,
         started_at: state.started_at,
+        image_pull_error: None,
     }
 }
 
@@ -218,6 +221,7 @@ fn container_from_summary(summary: compat::ContainerSummary) -> OrchestratorCont
         labels: summary.labels.unwrap_or_default(),
         restart_count: 0, // Not available in list, will be updated by get()
         started_at: None, // Not available in list, will be updated by get()
+        image_pull_error: None,
     }
 }
 
@@ -352,6 +356,7 @@ impl Orchestrator for DockerOrchestrator {
                     labels: config.labels.unwrap_or_default(),
                     restart_count: docker_container.restart_count.unwrap_or(0) as u32,
                     started_at: state.started_at,
+                    image_pull_error: None,
                 })
             }
             Err(BollardError::DockerResponseServerError {
@@ -424,6 +429,14 @@ impl Orchestrator for DockerOrchestrator {
         }
     }
 
+    async fn pull(&self, workload: &ApiWorkload) -> Result<(), ImagePullError> {
+        let resolver = Image::new(self.registry.clone());
+        let image = resolver.build_name(workload.image.clone());
+        self.pull_image(&image, resolver.get_credentials())
+            .await
+            .map_err(|error| ImagePullError { image, error })
+    }
+
     async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
         // Remove the current container if needed
         let container = self.get(workload).await;
@@ -435,14 +448,7 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let resolver = Image::new(self.registry.clone());
-        let auth = resolver.get_credentials();
-        let image = resolver.build_name(workload.image.clone());
-
-        if let Err(err) = self.pull_image(&image, auth).await {
-            error!(image = image, error = err, "Error fetching container image");
-            return None;
-        }
+        let image = Image::new(self.registry.clone()).build_name(workload.image.clone());
 
         // Create the container
         let container_env_variables = workload

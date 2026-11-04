@@ -2,6 +2,7 @@ use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::config::settings::{Portainer, Registry};
 use crate::orchestrator::docker::DockerOrchestrator;
+use crate::orchestrator::docker::compat;
 use crate::orchestrator::image::Image;
 use crate::orchestrator::ensure_proxy_ca_file;
 use crate::orchestrator::portainer::docker::{
@@ -9,7 +10,8 @@ use crate::orchestrator::portainer::docker::{
     PortainerDockerOrchestrator, PortainerGetResponse,
 };
 use crate::orchestrator::{
-    dedup_containers, manager_label_filters, Orchestrator, OrchestratorContainer,
+    dedup_containers, manager_label_filters, ImagePullError, Orchestrator,
+    OrchestratorContainer,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -80,6 +82,7 @@ impl PortainerDockerOrchestrator {
                             labels: summary.labels.unwrap(),
                             restart_count: 0, // Not available in list, will be updated by get()
                             started_at: None, // Not available in list, will be updated by get()
+                            image_pull_error: None,
                         }
                     })
                     .collect();
@@ -136,6 +139,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
                 envs: container_envs,
                 restart_count: response_data.restart_count.unwrap_or(0) as u32,
                 started_at: response_data.state.started_at,
+                image_pull_error: None,
             })
         } else {
             None
@@ -191,13 +195,12 @@ impl Orchestrator for PortainerDockerOrchestrator {
         self.deploy(workload).await
     }
 
-    async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+    async fn pull(&self, workload: &ApiWorkload) -> Result<(), ImagePullError> {
         let resolver = Image::new(self.registry.clone());
         let auth = resolver.get_credentials();
         let auth_header =
             auth.map(|c| general_purpose::STANDARD.encode(serde_json::to_string(&c).unwrap()));
         let image = resolver.build_name(workload.image.clone());
-        // region First operation, pull the image
         let create_image_uri = format!("{}/create", self.image_uri);
         let request_builder = auth_header.into_iter().fold(
             self.client
@@ -205,10 +208,29 @@ impl Orchestrator for PortainerDockerOrchestrator {
                 .query(&[("fromImage", image.clone())]),
             |req, val| req.header("X-Registry-Auth", val),
         );
-        let mut create_response = request_builder.send().await.unwrap();
-        while let Some(_chunk) = create_response.chunk().await.unwrap() {} // Iter chunk to fetch all
-        // endregion
-        // region Deploy the container after success
+        let pulled = async {
+            let response = request_builder
+                .send()
+                .await
+                .map_err(|err| err.to_string())?;
+            let status = response.status();
+            let body = response.text().await.map_err(|err| err.to_string())?;
+            if !status.is_success() {
+                return Err(compat::response_error(status, &body));
+            }
+            // The engine reports pull failures in the progress stream
+            match body.lines().find_map(compat::pull_stream_error) {
+                Some(error) => Err(error),
+                None => Ok(()),
+            }
+        };
+        pulled
+            .await
+            .map_err(|error| ImagePullError { image, error })
+    }
+
+    async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
+        let image = Image::new(self.registry.clone()).build_name(workload.image.clone());
         let image_name: String = workload.container_name();
         let deploy_container_uri = format!("{}/create?name={}", self.container_uri, image_name);
 
