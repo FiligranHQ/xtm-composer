@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1.27
-FROM rust:1.96.0-alpine AS builder
 
 # Set to true to build the FIPS image, relying on the AWS-LC FIPS module
 ARG FIPS=false
+
+FROM rust:1.96.0-alpine AS builder
+ARG FIPS
 
 # For layer optimisation, start by installing resources not dependant from source code
 RUN <<EOT
@@ -32,7 +34,7 @@ RUN <<EOT
 EOT
 
 # Start a new build stage with Alpine
-FROM alpine:latest
+FROM alpine:latest AS runtime
 
 # The binary is statically linked and uses rustls: no OpenSSL is needed at runtime.
 # Keep the CA bundle, then purge every package that pulls libssl3/libcrypto3.
@@ -57,3 +59,12 @@ ENV COMPOSER_ENV=production
 COPY entrypoint.sh /
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
+
+# Final image, selected by the FIPS build argument
+FROM runtime AS runtime-false
+
+FROM runtime AS runtime-true
+# Deploy the FIPS connector images
+ENV MANAGER__IMAGE_TAG_SUFFIX=-fips
+
+FROM runtime-${FIPS}

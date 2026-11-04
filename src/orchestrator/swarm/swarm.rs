@@ -273,7 +273,10 @@ impl Orchestrator for SwarmOrchestrator {
     }
 
     async fn pull(&self, workload: &ApiWorkload) -> Result<(), ImagePullError> {
-        let resolver = Image::new(self.registry.clone());
+        let resolver = Image::new(
+            self.registry.clone(),
+            crate::settings().manager.image_tag_suffix.clone(),
+        );
         let auth = resolver.get_credentials();
         let image = resolver.build_name(workload.image.clone());
         self.docker
@@ -302,7 +305,10 @@ impl Orchestrator for SwarmOrchestrator {
     }
 
     async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let resolver = Image::new(self.registry.clone());
+        let resolver = Image::new(
+            self.registry.clone(),
+            crate::settings().manager.image_tag_suffix.clone(),
+        );
         let auth = resolver.get_credentials();
         let image = resolver.build_name(workload.image.clone());
 

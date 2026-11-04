@@ -198,7 +198,8 @@ async fn main() {
     // Log the start
     let env = Settings::mode();
     let fips = cfg!(feature = "fips");
-    info!(version = VERSION, env, fips, "Starting XTM composer");
+    let image_tag_suffix = settings().manager.image_tag_suffix.as_deref().unwrap_or_default();
+    info!(version = VERSION, env, fips, image_tag_suffix, "Starting XTM composer");
     // Start orchestration threads
     let mut orchestrations = Vec::new();
     opencti_orchestrate(&mut orchestrations);

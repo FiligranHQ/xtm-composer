@@ -7,9 +7,31 @@ use std::collections::BTreeMap;
 use std::env;
 
 const ENV_PRODUCTION: &str = "production";
+const IMAGE_TAG_SUFFIXES: [&str; 2] = ["-fips", "-ubi9"];
 
 fn default_https_proxy_reject_unauthorized() -> bool {
     true
+}
+
+fn deserialize_image_tag_suffix<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(suffix) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    let suffix = suffix.trim();
+    if suffix.is_empty() {
+        return Ok(None);
+    }
+    if !IMAGE_TAG_SUFFIXES.contains(&suffix) {
+        return Err(de::Error::custom(format!(
+            "invalid image_tag_suffix \"{}\", expected one of: {}",
+            suffix,
+            IMAGE_TAG_SUFFIXES.join(", ")
+        )));
+    }
+    Ok(Some(suffix.to_string()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,6 +124,8 @@ pub struct Manager {
     pub credentials_key: Option<String>,
     pub credentials_key_filepath: Option<String>,
     pub debug: Option<Debug>,
+    #[serde(default, deserialize_with = "deserialize_image_tag_suffix")]
+    pub image_tag_suffix: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -330,6 +354,61 @@ mod tests {
             .unwrap()
             .try_deserialize()
             .unwrap()
+    }
+
+    #[test]
+    fn default_configuration_has_no_image_tag_suffix() {
+        let settings = settings_with_env(&[]);
+        assert!(settings.manager.image_tag_suffix.is_none());
+    }
+
+    #[test]
+    fn image_tag_suffix_is_configured_from_environment() {
+        let settings = settings_with_env(&[("MANAGER__IMAGE_TAG_SUFFIX", "-fips")]);
+        assert_eq!(settings.manager.image_tag_suffix.as_deref(), Some("-fips"));
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ImageTagSuffixOnly {
+        #[serde(default, deserialize_with = "deserialize_image_tag_suffix")]
+        image_tag_suffix: Option<String>,
+    }
+
+    fn image_tag_suffix(value: &str) -> Result<Option<String>, ConfigError> {
+        Config::builder()
+            .set_override("image_tag_suffix", value)?
+            .build()?
+            .try_deserialize::<ImageTagSuffixOnly>()
+            .map(|cfg| cfg.image_tag_suffix)
+    }
+
+    #[test]
+    fn image_tag_suffix_accepts_the_known_suffixes() {
+        assert_eq!(image_tag_suffix("-fips").unwrap().as_deref(), Some("-fips"));
+        assert_eq!(image_tag_suffix("-ubi9").unwrap().as_deref(), Some("-ubi9"));
+        assert_eq!(
+            image_tag_suffix(" -fips ").unwrap().as_deref(),
+            Some("-fips")
+        );
+    }
+
+    #[test]
+    fn image_tag_suffix_blank_is_unset() {
+        assert_eq!(image_tag_suffix("").unwrap(), None);
+        assert_eq!(image_tag_suffix("   ").unwrap(), None);
+    }
+
+    #[test]
+    fn image_tag_suffix_rejects_unknown_suffixes() {
+        for value in ["fips", "-alpine", "-fips-ubi9"] {
+            let error = image_tag_suffix(value).unwrap_err().to_string();
+            assert!(
+                error.contains("expected one of: -fips, -ubi9"),
+                "{}: {}",
+                value,
+                error
+            );
+        }
     }
 
     #[test]

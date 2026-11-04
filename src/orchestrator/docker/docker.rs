@@ -430,7 +430,10 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn pull(&self, workload: &ApiWorkload) -> Result<(), ImagePullError> {
-        let resolver = Image::new(self.registry.clone());
+        let resolver = Image::new(
+            self.registry.clone(),
+            crate::settings().manager.image_tag_suffix.clone(),
+        );
         let image = resolver.build_name(workload.image.clone());
         self.pull_image(&image, resolver.get_credentials())
             .await
@@ -448,7 +451,11 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let image = Image::new(self.registry.clone()).build_name(workload.image.clone());
+        let image = Image::new(
+            self.registry.clone(),
+            crate::settings().manager.image_tag_suffix.clone(),
+        )
+        .build_name(workload.image.clone());
 
         // Create the container
         let container_env_variables = workload
