@@ -1,5 +1,5 @@
 use serde::Serialize;
-use crate::api::ApiConnector;
+use crate::api::ApiWorkload;
 use aws_lc_rs::rsa::PrivateDecryptingKey;
 use std::str;
 
@@ -37,7 +37,7 @@ pub struct ManagedConnector {
 
 impl ManagedConnector {
 
-    pub fn to_api_connector(&self, private_key: &PrivateDecryptingKey) -> ApiConnector {
+    pub fn to_api_connector(&self, private_key: &PrivateDecryptingKey) -> ApiWorkload {
         let id = self.id.clone().into_inner();
         let (contract_configuration, undecryptable_keys) = resolve_contract_configuration(
             private_key,
@@ -48,7 +48,7 @@ impl ManagedConnector {
                 .into_iter()
                 .map(|c| (c.key, c.value, c.encrypted.unwrap_or_default())),
         );
-        ApiConnector {
+        ApiWorkload {
             id,
             platform: "opencti".to_string(),
             name: self.name.clone(),
