@@ -210,7 +210,13 @@ async fn orchestrate_existing(
         }
     }
     if let Some(err) = &container.image_pull_error {
-        composer_logs.push(image_pull_message("Connector waiting for its image", err));
+        // During a rolling update, the previous deployment keeps running
+        let outcome = if container_status == WorkloadStatus::Started {
+            "Connector not updated, the previous deployment is kept"
+        } else {
+            "Connector waiting for its image"
+        };
+        composer_logs.push(image_pull_message(outcome, err));
     }
     // Align existing and requested status
     let requested_status = RequestedStatus::from_str(requested_status_fetch.as_str()).unwrap();
@@ -1226,6 +1232,35 @@ mod tests {
             logs.last().map(String::as_str),
             Some(
                 "[XTM Composer] Connector waiting for its image: the image \"ghcr.io/acme/test:latest\" cannot be pulled: ImagePullBackOff"
+            )
+        );
+    }
+
+    /// During a Kubernetes rolling update to a missing image, the previous pod keeps
+    /// running: the message says the deployment was not updated.
+    #[tokio::test]
+    async fn orchestrate_reports_a_rolling_update_waiting_for_its_image() {
+        let mut updating = managed_container("A", "opencti");
+        updating.state = "running".to_string();
+        updating.image_pull_error = Some(ImagePullError {
+            image: "ghcr.io/acme/test:latest".to_string(),
+            error: "ImagePullBackOff".to_string(),
+        });
+
+        let outcome =
+            run_cycle_with_unpullable_images(vec![updating], vec![starting_workload("A")], &[])
+                .await;
+
+        assert!(
+            outcome.actions.is_empty(),
+            "deployment must be left running: {:?}",
+            outcome.actions
+        );
+        let (_, logs) = &outcome.logs[0];
+        assert_eq!(
+            logs.last().map(String::as_str),
+            Some(
+                "[XTM Composer] Connector not updated, the previous deployment is kept: the image \"ghcr.io/acme/test:latest\" cannot be pulled: ImagePullBackOff"
             )
         );
     }
