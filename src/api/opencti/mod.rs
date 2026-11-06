@@ -117,3 +117,38 @@ impl ComposerApi for ApiOpenCTI {
         connector::post_health::health(id, restart_count, started_at, is_in_reboot_loop, self).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    const OPENCTI_SCHEMA: &str = include_str!("../../../api/opencti/opencti.graphql");
+
+    fn enum_values(schema: &str, enum_name: &str) -> Vec<String> {
+        let header = format!("enum {} {{", enum_name);
+        let body = schema
+            .split_once(&header)
+            .unwrap_or_else(|| panic!("enum {} should be declared in the schema copy", enum_name))
+            .1;
+        let body = body.split_once('}').expect("enum body should be closed").0;
+        body.lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(String::from)
+            .collect()
+    }
+
+    #[test]
+    fn schema_copy_declares_every_opencti_connector_type() {
+        assert_eq!(
+            enum_values(OPENCTI_SCHEMA, "ConnectorType"),
+            vec![
+                "EXTERNAL_IMPORT",
+                "INTERNAL_IMPORT_FILE",
+                "INTERNAL_ENRICHMENT",
+                "INTERNAL_ANALYSIS",
+                "INTERNAL_EXPORT_FILE",
+                "INTERNAL_HUNT",
+                "STREAM",
+            ]
+        );
+    }
+}

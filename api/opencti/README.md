@@ -16,14 +16,33 @@ enum ConnectorCurrentStatus {
   started
   stopped
 }
+
+enum ConnectorType {
+  EXTERNAL_IMPORT
+  INTERNAL_IMPORT_FILE
+  INTERNAL_ENRICHMENT
+  INTERNAL_ANALYSIS
+  INTERNAL_EXPORT_FILE
+  INTERNAL_HUNT
+  STREAM
+}
 ```
+
+`ConnectorType` mirrors the OpenCTI enumeration. `ManagedConnector` has no connector type field: the type reaches XTM
+Composer as the `CONNECTOR_TYPE` entry of `manager_contract_configuration` (for example
+`{ "key": "CONNECTOR_TYPE", "value": "INTERNAL_HUNT", "encrypted": false }`), and XTM Composer passes it to the
+container environment unchanged without reading it. Every connector type, including the internal hunt connectors
+(`INTERNAL_HUNT`), is therefore deployed the same way, from its contract image and configuration. When OpenCTI adds a
+connector type, add it to the schema copy `opencti.graphql`; the test
+`schema_copy_declares_every_opencti_connector_type` pins the list.
 
 ### Object Types
 
 ```graphql
-type ManagerContractConfiguration {
-  key: String
+type ConnectorContractConfiguration {
+  key: String!
   value: String
+  encrypted: Boolean
 }
 ```
 
@@ -64,8 +83,8 @@ query getCatalogs {
 type Catalog {
   id: ID!
   name: String!
-  description: String
-  contracts: [String]
+  description: String!
+  contracts: [String!]!
 }
 ```
 
@@ -78,22 +97,15 @@ Returns the list of available catalogs and their connector contracts in OpenCTI.
 query connectorsForManagers {
   connectorsForManagers {
     id
-    standard_id
     name
-    connector_type
-    connector_scope
-    connector_state
-    connector_user_id
-    catalog_id
-    manager_id
-    manager_contract_image
-    manager_requested_status
-    manager_current_status
-    manager_connector_logs
     manager_contract_hash
+    manager_contract_image
+    manager_current_status
+    manager_requested_status
     manager_contract_configuration {
       key
       value
+      encrypted
     }
   }
 }
@@ -105,20 +117,21 @@ type ManagedConnector {
   id: ID!
   standard_id: String!
   name: String!
-  connector_type: String
-  connector_scope: [String]
-  connector_state: String
-  connector_user_id: String
-  catalog_id: String
-  manager_id: String
-  manager_contract_image: String
-  manager_requested_status: ConnectorRequestStatus
-  manager_current_status: ConnectorCurrentStatus
-  manager_connector_logs: String
-  manager_contract_hash: String
-  manager_contract_configuration: [ManagerContractConfiguration]
+  connector_user_id: ID
+  connector_state_timestamp: DateTime
+  manager_contract_image: String!
+  manager_current_status: String
+  manager_requested_status: String!
+  manager_contract_configuration: [ConnectorContractConfiguration!]!
+  manager_contract_hash: String!
+  manager_connector_logs: [String!]!
+  manager_health_metrics: ConnectorHealthMetrics
 }
 ```
+
+The connector type, the scope and every other setting of the connector arrive as entries of
+`manager_contract_configuration` (`CONNECTOR_TYPE`, `CONNECTOR_SCOPE`, ...). Entries with `encrypted: true` are
+decrypted with the manager private key and stay flagged as sensitive in the container definition.
 
 ## Mutations
 
@@ -162,10 +175,7 @@ mutation addManagedConnector($input: AddManagedConnectorInput!) {
     id
     standard_id
     name
-    connector_type
     connector_user_id
-    catalog_id
-    manager_id
     manager_contract_image
     manager_contract_hash
     manager_requested_status
@@ -182,18 +192,15 @@ mutation addManagedConnector($input: AddManagedConnectorInput!) {
 ```graphql
 input AddManagedConnectorInput {
   name: String!
-  connector_user_id: ID
-  user_id: ID!
+  connector_user_id: ID!
   catalog_id: ID!
-  automatic_user: Boolean
-  confidence_level: String
   manager_contract_image: String!
   manager_contract_configuration: [ContractConfigInput!]!
 }
 
 input ContractConfigInput {
   key: String!
-  value: String!
+  value: [String!]
 }
 ```
 
@@ -202,17 +209,15 @@ input ContractConfigInput {
 {
   "input": {
     "name": "IpInfo Enrichment Connector",
-    "user_id": "88ec0c6a-13ce-5e39-b486-354fe4a7084f",
     "connector_user_id": "88ec0c6a-13ce-5e39-b486-354fe4a7084f",
     "catalog_id": "catalog-ipinfo-id",
-    "automatic_user": false,
     "manager_contract_image": "opencti/connector-ipinfo:latest",
     "manager_contract_configuration": [
-      { "key": "IPINFO_TOKEN", "value": "your-token-here" },
-      { "key": "IPINFO_MAX_TLP", "value": "TLP:AMBER" },
-      { "key": "IPINFO_USE_ASN_NAME", "value": "false" },
-      { "key": "CONNECTOR_SCOPE", "value": "IPv4-Addr" },
-      { "key": "CONNECTOR_AUTO", "value": "true" }
+      { "key": "IPINFO_TOKEN", "value": ["your-token-here"] },
+      { "key": "IPINFO_MAX_TLP", "value": ["TLP:AMBER"] },
+      { "key": "IPINFO_USE_ASN_NAME", "value": ["false"] },
+      { "key": "CONNECTOR_SCOPE", "value": ["IPv4-Addr"] },
+      { "key": "CONNECTOR_AUTO", "value": ["true"] }
     ]
   }
 }
@@ -253,7 +258,6 @@ mutation updateConnectorStatus($input: CurrentConnectorStatusInput!) {
   updateConnectorCurrentStatus(input: $input) {
     id
     name
-    manager_id
     manager_requested_status
     manager_current_status
   }
@@ -352,7 +356,7 @@ mutation reportConnectorHealth($input: HealthConnectorStatusInput!) {
 input HealthConnectorStatusInput {
   id: ID!
   restart_count: Int!
-  started_at: DateTime!
+  started_at: String!
   is_in_reboot_loop: Boolean!
 }
 ```
@@ -397,9 +401,10 @@ mutation deleteConnector($id: ID!) {
 ## Usage Notes
 
 1. All mutations require authentication via Bearer token in the Authorization header
-2. The `manager_id` should match the configured XTM Composer manager ID
+2. The `id` sent to `registerConnectorsManager` and `updateConnectorManagerStatus` is the configured XTM Composer
+   manager ID
 3. The `connector_user_id` is the OpenCTI user ID that will own the connector
-4. Configuration values are encrypted using the manager's public key
+4. Sensitive configuration values (`encrypted: true`) are encrypted using the manager's public key
 5. Logs are sent as an array of strings and stored for debugging
 6. Health metrics help track connector stability and restart patterns
 
