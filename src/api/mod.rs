@@ -55,11 +55,15 @@ fn resolve_proxy_setting(configured: Option<&str>, env_vars: &[&str]) -> Option<
 /// set, else ALL_PROXY/all_proxy, a blank or invalid value counting as unset.
 fn system_proxy_url(env_vars: &[&str]) -> Option<String> {
     let first_usable = |vars: &[&str]| {
-        let url = resolve_proxy_setting(None, vars).filter(|url| !url.trim().is_empty())?;
+        let (env_var, url) = vars
+            .iter()
+            .find_map(|key| std::env::var(key).ok().map(|url| (*key, url)))
+            .filter(|(_, url)| !url.trim().is_empty())?;
         match reqwest::Proxy::all(&url) {
             Ok(_) => Some(url),
             Err(e) => {
-                warn!(url = %url, error = %e, "Ignoring an invalid proxy URL from the environment");
+                // Log the variable name only: the URL may contain credentials
+                warn!(env_var, error = %e, "Ignoring an invalid proxy URL from the environment");
                 None
             }
         }
@@ -975,6 +979,41 @@ mod tests {
         let config = proxied_config(None, None, Some("opencti-ingest,127.0.0.1"));
         let (_, direct, proxied) = send_and_trace(&config, &url, &target, &all_proxy).await;
         assert_eq!((direct, proxied.len()), (1, 0));
+    }
+
+    #[test]
+    fn invalid_env_proxy_warning_does_not_log_credentials() {
+        // An unencoded '/' in the password makes the URL invalid: the warning names the
+        // env var, not the URL and its credentials
+        let _env_guard = lock_clean_proxy_env();
+        set_env("HTTP_PROXY", "http://alice:S3cr3t/pw@proxy.corp:3128");
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || LogWriter(writer.clone()))
+            .with_ansi(false)
+            .finish();
+
+        let url = tracing::subscriber::with_default(subscriber, || system_proxy_url(HTTP_PROXY_ENV_VARS));
+
+        assert_eq!(url, None);
+        let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+        assert!(logs.contains("Ignoring an invalid proxy URL"), "{}", logs);
+        assert!(logs.contains("env_var=\"HTTP_PROXY\""), "{}", logs);
+        assert!(!logs.contains("S3cr3t") && !logs.contains("alice"), "{}", logs);
+    }
+
+    struct LogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
