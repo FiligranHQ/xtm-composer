@@ -1,6 +1,6 @@
 [package]
 name = "xtm-composer"
-version = "3.261021.1"
+version = "3.261120.0"
 edition = "2024"
 
 [features]
