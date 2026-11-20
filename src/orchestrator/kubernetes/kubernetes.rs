@@ -273,11 +273,31 @@ impl KubeOrchestrator {
         pods
     }
 
-    async fn get_deployment_pod(&self, workload_id: String) -> Option<Pod> {
-        self.get_deployment_pods(&workload_id)
-            .await
-            .into_iter()
-            .next()
+    /// The pods of a workload in the order their logs and runtime are read: the pods
+    /// whose connector container runs first, then the others, newest first in each
+    /// group. During a rolling update a pending or leftover pod sits next to the
+    /// running one, and reading it shows a container that is not the one at work.
+    pub fn pods_by_preference(mut pods: Vec<Pod>, container_name: &str) -> Vec<Pod> {
+        pods.sort_by(|a, b| {
+            let running =
+                Self::is_running(b, container_name).cmp(&Self::is_running(a, container_name));
+            running.then_with(|| {
+                let created_a = a.metadata.creation_timestamp.as_ref().map(|time| &time.0);
+                let created_b = b.metadata.creation_timestamp.as_ref().map(|time| &time.0);
+                created_b.cmp(&created_a)
+            })
+        });
+        pods
+    }
+
+    /// The status of the connector container of the pod, else its first container.
+    fn connector_status(pod: &Pod, container_name: &str) -> Option<ContainerStatus> {
+        let statuses = pod.status.as_ref()?.container_statuses.as_ref()?;
+        statuses
+            .iter()
+            .find(|status| status.name == container_name)
+            .or_else(|| statuses.first())
+            .cloned()
     }
 
     /// The image pull failure a container of the pod, init containers included, is
@@ -443,14 +463,14 @@ impl KubeOrchestrator {
                 || message.contains("field is immutable"))
     }
 
-    // Enrich container with pod information
-    fn enrich_container_from_pod(&self, container: &mut OrchestratorContainer, pod: Pod) {
-        let container_status = pod
-            .status
-            .and_then(|status| status.container_statuses)
-            .and_then(|statuses| statuses.first().cloned());
-
-        if let Some(status) = container_status {
+    // Enrich container with the runtime of the connector container of the pod
+    fn enrich_container_from_pod(
+        &self,
+        container: &mut OrchestratorContainer,
+        pod: &Pod,
+        container_name: &str,
+    ) {
+        if let Some(status) = Self::connector_status(pod, container_name) {
             container.restart_count = status.restart_count as u32;
 
             if let Some(started_at) = self.extract_started_at(&status) {
@@ -498,9 +518,9 @@ impl Orchestrator for KubeOrchestrator {
             container.state = "image_pull_failed".to_string();
         }
 
-        // Enrich container with pod information
-        if let Some(pod) = pods.into_iter().next() {
-            self.enrich_container_from_pod(&mut container, pod);
+        // Enrich container with the runtime of the pod at work
+        if let Some(pod) = Self::pods_by_preference(pods, &container_name).first() {
+            self.enrich_container_from_pod(&mut container, pod, &container_name);
         }
 
         Some(container)
@@ -636,22 +656,46 @@ impl Orchestrator for KubeOrchestrator {
         _container: &OrchestratorContainer,
         workload: &ApiWorkload,
     ) -> Option<Vec<String>> {
-        let deployment_pod = self.get_deployment_pod(workload.id.clone()).await;
-        match deployment_pod {
-            Some(pod) => {
-                let lp = LogParams::default();
-                let node_name = pod.metadata.name.unwrap();
-                let text_logs_response = self.pods.logs(node_name.as_str(), &lp).await;
-                match text_logs_response {
-                    Ok(text_logs) => Some(text_logs.lines().map(|line| line.to_string()).collect()),
-                    Err(err) => {
-                        error!(error = err.to_string(), "Error fetching logs");
-                        Some(vec![err.to_string()])
-                    }
+        let container_name = workload.container_name();
+        let pods = Self::pods_by_preference(
+            self.get_deployment_pods(&workload.id).await,
+            &container_name,
+        );
+        if pods.is_empty() {
+            return None;
+        }
+        let lp = LogParams {
+            container: Some(container_name.clone()),
+            tail_lines: Some(100),
+            ..Default::default()
+        };
+        // A pod whose logs cannot be read (still creating, already gone) gives way
+        // to the next one; an error is pushed only when no pod answers.
+        let mut last_error = None;
+        for pod in &pods {
+            let Some(pod_name) = pod.metadata.name.as_deref() else {
+                continue;
+            };
+            match self.pods.logs(pod_name, &lp).await {
+                Ok(text_logs) => {
+                    return Some(text_logs.lines().map(|line| line.to_string()).collect());
+                }
+                Err(err) => {
+                    debug!(
+                        pod = pod_name,
+                        error = err.to_string(),
+                        "Cannot read pod logs"
+                    );
+                    last_error = Some(err.to_string());
                 }
             }
-            None => None,
         }
+        let err = last_error?;
+        error!(error = err, "Error fetching logs");
+        Some(vec![format!(
+            "[XTM Composer] Cannot read the connector logs: {}",
+            err
+        )])
     }
 
     fn state_converter(&self, container: &OrchestratorContainer) -> WorkloadStatus {
@@ -896,6 +940,73 @@ mod tests {
 
         assert!(!KubeOrchestrator::is_running(&pod, "importfilestix"));
         assert!(KubeOrchestrator::image_pull_error(&pod).is_some());
+    }
+
+    fn named_pod(name: &str, created: &str, state: serde_json::Value) -> Pod {
+        serde_json::from_value(serde_json::json!({
+            "metadata": { "name": name, "creationTimestamp": created },
+            "status": { "containerStatuses": [container_status("importfilestix", state)] }
+        }))
+        .unwrap()
+    }
+
+    fn names(pods: &[Pod]) -> Vec<String> {
+        pods.iter()
+            .map(|pod| pod.metadata.name.clone().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn the_running_pod_is_read_before_a_newer_pending_one() {
+        let pods = vec![
+            named_pod(
+                "creating",
+                "2026-11-20T17:15:00Z",
+                serde_json::json!({ "waiting": { "reason": "ContainerCreating" } }),
+            ),
+            named_pod(
+                "running",
+                "2026-11-20T16:00:00Z",
+                serde_json::json!({ "running": { "startedAt": "2026-11-20T16:01:00Z" } }),
+            ),
+        ];
+
+        let ordered = KubeOrchestrator::pods_by_preference(pods, "importfilestix");
+
+        assert_eq!(names(&ordered), vec!["running", "creating"]);
+    }
+
+    #[test]
+    fn without_a_running_pod_the_newest_is_read_first() {
+        let waiting = serde_json::json!({ "waiting": { "reason": "ContainerCreating" } });
+        let pods = vec![
+            named_pod("older", "2026-11-20T15:00:00Z", waiting.clone()),
+            named_pod("newer", "2026-11-20T17:00:00Z", waiting),
+        ];
+
+        let ordered = KubeOrchestrator::pods_by_preference(pods, "importfilestix");
+
+        assert_eq!(names(&ordered), vec!["newer", "older"]);
+    }
+
+    #[test]
+    fn runtime_is_read_from_the_connector_container_not_a_sidecar() {
+        let mut sidecar = container_status(
+            "sidecar",
+            serde_json::json!({ "running": { "startedAt": "2026-11-20T10:00:00Z" } }),
+        );
+        sidecar["restartCount"] = serde_json::json!(7);
+        let mut connector = container_status(
+            "importfilestix",
+            serde_json::json!({ "running": { "startedAt": "2026-11-20T16:01:00Z" } }),
+        );
+        connector["restartCount"] = serde_json::json!(2);
+        let pod = pod(serde_json::json!([sidecar, connector]));
+
+        let status = KubeOrchestrator::connector_status(&pod, "importfilestix").unwrap();
+
+        assert_eq!(status.name, "importfilestix");
+        assert_eq!(status.restart_count, 2);
     }
 
     #[tokio::test]
