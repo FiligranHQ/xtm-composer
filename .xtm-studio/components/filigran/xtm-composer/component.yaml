@@ -1,0 +1,43 @@
+# XTM Composer, as XTM Studio runs it: it runs the connectors that OpenCTI manages, and the
+# collectors and injectors that OpenAEV manages, as containers of Podman on the network of the
+# environments. Those containers are its own: XTM Studio neither shows nor removes them. It signs
+# their settings with its RSA key, whose public half it gives each platform when it registers.
+schema: 1
+name: filigran/xtm-composer
+group: filigran
+title: XTM Composer
+description: Runs the connectors, collectors and injectors that OpenCTI and OpenAEV manage, as containers of Podman.
+logo: { icon: layers }
+image: { version: 3.261021.1 }
+podman: drive
+secrets:
+  MANAGER_ID: { type: uuid }
+  # PKCS#8, 4096 bits: the platforms wrap the keys of the settings in a block of 512 bytes.
+  MANAGER_KEY: { type: rsa, size: 4096 }
+files:
+  private_key.pem: { restart_on_change: true, secret: true }
+environment:
+  MANAGER__ID: "{{secrets.MANAGER_ID}}"
+  MANAGER__NAME: "XTM Composer {{name}}"
+  MANAGER__CREDENTIALS_KEY_FILEPATH: /keys/private_key.pem
+  OPENCTI__ENABLE: "{{#requires.opencti}}true{{/requires.opencti}}{{^requires.opencti}}false{{/requires.opencti}}"
+  OPENCTI__URL: "{{#requires.opencti}}{{contract.url.protocol}}://{{contract.url.address}}{{/requires.opencti}}"
+  OPENCTI__TOKEN: "{{#requires.opencti}}{{output.token}}{{/requires.opencti}}"
+  OPENCTI__DAEMON__SELECTOR: podman
+  OPENCTI__DAEMON__PODMAN__SOCKET_PATH: /var/run/docker.sock
+  OPENCTI__DAEMON__PODMAN__NETWORK_MODE: "{{network}}"
+  OPENAEV__ENABLE: "{{#requires.openaev}}true{{/requires.openaev}}{{^requires.openaev}}false{{/requires.openaev}}"
+  OPENAEV__URL: "{{#requires.openaev}}{{contract.url.value}}{{/requires.openaev}}"
+  OPENAEV__TOKEN: "{{#requires.openaev}}{{output.token}}{{/requires.openaev}}"
+  OPENAEV__DAEMON__SELECTOR: podman
+  OPENAEV__DAEMON__PODMAN__SOCKET_PATH: /var/run/docker.sock
+  OPENAEV__DAEMON__PODMAN__NETWORK_MODE: "{{network}}"
+service:
+  volumes: ["./private_key.pem:/keys/private_key.pem:ro,z"]
+requires:
+  # A service account of its own, in the group Administrators: it registers as the manager of the
+  # connectors, one per platform, and reads their settings.
+  opencti:
+    count: "0..1"
+    enrollment: { service_account: { name: "{{dataset.name}}" } }
+  openaev: { count: "0..1" }
