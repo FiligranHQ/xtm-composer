@@ -126,6 +126,9 @@ pub struct Manager {
     pub debug: Option<Debug>,
     #[serde(default, deserialize_with = "deserialize_image_tag_suffix")]
     pub image_tag_suffix: Option<String>,
+    // The container image reference the composer runs from, reported to the platform
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -354,6 +357,17 @@ mod tests {
             .unwrap()
             .try_deserialize()
             .unwrap()
+    }
+
+    #[test]
+    fn image_is_configured_from_environment() {
+        assert!(settings_with_env(&[]).manager.image.is_none());
+        let settings =
+            settings_with_env(&[("MANAGER__IMAGE", "filigran/xtm-composer:3.261121.0")]);
+        assert_eq!(
+            settings.manager.image.as_deref(),
+            Some("filigran/xtm-composer:3.261121.0")
+        );
     }
 
     #[test]

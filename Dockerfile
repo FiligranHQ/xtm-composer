@@ -55,6 +55,11 @@ COPY --from=builder /opt/xtm-composer/config/default.yaml /opt/xtm-composer/conf
 # Define the env to production
 ENV COMPOSER_ENV=production
 
+# The image reference the composer reports to the platform (set by the release and build
+# workflows, overridable at runtime with MANAGER__IMAGE, e.g. behind a registry mirror)
+ARG XTM_COMPOSER_IMAGE=""
+ENV MANAGER__IMAGE=${XTM_COMPOSER_IMAGE}
+
 # Expose and entrypoint
 COPY entrypoint.sh /
 RUN chmod +x /entrypoint.sh

@@ -48,7 +48,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           platforms: ${{ matrix.platform }}
-          build-args: FIPS=${{ matrix.variant == 'fips' }}
+          build-args: |
+            FIPS=${{ matrix.variant == 'fips' }}
+            XTM_COMPOSER_IMAGE=${{ env.REGISTRY_IMAGE }}:${{ github.ref_name }}${{ matrix.variant == 'fips' && '-fips' || '' }}
           labels: ${{ steps.meta.outputs.labels }}
           tags: ${{ env.REGISTRY_IMAGE }}
           pull: true

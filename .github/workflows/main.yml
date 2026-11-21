@@ -46,6 +46,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           platforms: ${{ matrix.platform }}
+          build-args: XTM_COMPOSER_IMAGE=${{ env.REGISTRY_IMAGE }}:rolling
           labels: ${{ steps.meta.outputs.labels }}
           tags: ${{ env.REGISTRY_IMAGE }}
           pull: true
