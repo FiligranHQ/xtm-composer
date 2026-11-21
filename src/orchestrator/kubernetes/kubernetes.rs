@@ -144,12 +144,16 @@ impl KubeOrchestrator {
         if base.len() > 63 {
             base.truncate(63);
         }
+        // A cut right after a '-' would leave an invalid RFC 1123 name
+        while base.ends_with('-') {
+            base.pop();
+        }
         base
     }
 
     async fn upsert_proxy_ca_secret(&self, workload: &ApiWorkload) -> Option<String> {
         let cert = workload.proxy_ca_bundle()?;
-        let secret_name = Self::proxy_ca_secret_name(&workload.container_name());
+        let secret_name = Self::proxy_ca_secret_name(&workload.dns_label_name());
 
         let _ = self
             .secrets
@@ -208,7 +212,7 @@ impl KubeOrchestrator {
             ..Default::default()
         };
         let patch = Patch::Merge(&deployment_patch);
-        let name = workload.container_name();
+        let name = workload.dns_label_name();
         // The deployment may have disappeared within the same cycle (e.g. deleted
         // by the refresh() self-heal): log and move on instead of panicking, which
         // would kill the orchestration task for every workload.
@@ -365,7 +369,7 @@ impl KubeOrchestrator {
             ..Default::default()
         };
         let mut container = Container {
-            name: workload.container_name(),
+            name: workload.dns_label_name(),
             image: Some(image.clone()),
             env: Some(pod_env),
             image_pull_policy: Some(self.get_image_pull_policy()),
@@ -393,7 +397,7 @@ impl KubeOrchestrator {
 
         let target_deployment = Deployment {
             metadata: ObjectMeta {
-                name: Some(workload.container_name()),
+                name: Some(workload.dns_label_name()),
                 labels: Some(deployment_labels.clone()),
                 // Specific case to let the hash config on top level
                 annotations: Some(BTreeMap::from(config_hash_entries(
@@ -492,10 +496,14 @@ impl KubeOrchestrator {
 
 #[async_trait]
 impl Orchestrator for KubeOrchestrator {
+    fn workload_name(&self, workload: &ApiWorkload) -> String {
+        workload.dns_label_name()
+    }
+
     async fn get(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
         let deployment = match self
             .deployments
-            .get(workload.container_name().as_str())
+            .get(workload.dns_label_name().as_str())
             .await
         {
             Ok(dep) => dep,
@@ -509,7 +517,7 @@ impl Orchestrator for KubeOrchestrator {
         let pods = self.get_deployment_pods(&workload.id).await;
         container.image_pull_error = pods.iter().find_map(Self::image_pull_error);
         // During a rolling update, the previous pod keeps running next to the new one
-        let container_name = workload.container_name();
+        let container_name = workload.dns_label_name();
         if container.image_pull_error.is_some()
             && !pods
                 .iter()
@@ -579,7 +587,7 @@ impl Orchestrator for KubeOrchestrator {
         let deployment_patch = self.build_configuration(workload, labels, proxy_ca_secret_name);
         let patch_value = Self::build_refresh_patch(&deployment_patch);
         let patch = Patch::Merge(&patch_value);
-        let name = workload.container_name();
+        let name = workload.dns_label_name();
         let deployment_result = self
             .deployments
             .patch(name.as_str(), &PatchParams::default(), &patch)
@@ -656,7 +664,7 @@ impl Orchestrator for KubeOrchestrator {
         _container: &OrchestratorContainer,
         workload: &ApiWorkload,
     ) -> Option<Vec<String>> {
-        let container_name = workload.container_name();
+        let container_name = workload.dns_label_name();
         let pods = Self::pods_by_preference(
             self.get_deployment_pods(&workload.id).await,
             &container_name,
@@ -810,7 +818,7 @@ mod tests {
     fn container(workload: &ApiWorkload) -> OrchestratorContainer {
         OrchestratorContainer {
             id: "uid".to_string(),
-            name: workload.container_name(),
+            name: workload.dns_label_name(),
             state: "running".to_string(),
             labels: HashMap::new(),
             envs: HashMap::new(),

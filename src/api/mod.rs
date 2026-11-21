@@ -366,6 +366,21 @@ impl ApiWorkload {
             .to_lowercase()
     }
 
+    /// The name of the workload where the engine requires an RFC 1123 label
+    /// (Kubernetes Deployment and container names, Swarm service names): lower-case
+    /// ASCII letters, digits and '-', starting and ending with a letter or a digit,
+    /// at most 63 characters.
+    ///
+    /// A [`Self::container_name`] that is already such a label is returned as is, so
+    /// the workloads deployed before this rule keep their name and are not
+    /// redeployed. Any other name (too long, non-ASCII, leading or trailing '-') is
+    /// mapped to ASCII, trimmed, cut to [`DNS_LABEL_PREFIX_MAX`] characters and
+    /// suffixed with 8 hex characters of the SHA-256 of the full workload name, so two
+    /// long names sharing a prefix stay distinct and every cycle finds the same name.
+    pub fn dns_label_name(&self) -> String {
+        dns_label_name(&self.name)
+    }
+
     pub fn container_envs(&self) -> Vec<EnvVariable> {
         let settings = crate::settings();
         let mut envs = self
@@ -497,6 +512,138 @@ pub trait ComposerApi {
         started_at: String,
         is_in_reboot_loop: bool,
     ) -> Option<String>;
+}
+
+/// Maximum length of an RFC 1123 label (Kubernetes object and container names,
+/// Swarm service names).
+pub const DNS_LABEL_MAX: usize = 63;
+/// Characters kept from the name before the '-' and the 8 hex characters of the
+/// hash: 54 + 1 + 8 = 63.
+pub const DNS_LABEL_PREFIX_MAX: usize = DNS_LABEL_MAX - 9;
+
+fn is_dns_label(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= DNS_LABEL_MAX
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+}
+
+/// See [`ApiWorkload::dns_label_name`].
+pub fn dns_label_name(name: &str) -> String {
+    let container_name = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .to_lowercase();
+    if is_dns_label(&container_name) {
+        return container_name;
+    }
+    let ascii = name
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let mut prefix: String = ascii
+        .trim_matches('-')
+        .chars()
+        .take(DNS_LABEL_PREFIX_MAX)
+        .collect();
+    while prefix.ends_with('-') {
+        prefix.pop();
+    }
+    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, name.as_bytes());
+    let hash: String = digest.as_ref()[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if prefix.is_empty() {
+        hash
+    } else {
+        format!("{prefix}-{hash}")
+    }
+}
+
+#[cfg(test)]
+mod dns_label_tests {
+    use super::*;
+
+    #[test]
+    fn a_long_openaev_name_becomes_a_63_character_label() {
+        // The name OpenAEV sends: the catalog title, then the UUID of the instance
+        let name =
+            "DNS Enumeration (subdomains and DNS records)-7653e749-8c9d-4723-a656-84f3b9fda3ab";
+        let label = dns_label_name(name);
+        assert!(
+            label.len() <= DNS_LABEL_MAX,
+            "{label} is {} characters",
+            label.len()
+        );
+        assert!(is_dns_label(&label), "{label} is not an RFC 1123 label");
+        assert!(
+            label.starts_with("dns-enumeration--subdomains-and-dns-records--7653e749-"),
+            "{label}"
+        );
+        assert_eq!(
+            label,
+            dns_label_name(name),
+            "the name must be deterministic"
+        );
+    }
+
+    #[test]
+    fn a_valid_name_of_63_characters_is_unchanged() {
+        let name = "a".repeat(31) + "-" + &"b".repeat(31);
+        assert_eq!(name.len(), 63);
+        assert_eq!(dns_label_name(&name), name);
+        assert_eq!(dns_label_name("ImportFileStix"), "importfilestix");
+        assert_eq!(
+            dns_label_name("Import File (STIX) v2"),
+            "import-file--stix--v2"
+        );
+    }
+
+    #[test]
+    fn a_name_of_64_characters_is_shortened() {
+        let name = "c".repeat(64);
+        let label = dns_label_name(&name);
+        assert_eq!(label.len(), DNS_LABEL_MAX);
+        assert!(is_dns_label(&label));
+    }
+
+    #[test]
+    fn a_name_ending_with_a_symbol_is_trimmed() {
+        let label = dns_label_name("Import File (STIX)");
+        assert!(is_dns_label(&label), "{label} is not an RFC 1123 label");
+        assert!(label.starts_with("import-file--stix-"));
+    }
+
+    #[test]
+    fn two_long_names_sharing_a_prefix_stay_distinct() {
+        let prefix = "Shared connector title that is long enough to be cut ".repeat(2);
+        let first = dns_label_name(&format!("{prefix}-11111111-aaaa"));
+        let second = dns_label_name(&format!("{prefix}-22222222-bbbb"));
+        assert_ne!(first, second);
+        assert!(is_dns_label(&first) && is_dns_label(&second));
+    }
+
+    #[test]
+    fn a_non_ascii_title_becomes_an_ascii_label() {
+        let label = dns_label_name("Énumération DNS-1234");
+        assert!(is_dns_label(&label), "{label} is not an RFC 1123 label");
+        assert!(label.starts_with("num-ration-dns-1234-"), "{label}");
+        let symbols = dns_label_name("***");
+        assert!(is_dns_label(&symbols));
+        assert_eq!(symbols.len(), 8);
+    }
 }
 
 #[cfg(test)]
