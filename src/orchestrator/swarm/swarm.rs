@@ -119,8 +119,12 @@ impl SwarmOrchestrator {
 
 #[async_trait]
 impl Orchestrator for SwarmOrchestrator {
+    fn workload_name(&self, workload: &ApiWorkload) -> String {
+        workload.dns_label_name()
+    }
+
     async fn get(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let service_name = workload.container_name();
+        let service_name = workload.dns_label_name();
         let service = self
             .docker
             .inspect_service(&service_name, None::<InspectServiceOptions>)
@@ -181,7 +185,7 @@ impl Orchestrator for SwarmOrchestrator {
 
     async fn start(&self, _container: &OrchestratorContainer, workload: &ApiWorkload) -> () {
         workload.display_env_variables();
-        let service_name = workload.container_name();
+        let service_name = workload.dns_label_name();
         if let Ok(svc) = self
             .docker
             .inspect_service(&service_name, None::<InspectServiceOptions>)
@@ -215,7 +219,7 @@ impl Orchestrator for SwarmOrchestrator {
     }
 
     async fn stop(&self, _container: &OrchestratorContainer, _workload: &ApiWorkload) -> () {
-        let service_name = _workload.container_name();
+        let service_name = _workload.dns_label_name();
         if let Ok(svc) = self
             .docker
             .inspect_service(&service_name, None::<InspectServiceOptions>)
@@ -484,7 +488,7 @@ impl Orchestrator for SwarmOrchestrator {
         let replicas = if is_starting { 1 } else { 0 };
 
         let service_spec = ServiceSpec {
-            name: Some(workload.container_name()),
+            name: Some(workload.dns_label_name()),
             labels: Some(labels),
             task_template: Some(TaskSpec {
                 container_spec: Some(container_spec),
@@ -521,7 +525,7 @@ impl Orchestrator for SwarmOrchestrator {
         _container: &OrchestratorContainer,
         workload: &ApiWorkload,
     ) -> Option<Vec<String>> {
-        let service_name = workload.container_name();
+        let service_name = workload.dns_label_name();
 
         // Retrieve logs via tasks: find the running task's container and get its logs
         let filters = HashMap::from([(

@@ -293,7 +293,7 @@ pub async fn orchestrate(
                         if logs_due(log_ticks, &workload.id, api.post_logs_schedule()) {
                             let message = format!(
                                 "[XTM Composer] Connector not deployed: a deployment named \"{}\" already exists and belongs to another owner ({}). Rename this connector or remove that deployment.",
-                                workload.container_name(),
+                                orchestrator.workload_name(workload),
                                 found_id
                             );
                             api.patch_logs(workload.id.clone(), vec![message]).await;
@@ -330,7 +330,7 @@ pub async fn orchestrate(
                     // after a connector instance name change while the workload ID
                     // remains the same. Remove the old deployment so the next
                     // orchestration cycle deploys with the correct name.
-                    let expected_name = workload.container_name();
+                    let expected_name = orchestrator.workload_name(workload);
                     if container.name != expected_name {
                         orchestrator.remove(&container).await;
                     }

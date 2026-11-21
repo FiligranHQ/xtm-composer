@@ -185,6 +185,12 @@ pub trait Orchestrator {
         build_labels(&crate::settings().manager.id, workload)
     }
 
+    /// The name the engine knows the workload by. Engines that cap names at an
+    /// RFC 1123 label (Kubernetes, Swarm) return [`ApiWorkload::dns_label_name`].
+    fn workload_name(&self, workload: &ApiWorkload) -> String {
+        workload.container_name()
+    }
+
     async fn get(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer>;
 
     async fn list(&self) -> Vec<OrchestratorContainer>;
