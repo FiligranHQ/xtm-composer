@@ -4,18 +4,22 @@ mod engine;
 mod orchestrator;
 mod system;
 
-use crate::config::settings::Settings;
+use crate::config::settings::{Logger, Settings};
 use crate::engine::openaev::{openaev_alive, openaev_orchestration};
 use crate::engine::opencti::{opencti_alive, opencti_orchestration};
 use futures::future::join_all;
 use rolling_file::{BasicRollingFileAppender, RollingConditionBasic};
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::OnceLock;
 use std::{env, fs};
 use tokio::task::JoinHandle;
-use tracing::{Level, info, warn};
+use tracing::{Level, Subscriber, info, warn};
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::fmt::Layer;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::Layer as _;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Registry, layer::SubscriberExt};
 use aws_lc_rs::rsa::PrivateDecryptingKey;
@@ -40,7 +44,7 @@ pub fn private_key() -> &'static PrivateDecryptingKey {
 }
 
 // Global init logger
-fn init_logger() {
+fn init_logger() -> WorkerGuard {
     let setting = Settings::new().unwrap();
     let logger_config = &setting.manager.logger;
 
@@ -63,37 +67,49 @@ fn init_logger() {
 
     let current_exe_patch = env::current_exe().unwrap();
     let parent_path = current_exe_patch.parent().unwrap();
+    let (subscriber, guard) = build_subscriber(
+        logger_config,
+        log_level,
+        &parent_path.join(BASE_DIRECTORY_LOG),
+        std::io::stdout,
+    );
+    subscriber.init();
+    guard
+}
+
+// Build the logging subscriber: `console` gates stdout, `directory` gates the log file.
+// The returned guard flushes the non-blocking file writer and must outlive all logging.
+fn build_subscriber<W>(
+    logger_config: &Logger,
+    log_level: Level,
+    log_path: &Path,
+    console_writer: W,
+) -> (impl Subscriber + Send + Sync, WorkerGuard)
+where
+    W: for<'a> MakeWriter<'a> + Send + Sync + 'static,
+{
     let condition = RollingConditionBasic::new().daily();
-    let log_path = parent_path.join(BASE_DIRECTORY_LOG);
-    fs::create_dir(log_path.clone()).unwrap_or_default();
+    fs::create_dir(log_path).unwrap_or_default();
     let log_file = log_path.join(PREFIX_LOG_NAME);
     let file_appender =
         BasicRollingFileAppender::new(log_file, condition, BASE_DIRECTORY_SIZE).unwrap();
-    let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
+    let (file_writer, guard) = tracing_appender::non_blocking(file_appender);
 
-    if logger_config.format == "json" {
-        let console_layer = Layer::new()
-            .with_writer(std::io::stdout.with_max_level(log_level))
-            .json();
-        let file_layer = Layer::new()
+    let console_writer = console_writer.with_max_level(log_level);
+    let file_layer = logger_config.directory.then(|| {
+        Layer::new()
             .with_writer(file_writer.with_max_level(log_level))
-            .json();
-        Registry::default()
-            .with(logger_config.directory.then(|| console_layer))
-            .with(logger_config.console.then(|| file_layer))
-            .init();
-    } else {
-        let console_layer = Layer::new()
-            .with_writer(std::io::stdout.with_max_level(log_level))
-            .pretty();
-        let file_layer = Layer::new()
-            .with_writer(file_writer.with_max_level(log_level))
-            .json();
-        Registry::default()
-            .with(logger_config.directory.then(|| console_layer))
-            .with(logger_config.console.then(|| file_layer))
-            .init();
-    }
+            .json()
+    });
+    let console_layer = logger_config.console.then(|| {
+        if logger_config.format == "json" {
+            Layer::new().with_writer(console_writer).json().boxed()
+        } else {
+            Layer::new().with_writer(console_writer).pretty().boxed()
+        }
+    });
+    let subscriber = Registry::default().with(console_layer).with(file_layer);
+    (subscriber, guard)
 }
 
 // Load and verify RSA private key from configuration
@@ -194,7 +210,8 @@ async fn main() {
     // Required since reqwest 0.13 switched from native-tls to rustls.
     install_crypto_provider();
     // Initialize the global logging system
-    init_logger();
+    // Keep the guard alive for the whole run, otherwise the file writer thread stops
+    let _log_guard = init_logger();
     // Log the start
     let env = Settings::mode();
     let fips = cfg!(feature = "fips");
@@ -217,5 +234,73 @@ mod tests {
         install_crypto_provider();
         let provider = CryptoProvider::get_default().expect("No rustls CryptoProvider installed");
         assert_eq!(provider.fips(), cfg!(feature = "fips"));
+    }
+
+    #[derive(Clone, Default)]
+    struct SharedBuf(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for SharedBuf {
+        type Writer = SharedBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    // Returns (console output, file output) after logging one line
+    fn log_once(name: &str, directory: bool, console: bool) -> (String, String) {
+        let dir = env::temp_dir().join(format!("xtm-composer-logger-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let config = Logger {
+            level: "info".to_string(),
+            format: "json".to_string(),
+            directory,
+            console,
+        };
+        let stdout = SharedBuf::default();
+        let (subscriber, guard) = build_subscriber(&config, Level::INFO, &dir, stdout.clone());
+        tracing::subscriber::with_default(subscriber, || info!("hello logger"));
+        drop(guard); // flushes the non-blocking file writer
+        let file = fs::read_to_string(dir.join(PREFIX_LOG_NAME)).unwrap_or_default();
+        let console_out = String::from_utf8(stdout.0.lock().unwrap().clone()).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        (console_out, file)
+    }
+
+    #[test]
+    fn console_only_logs_to_stdout_and_not_to_the_file() {
+        let (console, file) = log_once("console-only", false, true);
+        assert!(console.contains("hello logger"));
+        assert!(file.is_empty());
+    }
+
+    #[test]
+    fn directory_only_logs_to_the_file_and_not_to_stdout() {
+        let (console, file) = log_once("directory-only", true, false);
+        assert!(console.is_empty());
+        assert!(file.contains("hello logger"));
+    }
+
+    #[test]
+    fn both_switches_log_to_stdout_and_the_file() {
+        let (console, file) = log_once("both", true, true);
+        assert!(console.contains("hello logger"));
+        assert!(file.contains("hello logger"));
+    }
+
+    #[test]
+    fn no_switch_logs_nowhere() {
+        let (console, file) = log_once("none", false, false);
+        assert!(console.is_empty());
+        assert!(file.is_empty());
     }
 }
