@@ -44,6 +44,55 @@ fn logs_due(log_ticks: &mut HashMap<String, Instant>, workload_id: &str, schedul
     }
 }
 
+/// How often the health metrics of a running workload are reported.
+const HEALTH_SCHEDULE: Duration = Duration::from_secs(30);
+
+/// Last health report sent for one workload: when, and for which container run.
+#[derive(Clone, Debug)]
+pub struct HealthTick {
+    at: Instant,
+    container_id: String,
+    started_at: String,
+}
+
+/// Returns true when the health metrics of this running workload are due, and
+/// marks them as reported. Each workload has its own schedule: a single shared
+/// timer let only the first running workload of each cycle report its health.
+/// A report is due at once when the workload was never reported, when it just
+/// started, or when its container changed since the last report (a refresh
+/// recreates the container, an in-place restart sets a new start time), so the
+/// platform never keeps the start time and restart count of an earlier container.
+fn health_due(
+    health_ticks: &mut HashMap<String, HealthTick>,
+    workload_id: &str,
+    container: &OrchestratorContainer,
+    started_at: &str,
+    just_started: bool,
+    schedule: Duration,
+) -> bool {
+    let now = Instant::now();
+    let due = match health_ticks.get(workload_id) {
+        None => true,
+        Some(last) => {
+            just_started
+                || last.container_id != container.id
+                || last.started_at != started_at
+                || now.duration_since(last.at) >= schedule
+        }
+    };
+    if due {
+        health_ticks.insert(
+            workload_id.to_string(),
+            HealthTick {
+                at: now,
+                container_id: container.id.clone(),
+                started_at: started_at.to_string(),
+            },
+        );
+    }
+    due
+}
+
 /// Returns true when the workload configuration could not be fully decrypted.
 /// Such a configuration must never be deployed: the undecryptable secrets
 /// would be written as blanks, breaking workloads that were working fine.
@@ -113,7 +162,7 @@ async fn orchestrate_missing(
 
 async fn orchestrate_existing(
     log_ticks: &mut HashMap<String, Instant>,
-    health_tick: &mut Instant,
+    health_ticks: &mut HashMap<String, HealthTick>,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
     workload: &ApiWorkload,
@@ -148,27 +197,27 @@ async fn orchestrate_existing(
                        final_status == WorkloadStatus::Started && 
                        workload_status == WorkloadStatus::Stopped;
     
-    // Send health metrics if:
-    // - Workload just started (immediate reporting)
-    // - OR workload is running and 30 seconds have elapsed
-    let now = Instant::now();
-    let should_send_health = just_started || 
-        (final_status == WorkloadStatus::Started && 
-         now.duration_since(health_tick.clone()) >= Duration::from_secs(30));
-    
-    if should_send_health {
+    // Send the health metrics of a running workload on its own schedule, and at
+    // once when it just started or its container changed (see health_due)
+    if final_status == WorkloadStatus::Started {
         if let Some(started_at) = &container.started_at {
-            info!(id = workload_id, "Reporting health metrics");
-            api.patch_health(
-                workload_id.clone(),
-                container.restart_count,
-                started_at.clone(),
-                is_in_reboot_loop,
-            ).await;
-        }
-        // Reset timer only for running workloads
-        if final_status == WorkloadStatus::Started {
-            *health_tick = now;
+            if health_due(
+                health_ticks,
+                &workload_id,
+                &container,
+                started_at,
+                just_started,
+                HEALTH_SCHEDULE,
+            ) {
+                info!(id = workload_id, "Reporting health metrics");
+                api.patch_health(
+                    workload_id.clone(),
+                    container.restart_count,
+                    started_at.clone(),
+                    is_in_reboot_loop,
+                )
+                .await;
+            }
         }
     }
     if container_status_not_aligned {
@@ -254,7 +303,7 @@ async fn orchestrate_existing(
 
 pub async fn orchestrate(
     log_ticks: &mut HashMap<String, Instant>,
-    health_tick: &mut Instant,
+    health_ticks: &mut HashMap<String, HealthTick>,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
 ) {
@@ -300,7 +349,7 @@ pub async fn orchestrate(
                         }
                         continue;
                     }
-                    orchestrate_existing(log_ticks, health_tick, orchestrator, api, workload, container).await
+                    orchestrate_existing(log_ticks, health_ticks, orchestrator, api, workload, container).await
                 }
                 None => orchestrate_missing(log_ticks, orchestrator, api, workload).await,
             }
@@ -311,6 +360,7 @@ pub async fn orchestrate(
             .map(|n| (n.id.clone(), n.clone()))
             .collect();
         log_ticks.retain(|id, _| workloads_by_id.contains_key(id));
+        health_ticks.retain(|id, _| workloads_by_id.contains_key(id));
         let platform = api.platform();
         let existing_containers = orchestrator.list().await;
         for container in existing_containers {
@@ -442,6 +492,8 @@ mod tests {
         workloads: Vec<ApiWorkload>,
         pushed_logs: Arc<Mutex<Vec<(String, Vec<String>)>>>,
         patched_statuses: Arc<Mutex<Vec<(String, WorkloadStatus)>>>,
+        /// (workload id, started_at) of every health report
+        patched_health: Arc<Mutex<Vec<(String, String)>>>,
     }
 
     impl FakeApi {
@@ -450,6 +502,7 @@ mod tests {
                 workloads,
                 pushed_logs: Arc::new(Mutex::new(Vec::new())),
                 patched_statuses: Arc::new(Mutex::new(Vec::new())),
+                patched_health: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -502,11 +555,15 @@ mod tests {
 
         async fn patch_health(
             &self,
-            _id: String,
+            id: String,
             _restart_count: u32,
-            _started_at: String,
+            started_at: String,
             _is_in_reboot_loop: bool,
         ) -> Option<String> {
+            self.patched_health
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push((id, started_at));
             None
         }
     }
@@ -629,9 +686,9 @@ mod tests {
             Box::new(FakeApi::new(vec![workload("A"), workload("B"), workload("C")]));
 
         let mut log_ticks = HashMap::new();
-        let mut health_tick = Instant::now();
+        let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -660,9 +717,9 @@ mod tests {
             Box::new(FakeApi::new(vec![workload("A"), workload("B"), workload("C")]));
 
         let mut log_ticks = HashMap::new();
-        let mut health_tick = Instant::now();
+        let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -685,9 +742,9 @@ mod tests {
             Box::new(FakeApi::new(vec![workload("A")]));
 
         let mut log_ticks = HashMap::new();
-        let mut health_tick = Instant::now();
+        let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -710,9 +767,9 @@ mod tests {
             Box::new(FakeApi::new(vec![workload("A"), workload("B")]));
 
         let mut log_ticks = HashMap::new();
-        let mut health_tick = Instant::now();
+        let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -741,9 +798,9 @@ mod tests {
             Box::new(FakeApi::new(vec![workload("A"), workload("B")]));
 
         let mut log_ticks = HashMap::new();
-        let mut health_tick = Instant::now();
+        let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -771,9 +828,9 @@ mod tests {
             Box::new(FakeApi::new(vec![workload("A"), workload("B")]));
 
         let mut log_ticks = HashMap::new();
-        let mut health_tick = Instant::now();
+        let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -795,9 +852,9 @@ mod tests {
         let api: Box<dyn ComposerApi + Send + Sync> = Box::new(FakeApi::new(workloads));
 
         let mut log_ticks = HashMap::new();
-        let mut health_tick = Instant::now();
+        let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
 
         let actions = actions.lock().expect("mutex should not be poisoned").clone();
         let removed = removed_ids.lock().expect("mutex should not be poisoned").clone();
@@ -891,9 +948,9 @@ mod tests {
         let overdue = Instant::now().checked_sub(Duration::from_secs(7200)).unwrap();
         let mut log_ticks: HashMap<String, Instant> =
             workloads.iter().map(|c| (c.id.clone(), overdue)).collect();
-        let mut health_tick = Instant::now();
+        let mut health_ticks = HashMap::new();
         for _ in 0..cycles {
-            orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+            orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
         }
 
         let pushed = pushed_logs.lock().expect("mutex should not be poisoned").clone();
@@ -917,6 +974,120 @@ mod tests {
 
         let ids: Vec<&str> = pushed.iter().map(|(id, _)| id.as_str()).collect();
         assert_eq!(ids, vec!["A", "B", "C"], "each connector once, not again on the 2nd cycle");
+    }
+
+    fn running_workload(id: &str) -> ApiWorkload {
+        let mut workload = starting_workload(id);
+        workload.current_status = Some("started".to_string());
+        workload
+    }
+
+    fn running_container(id: &str, started_at: &str) -> OrchestratorContainer {
+        let mut container = managed_container(id, "opencti");
+        container.state = "running".to_string();
+        container.started_at = Some(started_at.to_string());
+        container
+    }
+
+    /// Runs one cycle over the given containers with the given health schedule
+    /// state, and returns the health reports sent to the platform.
+    async fn run_health_cycle(
+        health_ticks: &mut HashMap<String, HealthTick>,
+        containers: Vec<OrchestratorContainer>,
+        workloads: Vec<ApiWorkload>,
+    ) -> Vec<(String, String)> {
+        let api = FakeApi::new(workloads);
+        let patched_health = Arc::clone(&api.patched_health);
+        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(api);
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+            Box::new(FakeOrchestrator::new(containers, Arc::new(Mutex::new(Vec::new()))));
+        let mut log_ticks = HashMap::new();
+        orchestrate(&mut log_ticks, health_ticks, &orchestrator, &api).await;
+        patched_health.lock().expect("mutex should not be poisoned").clone()
+    }
+
+    /// Moves every health schedule one full period back, as if 30 s had elapsed.
+    fn elapse_health_schedule(health_ticks: &mut HashMap<String, HealthTick>) {
+        for tick in health_ticks.values_mut() {
+            tick.at = tick.at.checked_sub(HEALTH_SCHEDULE).unwrap();
+        }
+    }
+
+    /// Regression test: health used to share a single timer, so only the first
+    /// running workload of each cycle ever reported its health to the platform.
+    #[tokio::test]
+    async fn health_is_reported_for_every_running_workload_once_per_schedule() {
+        let containers = || {
+            vec![
+                running_container("A", "2026-11-23T05:00:00Z"),
+                running_container("B", "2026-11-23T05:00:00Z"),
+                running_container("C", "2026-11-23T05:00:00Z"),
+            ]
+        };
+        let workloads = || vec![running_workload("A"), running_workload("B"), running_workload("C")];
+        let mut health_ticks = HashMap::new();
+        let ids = |reports: Vec<(String, String)>| -> Vec<String> {
+            reports.into_iter().map(|(id, _)| id).collect()
+        };
+
+        // First cycle: never reported, every workload reports at once
+        let first = run_health_cycle(&mut health_ticks, containers(), workloads()).await;
+        assert_eq!(ids(first), vec!["A", "B", "C"]);
+        // Same schedule period: nothing is due
+        let same_period = run_health_cycle(&mut health_ticks, containers(), workloads()).await;
+        assert!(same_period.is_empty(), "not due yet: {same_period:?}");
+        // 30 s later: every workload reports again, not only the first one
+        elapse_health_schedule(&mut health_ticks);
+        let next_period = run_health_cycle(&mut health_ticks, containers(), workloads()).await;
+        assert_eq!(ids(next_period), vec!["A", "B", "C"]);
+    }
+
+    /// Regression test: a container recreated by a refresh, or restarted in place,
+    /// is already running at the next cycle; its new start time used to wait for
+    /// a Stopped -> Started transition that the composer never saw.
+    #[tokio::test]
+    async fn health_is_reported_at_once_when_the_container_changed() {
+        let mut health_ticks = HashMap::new();
+        let first = run_health_cycle(
+            &mut health_ticks,
+            vec![running_container("A", "2026-11-23T04:57:00Z"), running_container("B", "2026-11-23T04:57:00Z")],
+            vec![running_workload("A"), running_workload("B")],
+        )
+        .await;
+        assert_eq!(first.len(), 2);
+
+        // In-place restart of A (new start time), recreate of B (new container id),
+        // both within the same schedule period
+        let mut recreated = running_container("B", "2026-11-23T04:57:00Z");
+        recreated.id = "container-B-recreated".to_string();
+        let changed = run_health_cycle(
+            &mut health_ticks,
+            vec![running_container("A", "2026-11-23T05:53:00Z"), recreated],
+            vec![running_workload("A"), running_workload("B")],
+        )
+        .await;
+        assert_eq!(
+            changed,
+            vec![
+                ("A".to_string(), "2026-11-23T05:53:00Z".to_string()),
+                ("B".to_string(), "2026-11-23T04:57:00Z".to_string()),
+            ]
+        );
+    }
+
+    /// The health schedule of a deleted workload is dropped with it.
+    #[tokio::test]
+    async fn health_schedule_of_a_deleted_workload_is_dropped() {
+        let mut health_ticks = HashMap::new();
+        run_health_cycle(
+            &mut health_ticks,
+            vec![running_container("A", "2026-11-23T05:00:00Z")],
+            vec![running_workload("A")],
+        )
+        .await;
+        assert!(health_ticks.contains_key("A"));
+        run_health_cycle(&mut health_ticks, vec![], vec![]).await;
+        assert!(health_ticks.is_empty());
     }
 
     /// A skipped colliding workload reports why to the platform (on the logs
@@ -1124,8 +1295,8 @@ mod tests {
             .unwrap();
         let mut log_ticks: HashMap<String, Instant> =
             workloads.iter().map(|c| (c.id.clone(), overdue)).collect();
-        let mut health_tick = Instant::now();
-        orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+        let mut health_ticks = HashMap::new();
+        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
 
         let lock = |mutex: &Arc<Mutex<Vec<String>>>| {
             mutex.lock().expect("mutex should not be poisoned").clone()

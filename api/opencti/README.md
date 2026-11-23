@@ -369,6 +369,10 @@ input HealthConnectorStatusInput {
 }
 ```
 
+**When health is reported:** XTM Composer reports the health of each running connector on its own 30-second schedule, and at once when the connector starts or its container changes (a new container id after a refresh, or a new `started_at` after an in-place restart). The OpenAEV connector instance health (`connector_instance_started_at`, `connector_instance_restart_count`) follows the same schedule.
+
+**Restart count semantics:** `restart_count` is the orchestrator's restart count of the current container (Docker and Podman `RestartCount`, Kubernetes container `restartCount`, Swarm tasks after the first). A refresh (configuration or image change) recreates the container, so `started_at` moves to the new container's start and `restart_count` starts again at 0.
+
 ### Delete Connector
 
 ```graphql
@@ -401,7 +405,7 @@ mutation deleteConnector($id: ID!) {
 3. The `connector_user_id` is the OpenCTI user ID that will own the connector
 4. Configuration values are encrypted using the manager's public key
 5. Logs are sent as an array of strings and stored for debugging
-6. Health metrics help track connector stability and restart patterns
+6. Health metrics help track connector stability and restart patterns; the restart count is per container and starts again at 0 when a refresh recreates the container
 
 ## Error Handling
 
