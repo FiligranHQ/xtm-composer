@@ -30,16 +30,52 @@ pub(crate) const CLIENT_TIMEOUT: u64 = 120;
 #[cfg(unix)]
 const DEFAULT_DOCKER_SOCKET: &str = "/var/run/docker.sock";
 
+fn default_docker_socket() -> &'static str {
+    #[cfg(unix)]
+    {
+        DEFAULT_DOCKER_SOCKET
+    }
+    #[cfg(not(unix))]
+    {
+        "npipe:////./pipe/docker_engine"
+    }
+}
+
+/// Docker API endpoint: a filesystem socket, or a tcp/http/ssh URL.
+/// A configured `socket_path` wins. Otherwise `DOCKER_HOST` is used: `unix://PATH`
+/// becomes that path (an empty path falls back to the default socket) and any other
+/// scheme is kept as a URL. An unset host uses the default socket.
+pub(crate) fn resolve_docker_endpoint(socket_path: Option<&str>, docker_host: Option<&str>) -> String {
+    if let Some(path) = socket_path.map(str::trim).filter(|path| !path.is_empty()) {
+        return path.strip_prefix("unix://").filter(|path| !path.is_empty()).unwrap_or(path).to_string();
+    }
+    match docker_host.map(str::trim).filter(|host| !host.is_empty()) {
+        Some(host) => match host.strip_prefix("unix://") {
+            Some("") => default_docker_socket().to_string(),
+            Some(path) => path.to_string(),
+            None => host.to_string(),
+        },
+        None => default_docker_socket().to_string(),
+    }
+}
+
+pub(crate) fn connect_docker_client(endpoint: &str) -> Result<Docker, BollardError> {
+    if endpoint.contains("://") {
+        Docker::connect_with_host(endpoint)
+    } else {
+        Docker::connect_with_socket(endpoint, CLIENT_TIMEOUT, API_DEFAULT_VERSION)
+    }
+}
+
 impl DockerOrchestrator {
     /// Connect to the Docker API socket, waiting for the API to answer.
     pub async fn new(daemon: &Daemon, retry_interval: Duration) -> Self {
         let options = daemon.docker.clone();
         let socket_path = options.as_ref().and_then(|options| options.socket_path.clone());
+        let docker_host = std::env::var("DOCKER_HOST").ok();
+        let endpoint = resolve_docker_endpoint(socket_path.as_deref(), docker_host.as_deref());
         let docker = loop {
-            let connected = match &socket_path {
-                Some(path) => Docker::connect_with_socket(path, CLIENT_TIMEOUT, API_DEFAULT_VERSION),
-                None => Docker::connect_with_socket_defaults(),
-            };
+            let connected = connect_docker_client(&endpoint);
             // Docker rejects the requests of a client more recent than itself
             let negotiated = match connected {
                 Ok(docker) => docker.negotiate_version().await,
@@ -58,16 +94,16 @@ impl DockerOrchestrator {
             }
         };
         info!(
-            socket = socket_path.as_deref().unwrap_or("default"),
+            socket = endpoint.as_str(),
             api_version = docker.client_version().to_string(),
             "Connected to Docker"
         );
         #[cfg(unix)]
-        let compat = CompatApi::new(
-            socket_path.as_deref().unwrap_or(DEFAULT_DOCKER_SOCKET),
-            Some(docker.client_version().to_string()),
-        )
-        .ok();
+        let compat = if endpoint.contains("://") {
+            None
+        } else {
+            CompatApi::new(&endpoint, Some(docker.client_version().to_string())).ok()
+        };
         #[cfg(not(unix))]
         let compat = None;
         Self::with_engine(docker, ContainerEngine::Docker, compat, options, daemon.registry.clone())
@@ -665,5 +701,36 @@ mod tests {
         assert_eq!(ulimits[0].name.as_deref(), Some("nofile"));
         assert!(host_config.binds.is_none());
         assert!(build_host_config(None, ContainerEngine::Docker, None).network_mode.is_none());
+    }
+
+    #[test]
+    fn docker_host_selects_the_socket_when_config_has_no_socket_path() {
+        let endpoint = resolve_docker_endpoint(
+            None,
+            Some("unix:///home/user/.colima/default/docker.sock"),
+        );
+        assert_eq!(endpoint, "/home/user/.colima/default/docker.sock");
+    }
+
+    #[test]
+    fn configured_socket_path_wins_over_docker_host() {
+        let endpoint = resolve_docker_endpoint(
+            Some("/run/custom.sock"),
+            Some("unix:///home/user/.colima/default/docker.sock"),
+        );
+        assert_eq!(endpoint, "/run/custom.sock");
+    }
+
+    #[test]
+    fn unset_docker_host_uses_the_default_socket() {
+        assert_eq!(resolve_docker_endpoint(None, None), default_docker_socket());
+    }
+
+    #[test]
+    fn tcp_docker_host_is_kept_as_a_url() {
+        assert_eq!(
+            resolve_docker_endpoint(None, Some("tcp://127.0.0.1:2375")),
+            "tcp://127.0.0.1:2375"
+        );
     }
 }
