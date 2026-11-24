@@ -223,26 +223,28 @@ fn append_proxy_envs(
     let resolved_no_proxy = resolve_proxy_setting(no_proxy, NO_PROXY_ENV_VARS);
 
     if let Some(url) = resolved_http {
-        envs.push(EnvVariable {
-            key: "HTTP_PROXY".into(),
-            value: url,
-            is_sensitive: true, // may contain credentials (e.g. http://user:pass@proxy:8080)
-        });
+        // The connector contract may already carry OpenCTI's proxy. The
+        // connector runs where Composer deploys it, so Composer's value
+        // replaces that entry instead of adding a second one (#170).
+        set_proxy_env(envs, "HTTP_PROXY", url, true);
     }
     if let Some(url) = resolved_https {
-        envs.push(EnvVariable {
-            key: "HTTPS_PROXY".into(),
-            value: url,
-            is_sensitive: true, // may contain credentials (e.g. http://user:pass@proxy:8080)
-        });
+        set_proxy_env(envs, "HTTPS_PROXY", url, true);
     }
     if let Some(val) = resolved_no_proxy {
-        envs.push(EnvVariable {
-            key: "NO_PROXY".into(),
-            value: val,
-            is_sensitive: false,
-        });
+        set_proxy_env(envs, "NO_PROXY", val, false);
     }
+}
+
+/// One entry per proxy variable. `http_proxy` and `HTTP_PROXY` are the same
+/// variable: a second copy is what the orchestrator was deploying.
+fn set_proxy_env(envs: &mut Vec<EnvVariable>, key: &str, value: String, is_sensitive: bool) {
+    envs.retain(|env| !env.key.eq_ignore_ascii_case(key));
+    envs.push(EnvVariable {
+        key: key.to_string(),
+        value,
+        is_sensitive,
+    });
 }
 
 /// Append commonly-supported TLS CA env vars so workload runtimes can trust
@@ -1291,6 +1293,53 @@ mod tests {
         assert_eq!(envs[0].value, "http://proxy:8080");
         assert_eq!(envs[1].key, "HTTPS_PROXY");
         assert_eq!(envs[1].value, "https://proxy:8443");
+    }
+
+    #[test]
+    fn append_proxy_envs_replaces_a_contract_proxy_instead_of_duplicating_it() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            std::env::remove_var("HTTP_PROXY");
+            std::env::remove_var("http_proxy");
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::remove_var("https_proxy");
+            std::env::remove_var("NO_PROXY");
+            std::env::remove_var("no_proxy");
+        }
+
+        // The connector contract already carries OpenCTI's proxy (#170).
+        let mut envs = vec![
+            EnvVariable {
+                key: "HTTP_PROXY".into(),
+                value: "http://opencti-proxy:3128".into(),
+                is_sensitive: false,
+            },
+            EnvVariable {
+                key: "NO_PROXY".into(),
+                value: "localhost".into(),
+                is_sensitive: false,
+            },
+        ];
+        append_proxy_envs(
+            &mut envs,
+            true,
+            Some("http://composer-proxy:8080"),
+            None,
+            Some("composer.internal"),
+        );
+
+        let http: Vec<_> = envs
+            .iter()
+            .filter(|env| env.key.eq_ignore_ascii_case("HTTP_PROXY"))
+            .collect();
+        assert_eq!(http.len(), 1, "HTTP_PROXY duplicated: {envs:?}");
+        assert_eq!(http[0].value, "http://composer-proxy:8080");
+        let no_proxy: Vec<_> = envs
+            .iter()
+            .filter(|env| env.key.eq_ignore_ascii_case("NO_PROXY"))
+            .collect();
+        assert_eq!(no_proxy.len(), 1, "NO_PROXY duplicated: {envs:?}");
+        assert_eq!(no_proxy[0].value, "composer.internal");
     }
 
     #[test]
