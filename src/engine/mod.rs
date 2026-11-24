@@ -12,7 +12,7 @@ use crate::orchestrator::{Orchestrator, composer};
 use crate::settings;
 use crate::system::signals;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 
@@ -89,10 +89,10 @@ async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
             // Created once the orchestrator is ready: ticks missed while it waits for its socket would run back-to-back
             let mut interval = interval(Duration::from_secs(settings.manager.execute_schedule));
             let mut log_ticks = HashMap::new();
-            let mut health_tick = Instant::now();
+            let mut health_ticks = HashMap::new();
             loop {
                 interval.tick().await; // Wait for period
-                composer::orchestrate(&mut log_ticks, &mut health_tick, &orchestrator, &api).await;
+                composer::orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
             }
         } => {
             // This branch will never be reached due to the infinite loop.
