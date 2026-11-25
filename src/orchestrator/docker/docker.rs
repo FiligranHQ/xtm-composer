@@ -6,7 +6,7 @@ use crate::orchestrator::image::Image;
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::orchestrator::ensure_proxy_ca_file;
 use crate::orchestrator::{
-    dedup_containers, manager_label_filters, ImagePullError, Orchestrator,
+    dedup_containers, manager_label_filters, running_image_digest, ImagePullError, Orchestrator,
     OrchestratorContainer,
 };
 use async_trait::async_trait;
@@ -150,6 +150,7 @@ impl DockerOrchestrator {
                         restart_count: 0, // Not available in list, will be updated by get()
                         started_at: None, // Not available in list, will be updated by get()
                         image_pull_error: None,
+                        image_digest: None,
                     }
                 })
                 .collect(),
@@ -207,6 +208,7 @@ fn container_from_inspect(inspect: compat::ContainerInspect) -> OrchestratorCont
         restart_count: inspect.restart_count.unwrap_or(0).max(0) as u32,
         started_at: state.started_at,
         image_pull_error: None,
+        image_digest: running_image_digest(&[], inspect.image.as_deref()),
     }
 }
 
@@ -222,6 +224,7 @@ fn container_from_summary(summary: compat::ContainerSummary) -> OrchestratorCont
         restart_count: 0, // Not available in list, will be updated by get()
         started_at: None, // Not available in list, will be updated by get()
         image_pull_error: None,
+        image_digest: None,
     }
 }
 
@@ -328,7 +331,19 @@ impl Orchestrator for DockerOrchestrator {
         let container_name = workload.container_name();
         if let Some(compat) = self.podman_api() {
             return match compat.inspect_container(&container_name).await {
-                Ok(Some(inspect)) => Some(container_from_inspect(inspect)),
+                Ok(Some(inspect)) => {
+                    let image_id = inspect.image.clone();
+                    let mut container = container_from_inspect(inspect);
+                    if let Some(image_id) = image_id {
+                        let repo_digests = match compat.inspect_image(&image_id).await {
+                            Ok(Some(image)) => image.repo_digests.unwrap_or_default(),
+                            _ => Vec::new(),
+                        };
+                        container.image_digest =
+                            running_image_digest(&repo_digests, Some(&image_id));
+                    }
+                    Some(container)
+                }
                 Ok(None) => {
                     debug!(name = container_name, "Could not find container");
                     None
@@ -346,6 +361,17 @@ impl Orchestrator for DockerOrchestrator {
             .await;
         match container {
             Ok(docker_container) => {
+                let image_id = docker_container.image.clone();
+                let repo_digests = match &image_id {
+                    Some(image_id) => self
+                        .docker
+                        .inspect_image(image_id)
+                        .await
+                        .ok()
+                        .and_then(|image| image.repo_digests)
+                        .unwrap_or_default(),
+                    None => Vec::new(),
+                };
                 let state = docker_container.state.unwrap_or_default();
                 let config = docker_container.config.unwrap_or_default();
                 Some(OrchestratorContainer {
@@ -357,6 +383,7 @@ impl Orchestrator for DockerOrchestrator {
                     restart_count: docker_container.restart_count.unwrap_or(0) as u32,
                     started_at: state.started_at,
                     image_pull_error: None,
+                    image_digest: running_image_digest(&repo_digests, image_id.as_deref()),
                 })
             }
             Err(BollardError::DockerResponseServerError {
@@ -593,6 +620,28 @@ mod tests {
         assert_eq!(container.started_at.as_deref(), Some("2026-10-21T10:00:00Z"));
         assert_eq!(container.extract_config_hash(), "h1");
         assert_eq!(container.extract_workload_id(), "A");
+    }
+
+    #[test]
+    fn inspect_reports_the_image_id_as_digest_and_repo_digests_win() {
+        let id = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let inspect: compat::ContainerInspect = serde_json::from_str(&format!(
+            r#"{{"Id":"abc","Name":"/connector-a","Image":"{}","State":{{"Status":"running"}}}}"#,
+            id
+        ))
+        .unwrap();
+        assert_eq!(container_from_inspect(inspect).image_digest.as_deref(), Some(id));
+
+        let image: compat::ImageInspect = serde_json::from_str(&format!(
+            r#"{{"RepoDigests":["openaev/injector-nmap@{}"]}}"#,
+            digest
+        ))
+        .unwrap();
+        assert_eq!(
+            running_image_digest(&image.repo_digests.unwrap(), Some(id)).as_deref(),
+            Some(digest)
+        );
     }
 
     #[test]

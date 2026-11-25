@@ -215,6 +215,7 @@ async fn orchestrate_existing(
                     container.restart_count,
                     started_at.clone(),
                     is_in_reboot_loop,
+                    container.image_digest.clone(),
                 )
                 .await;
             }
@@ -432,6 +433,7 @@ mod tests {
             restart_count: 0,
             started_at: None,
             image_pull_error: None,
+            image_digest: None,
         }
     }
 
@@ -453,6 +455,7 @@ mod tests {
             restart_count: 0,
             started_at: None,
             image_pull_error: None,
+            image_digest: None,
         }
     }
 
@@ -476,6 +479,7 @@ mod tests {
             restart_count: 0,
             started_at: None,
             image_pull_error: None,
+            image_digest: None,
         }
     }
 
@@ -559,6 +563,7 @@ mod tests {
             _restart_count: u32,
             started_at: String,
             _is_in_reboot_loop: bool,
+            _image_digest: Option<String>,
         ) -> Option<String> {
             self.patched_health
                 .lock()

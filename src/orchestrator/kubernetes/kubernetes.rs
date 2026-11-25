@@ -4,8 +4,8 @@ use crate::config::settings::{Kubernetes, Registry};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::{
-    config_hash_entries, dedup_containers, manager_label_filters, ImagePullError, Orchestrator,
-    OrchestratorContainer, LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID,
+    config_hash_entries, dedup_containers, image_digest_of, manager_label_filters, ImagePullError,
+    Orchestrator, OrchestratorContainer, LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID,
 };
 use async_trait::async_trait;
 use k8s_openapi::DeepMerge;
@@ -248,6 +248,7 @@ impl KubeOrchestrator {
             restart_count: 0, // Will be updated from pod status
             started_at: None, // Will be updated from pod status
             image_pull_error: None,
+            image_digest: None,
         }
     }
 
@@ -476,6 +477,7 @@ impl KubeOrchestrator {
     ) {
         if let Some(status) = Self::connector_status(pod, container_name) {
             container.restart_count = status.restart_count as u32;
+            container.image_digest = image_digest_of(&status.image_id);
 
             if let Some(started_at) = self.extract_started_at(&status) {
                 container.started_at = Some(started_at);
@@ -825,6 +827,7 @@ mod tests {
             restart_count: 0,
             started_at: None,
             image_pull_error: None,
+            image_digest: None,
         }
     }
 
@@ -860,6 +863,46 @@ mod tests {
             "restartCount": 0,
             "state": state
         })
+    }
+
+    #[tokio::test]
+    async fn image_digest_is_read_from_the_connector_container_image_id() {
+        let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let mut connector = container_status(
+            "importfilestix",
+            serde_json::json!({ "running": { "startedAt": "2026-11-20T16:01:00Z" } }),
+        );
+        connector["imageID"] =
+            serde_json::json!(format!("docker-pullable://openaev/injector-nmap@{}", digest));
+        let pod = pod(serde_json::json!([connector]));
+        let workload = workload();
+        let mut enriched = container(&workload);
+
+        orchestrator("http://127.0.0.1:1").enrich_container_from_pod(
+            &mut enriched,
+            &pod,
+            "importfilestix",
+        );
+
+        assert_eq!(enriched.image_digest.as_deref(), Some(digest));
+    }
+
+    #[tokio::test]
+    async fn an_empty_image_id_yields_no_digest() {
+        let pod = pod(serde_json::json!([container_status(
+            "importfilestix",
+            serde_json::json!({ "running": { "startedAt": "2026-11-20T16:01:00Z" } }),
+        )]));
+        let workload = workload();
+        let mut enriched = container(&workload);
+
+        orchestrator("http://127.0.0.1:1").enrich_container_from_pod(
+            &mut enriched,
+            &pod,
+            "importfilestix",
+        );
+
+        assert_eq!(enriched.image_digest, None);
     }
 
     #[test]

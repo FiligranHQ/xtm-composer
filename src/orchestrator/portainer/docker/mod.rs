@@ -62,4 +62,13 @@ pub struct PortainerGetResponse {
     pub config: PortainerGetResponseConfig,
     pub state: PortainerGetResponseState,
     pub restart_count: Option<i64>,
+    /// Id (`sha256:...`) of the image the container runs
+    #[serde(default)]
+    pub image: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all(deserialize = "PascalCase"), default)]
+pub struct PortainerImageInspect {
+    pub repo_digests: Option<Vec<String>>,
 }

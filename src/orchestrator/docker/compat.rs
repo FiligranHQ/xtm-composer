@@ -56,8 +56,16 @@ pub struct ContainerInspect {
     pub id: String,
     pub name: Option<String>,
     pub restart_count: Option<i64>,
+    /// Id (`sha256:...`) of the image the container runs
+    pub image: Option<String>,
     pub state: Option<ContainerInspectState>,
     pub config: Option<ContainerInspectConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
+pub struct ImageInspect {
+    pub repo_digests: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -230,6 +238,10 @@ impl CompatApi {
     pub async fn inspect_container(&self, name: &str) -> Result<Option<ContainerInspect>, String> {
         self.get_json(&format!("/containers/{}/json", name), &[])
             .await
+    }
+
+    pub async fn inspect_image(&self, name: &str) -> Result<Option<ImageInspect>, String> {
+        self.get_json(&format!("/images/{}/json", name), &[]).await
     }
 
     pub async fn list_containers(&self, label: &str) -> Result<Vec<ContainerSummary>, String> {
