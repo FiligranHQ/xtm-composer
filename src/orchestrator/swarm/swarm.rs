@@ -5,7 +5,7 @@ use crate::orchestrator::image::Image;
 use crate::orchestrator::swarm::SwarmOrchestrator;
 use crate::orchestrator::ensure_proxy_ca_file;
 use crate::orchestrator::{
-    dedup_containers, manager_label_filters, ImagePullError, Orchestrator,
+    dedup_containers, image_digest_of, manager_label_filters, ImagePullError, Orchestrator,
     OrchestratorContainer,
 };
 use async_trait::async_trait;
@@ -38,7 +38,19 @@ impl SwarmOrchestrator {
         }
     }
 
-    async fn get_task_info(&self, service_name: &str) -> (u32, Option<String>, String) {
+    /// Digest of the image a task runs: Swarm pins the task image as `repo:tag@sha256:...`.
+    fn task_image_digest(task: &bollard::models::Task) -> Option<String> {
+        task.spec
+            .as_ref()
+            .and_then(|spec| spec.container_spec.as_ref())
+            .and_then(|container| container.image.as_deref())
+            .and_then(image_digest_of)
+    }
+
+    async fn get_task_info(
+        &self,
+        service_name: &str,
+    ) -> (u32, Option<String>, String, Option<String>) {
         let filters = HashMap::from([(
             "service".to_string(),
             vec![service_name.to_string()],
@@ -69,15 +81,20 @@ impl SwarmOrchestrator {
                             task.status.as_ref().and_then(|s| s.timestamp.clone());
                         let restart_count =
                             if total_tasks > 1 { (total_tasks - 1) as u32 } else { 0 };
-                        (restart_count, started_at, "running".to_string())
+                        (
+                            restart_count,
+                            started_at,
+                            "running".to_string(),
+                            Self::task_image_digest(task),
+                        )
                     }
                     None => {
                         let restart_count = total_tasks as u32;
-                        (restart_count, None, "stopped".to_string())
+                        (restart_count, None, "stopped".to_string(), None)
                     }
                 }
             }
-            Err(_) => (0, None, "unknown".to_string()),
+            Err(_) => (0, None, "unknown".to_string(), None),
         }
     }
 
@@ -106,6 +123,7 @@ impl SwarmOrchestrator {
                         restart_count: 0,
                         started_at: None,
                         image_pull_error: None,
+                        image_digest: None,
                     })
                 })
                 .collect(),
@@ -153,7 +171,7 @@ impl Orchestrator for SwarmOrchestrator {
                     })
                     .unwrap_or_default();
 
-                let (restart_count, started_at, state) =
+                let (restart_count, started_at, state, image_digest) =
                     self.get_task_info(&service_name).await;
 
                 Some(OrchestratorContainer {
@@ -165,6 +183,7 @@ impl Orchestrator for SwarmOrchestrator {
                     restart_count,
                     started_at,
                     image_pull_error: None,
+                    image_digest,
                 })
             }
             Err(_) => {

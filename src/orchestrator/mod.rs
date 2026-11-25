@@ -65,6 +65,41 @@ pub struct OrchestratorContainer {
     /// Set when the orchestrator cannot pull the image of the running deployment
     #[serde(skip)]
     pub image_pull_error: Option<ImagePullError>,
+    /// Digest of the image the workload actually runs (`sha256:...`), so a moving
+    /// tag (`:rolling`, `:latest`) can be verified; None when the engine does not tell
+    #[serde(skip)]
+    pub image_digest: Option<String>,
+}
+
+/// Digest (`sha256:...`) of an image reference or image id: the part after `@` of
+/// `repo@sha256:...` or `docker-pullable://repo@sha256:...`, or a bare `sha256:...` id.
+/// None for an empty reference or a reference without a digest (`repo:tag`).
+pub fn image_digest_of(reference: &str) -> Option<String> {
+    let reference = reference.trim();
+    let digest = match reference.rsplit_once('@') {
+        Some((_, digest)) => digest,
+        None => reference,
+    };
+    match digest.split_once(':') {
+        Some((algorithm, hex))
+            if !algorithm.is_empty()
+                && !algorithm.contains('/')
+                && hex.len() >= 32
+                && hex.chars().all(|c| c.is_ascii_hexdigit()) =>
+        {
+            Some(digest.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Running image digest of a Docker-compatible engine: the first repository digest of
+/// the inspected image, else the image id the container runs.
+pub fn running_image_digest(repo_digests: &[String], image_id: Option<&str>) -> Option<String> {
+    repo_digests
+        .iter()
+        .find_map(|reference| image_digest_of(reference))
+        .or_else(|| image_id.and_then(image_digest_of))
 }
 
 /// An image that cannot be pulled, with the error of the engine
@@ -294,7 +329,41 @@ mod tests {
             restart_count: 0,
             started_at: None,
             image_pull_error: None,
+            image_digest: None,
         }
+    }
+
+    const DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn image_digest_is_read_from_references_and_ids() {
+        assert_eq!(
+            image_digest_of(&format!("docker-pullable://openaev/injector-nmap@{}", DIGEST)),
+            Some(DIGEST.to_string())
+        );
+        assert_eq!(
+            image_digest_of(&format!("docker.io/openaev/injector-nmap@{}", DIGEST)),
+            Some(DIGEST.to_string())
+        );
+        assert_eq!(image_digest_of(DIGEST), Some(DIGEST.to_string()));
+        assert_eq!(image_digest_of(""), None);
+        assert_eq!(image_digest_of("openaev/injector-nmap:rolling"), None);
+        assert_eq!(image_digest_of("localhost:5000/injector-nmap"), None);
+    }
+
+    #[test]
+    fn running_image_digest_prefers_the_repository_digest() {
+        let other = "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        assert_eq!(
+            running_image_digest(
+                &[format!("openaev/injector-nmap@{}", DIGEST)],
+                Some(other)
+            ),
+            Some(DIGEST.to_string())
+        );
+        assert_eq!(running_image_digest(&[], Some(other)), Some(other.to_string()));
+        assert_eq!(running_image_digest(&[], None), None);
     }
 
     #[test]

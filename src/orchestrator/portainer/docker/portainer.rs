@@ -7,10 +7,10 @@ use crate::orchestrator::image::Image;
 use crate::orchestrator::ensure_proxy_ca_file;
 use crate::orchestrator::portainer::docker::{
     PortainerApiError, PortainerDeployHostConfig, PortainerDeployPayload, PortainerDeployResponse,
-    PortainerDockerOrchestrator, PortainerGetResponse,
+    PortainerDockerOrchestrator, PortainerGetResponse, PortainerImageInspect,
 };
 use crate::orchestrator::{
-    dedup_containers, manager_label_filters, ImagePullError, Orchestrator,
+    dedup_containers, manager_label_filters, running_image_digest, ImagePullError, Orchestrator,
     OrchestratorContainer,
 };
 use async_trait::async_trait;
@@ -56,6 +56,20 @@ impl PortainerDockerOrchestrator {
         }
     }
 
+    /// Repository digests of an image, empty when Portainer does not answer.
+    async fn image_repo_digests(&self, image_id: &str) -> Vec<String> {
+        let inspect_uri = format!("{}/{}/json", self.image_uri, image_id);
+        match self.client.get(inspect_uri).send().await {
+            Ok(response) => response
+                .json::<PortainerImageInspect>()
+                .await
+                .ok()
+                .and_then(|image| image.repo_digests)
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     /// List the managed containers carrying the given `key=value` label.
     async fn list_by_label(&self, label: String) -> Vec<OrchestratorContainer> {
         let filter: HashMap<String, Vec<String>> =
@@ -83,6 +97,7 @@ impl PortainerDockerOrchestrator {
                             restart_count: 0, // Not available in list, will be updated by get()
                             started_at: None, // Not available in list, will be updated by get()
                             image_pull_error: None,
+                            image_digest: None,
                         }
                     })
                     .collect();
@@ -131,6 +146,12 @@ impl Orchestrator for PortainerDockerOrchestrator {
                     (parts[0].into(), parts[1].into())
                 })
                 .collect();
+            let repo_digests = match &response_data.image {
+                Some(image_id) => self.image_repo_digests(image_id).await,
+                None => Vec::new(),
+            };
+            let image_digest =
+                running_image_digest(&repo_digests, response_data.image.as_deref());
             Some(OrchestratorContainer {
                 id: response_data.id,
                 name: response_data.name,
@@ -140,6 +161,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
                 restart_count: response_data.restart_count.unwrap_or(0) as u32,
                 started_at: response_data.state.started_at,
                 image_pull_error: None,
+                image_digest,
             })
         } else {
             None
