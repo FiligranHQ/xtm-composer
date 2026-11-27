@@ -10,8 +10,8 @@ use crate::orchestrator::portainer::docker::{
     PortainerDockerOrchestrator, PortainerGetResponse, PortainerImageInspect,
 };
 use crate::orchestrator::{
-    dedup_containers, manager_label_filters, running_image_digest, ImagePullError, Orchestrator,
-    OrchestratorContainer,
+    dedup_containers, docker_termination, manager_label_filters, running_image_digest,
+    ImagePullError, Orchestrator, OrchestratorContainer,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -98,6 +98,7 @@ impl PortainerDockerOrchestrator {
                             started_at: None, // Not available in list, will be updated by get()
                             image_pull_error: None,
                             image_digest: None,
+                            last_termination: None,
                         }
                     })
                     .collect();
@@ -152,6 +153,14 @@ impl Orchestrator for PortainerDockerOrchestrator {
             };
             let image_digest =
                 running_image_digest(&repo_digests, response_data.image.as_deref());
+            let state = &response_data.state;
+            let last_termination = docker_termination(
+                state.running.unwrap_or(state.status == "running"),
+                state.exit_code,
+                state.oom_killed,
+                state.error.as_deref(),
+                state.finished_at.as_deref(),
+            );
             Some(OrchestratorContainer {
                 id: response_data.id,
                 name: response_data.name,
@@ -162,6 +171,7 @@ impl Orchestrator for PortainerDockerOrchestrator {
                 started_at: response_data.state.started_at,
                 image_pull_error: None,
                 image_digest,
+                last_termination,
             })
         } else {
             None

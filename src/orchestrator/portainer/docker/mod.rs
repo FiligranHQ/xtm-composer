@@ -45,6 +45,16 @@ pub struct PortainerApiError {
 pub struct PortainerGetResponseState {
     pub status: String,
     pub started_at: Option<String>,
+    #[serde(default)]
+    pub running: Option<bool>,
+    #[serde(default)]
+    pub exit_code: Option<i64>,
+    #[serde(default, rename = "OOMKilled")]
+    pub oom_killed: Option<bool>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub finished_at: Option<String>,
 }
 
 #[derive(Deserialize)]

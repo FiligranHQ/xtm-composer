@@ -73,6 +73,12 @@ pub struct ImageInspect {
 pub struct ContainerInspectState {
     pub status: Option<String>,
     pub started_at: Option<String>,
+    pub running: Option<bool>,
+    pub exit_code: Option<i64>,
+    #[serde(rename = "OOMKilled")]
+    pub oom_killed: Option<bool>,
+    pub error: Option<String>,
+    pub finished_at: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
