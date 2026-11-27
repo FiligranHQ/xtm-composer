@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tracing::error;
 
 pub mod composer;
@@ -69,6 +70,138 @@ pub struct OrchestratorContainer {
     /// tag (`:rolling`, `:latest`) can be verified; None when the engine does not tell
     #[serde(skip)]
     pub image_digest: Option<String>,
+    /// How the previous run of the workload container ended (OOMKilled, exit code,
+    /// time), so a failure stays diagnosable after a restart; None when the engine
+    /// does not tell or the container never ended
+    #[serde(skip)]
+    pub last_termination: Option<ContainerTermination>,
+}
+
+/// How a container run ended, as reported by the engine.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ContainerTermination {
+    /// Reason given by the engine (`OOMKilled`, `Error`, `Completed`, ...)
+    pub reason: Option<String>,
+    pub exit_code: Option<i64>,
+    /// RFC 3339 time the run ended
+    pub finished_at: Option<String>,
+}
+
+impl ContainerTermination {
+    /// One log line telling how the previous container run ended.
+    pub fn log_line(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(reason) = &self.reason {
+            parts.push(format!("reason {reason}"));
+        }
+        if let Some(exit_code) = self.exit_code {
+            parts.push(format!("exit code {exit_code}"));
+        }
+        if let Some(finished_at) = &self.finished_at {
+            parts.push(format!("at {finished_at}"));
+        }
+        format!(
+            "[XTM Composer] The previous container ended: {}",
+            if parts.is_empty() { "unknown".to_string() } else { parts.join(", ") }
+        )
+    }
+}
+
+/// Termination of a Docker-compatible container that is no longer running, read
+/// from its inspected state. Docker resets the exit code when the container starts
+/// again, so the termination of a running container is not available (None).
+pub fn docker_termination(
+    running: bool,
+    exit_code: Option<i64>,
+    oom_killed: Option<bool>,
+    error: Option<&str>,
+    finished_at: Option<&str>,
+) -> Option<ContainerTermination> {
+    // Docker writes 0001-01-01T00:00:00Z for a container that never ended
+    let finished_at = finished_at.filter(|time| !time.is_empty() && !time.starts_with("0001-"));
+    if running || finished_at.is_none() {
+        return None;
+    }
+    let reason = if oom_killed == Some(true) {
+        "OOMKilled".to_string()
+    } else if let Some(error) = error.filter(|error| !error.is_empty()) {
+        error.to_string()
+    } else if exit_code.unwrap_or(0) != 0 {
+        "Error".to_string()
+    } else {
+        "Completed".to_string()
+    };
+    Some(ContainerTermination {
+        reason: Some(reason),
+        exit_code,
+        finished_at: finished_at.map(str::to_string),
+    })
+}
+
+/// Lines kept from the container run before the current one, per workload.
+pub const PREVIOUS_LOG_LINES: usize = 50;
+
+/// Latest log lines of the current and the previous container run of each
+/// workload, so the platform still shows the end of a run after the container or
+/// the pod is replaced (the platform keeps only the latest pushed snapshot).
+/// Bounded: one entry per workload, at most [`PREVIOUS_LOG_LINES`] lines per run.
+#[derive(Default)]
+pub struct LogHistory {
+    workloads: Mutex<HashMap<String, WorkloadLogRuns>>,
+}
+
+#[derive(Default)]
+struct WorkloadLogRuns {
+    current_run: String,
+    current: Vec<String>,
+    previous: Vec<String>,
+}
+
+fn tail(lines: &[String], count: usize) -> Vec<String> {
+    lines[lines.len().saturating_sub(count)..].to_vec()
+}
+
+impl LogHistory {
+    /// Records the latest lines of the run `run_id` (a container id, a pod name) of
+    /// a workload and returns the last lines of the run before it, empty when the
+    /// workload had no other run since the composer started.
+    pub fn record(&self, workload_id: &str, run_id: &str, lines: &[String]) -> Vec<String> {
+        let mut workloads = self
+            .workloads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runs = workloads.entry(workload_id.to_string()).or_default();
+        if runs.current_run != run_id {
+            if !runs.current.is_empty() {
+                runs.previous = std::mem::take(&mut runs.current);
+            }
+            runs.current_run = run_id.to_string();
+        }
+        runs.current = tail(lines, PREVIOUS_LOG_LINES);
+        runs.previous.clone()
+    }
+
+    /// Drops the history of a removed workload.
+    pub fn forget(&self, workload_id: &str) {
+        self.workloads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(workload_id);
+    }
+}
+
+/// The logs pushed to the platform: the last lines of the previous `run` (container
+/// or pod), when there are any, under a marker, then the current run's lines.
+pub fn with_previous_logs(previous: Vec<String>, run: &str, current: Vec<String>) -> Vec<String> {
+    if previous.is_empty() {
+        return current;
+    }
+    let mut logs = Vec::with_capacity(previous.len() + current.len() + 2);
+    logs.push(format!("[XTM Composer] Last lines of the previous {run}:"));
+    logs.extend(previous);
+    logs.push(format!("[XTM Composer] Logs of the current {run}:"));
+    logs.extend(current);
+    logs
 }
 
 /// Digest (`sha256:...`) of an image reference or image id: the part after `@` of
@@ -261,6 +394,92 @@ mod tests {
     use super::*;
     use crate::orchestrator::kubernetes::KubeOrchestrator;
 
+    fn lines(prefix: &str, count: usize) -> Vec<String> {
+        (0..count).map(|index| format!("{prefix} {index}")).collect()
+    }
+
+    #[test]
+    fn log_history_returns_the_last_lines_of_the_replaced_run() {
+        let history = LogHistory::default();
+        assert!(history.record("w1", "pod-a", &lines("a", 3)).is_empty());
+        // Same run read again: nothing replaced yet
+        assert!(history.record("w1", "pod-a", &lines("a", 4)).is_empty());
+        // The pod was replaced: the last read of pod-a comes back
+        assert_eq!(history.record("w1", "pod-b", &lines("b", 2)), lines("a", 4));
+        // And keeps coming back while pod-b runs
+        assert_eq!(history.record("w1", "pod-b", &lines("b", 5)), lines("a", 4));
+        // Another workload has its own history
+        assert!(history.record("w2", "pod-c", &lines("c", 1)).is_empty());
+    }
+
+    #[test]
+    fn log_history_is_bounded_per_run() {
+        let history = LogHistory::default();
+        history.record("w1", "pod-a", &lines("a", 500));
+        let previous = history.record("w1", "pod-b", &[]);
+        assert_eq!(previous.len(), PREVIOUS_LOG_LINES);
+        assert_eq!(previous.last().unwrap(), "a 499");
+    }
+
+    #[test]
+    fn log_history_keeps_the_last_run_with_lines_when_the_new_one_is_empty() {
+        let history = LogHistory::default();
+        history.record("w1", "pod-a", &lines("a", 2));
+        history.record("w1", "pod-b", &[]);
+        // pod-b never logged: pod-a stays the previous run
+        assert_eq!(history.record("w1", "pod-c", &lines("c", 1)), lines("a", 2));
+    }
+
+    #[test]
+    fn log_history_forgets_a_removed_workload() {
+        let history = LogHistory::default();
+        history.record("w1", "pod-a", &lines("a", 2));
+        history.forget("w1");
+        assert!(history.record("w1", "pod-b", &lines("b", 1)).is_empty());
+    }
+
+    #[test]
+    fn previous_logs_come_first_under_markers() {
+        assert_eq!(with_previous_logs(vec![], "pod", lines("b", 1)), lines("b", 1));
+        assert_eq!(
+            with_previous_logs(lines("a", 1), "container", lines("b", 1)),
+            vec![
+                "[XTM Composer] Last lines of the previous container:".to_string(),
+                "a 0".to_string(),
+                "[XTM Composer] Logs of the current container:".to_string(),
+                "b 0".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn docker_termination_reads_an_oom_kill() {
+        let termination =
+            docker_termination(false, Some(137), Some(true), None, Some("2026-11-26T10:00:00Z"))
+                .unwrap();
+        assert_eq!(termination.reason.as_deref(), Some("OOMKilled"));
+        assert_eq!(termination.exit_code, Some(137));
+        assert_eq!(
+            termination.log_line(),
+            "[XTM Composer] The previous container ended: reason OOMKilled, exit code 137, at 2026-11-26T10:00:00Z"
+        );
+    }
+
+    #[test]
+    fn docker_termination_reads_an_error_exit() {
+        let termination =
+            docker_termination(false, Some(1), Some(false), Some(""), Some("2026-11-26T10:00:00Z"))
+                .unwrap();
+        assert_eq!(termination.reason.as_deref(), Some("Error"));
+    }
+
+    #[test]
+    fn docker_termination_is_unknown_while_running_or_never_ended() {
+        assert!(docker_termination(true, Some(0), Some(false), None, Some("2026-11-26T10:00:00Z")).is_none());
+        assert!(docker_termination(false, Some(0), Some(false), None, Some("0001-01-01T00:00:00Z")).is_none());
+        assert!(docker_termination(false, None, None, None, None).is_none());
+    }
+
     #[test]
     fn labels_include_platform_discriminator() {
         let workload = ApiWorkload {
@@ -330,6 +549,7 @@ mod tests {
             started_at: None,
             image_pull_error: None,
             image_digest: None,
+            last_termination: None,
         }
     }
 

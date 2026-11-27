@@ -1,4 +1,5 @@
 use crate::config::settings::{Docker as DockerOptions, Registry};
+use crate::orchestrator::LogHistory;
 use bollard::Docker;
 use compat::CompatApi;
 
@@ -20,4 +21,6 @@ pub struct DockerOrchestrator {
     compat: Option<CompatApi>,
     options: Option<DockerOptions>,
     registry: Option<Registry>,
+    /// Last lines of each workload's previous container, kept across a recreation
+    log_history: LogHistory,
 }
