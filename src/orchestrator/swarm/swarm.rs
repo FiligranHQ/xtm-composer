@@ -1,6 +1,7 @@
 use crate::api::{ApiWorkload, WorkloadStatus};
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::config::settings::{Registry, Swarm};
+use crate::orchestrator::docker::docker::{connect_docker_client, resolve_docker_endpoint};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::swarm::SwarmOrchestrator;
 use crate::orchestrator::ensure_proxy_ca_file;
@@ -22,7 +23,6 @@ use bollard::query_parameters::{
     CreateImageOptions, InspectServiceOptions, ListServicesOptions, ListTasksOptions, LogsOptions,
     UpdateServiceOptions,
 };
-use bollard::Docker;
 use futures::future;
 use futures::TryStreamExt;
 use std::collections::HashMap;
@@ -30,7 +30,8 @@ use tracing::{debug, error, info};
 
 impl SwarmOrchestrator {
     pub fn new(config: Swarm, registry: Option<Registry>) -> Self {
-        let docker = Docker::connect_with_socket_defaults().unwrap();
+        let endpoint = resolve_docker_endpoint(None, std::env::var("DOCKER_HOST").ok().as_deref());
+        let docker = connect_docker_client(&endpoint).unwrap();
         Self {
             docker,
             config,
