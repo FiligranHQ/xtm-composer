@@ -128,7 +128,11 @@ pub async fn alive(api: Box<dyn ComposerApi + Send + Sync>) -> JoinHandle<()> {
                                         }
                                     }
                                     _ => {
-                                        // Connection lost - break to outer retry loop
+                                        // A failed ping while version() still succeeds must
+                                        // wait out the schedule before the outer loop
+                                        // registers again. Breaking straight through spins
+                                        // (xtm-composer#178).
+                                        interval.tick().await;
                                         break;
                                     }
                                 }
@@ -151,8 +155,84 @@ pub async fn alive(api: Box<dyn ComposerApi + Send + Sync>) -> JoinHandle<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::settings::Settings;
+    use crate::api::{ApiWorkload, ComposerApi, WorkloadStatus};
+    use crate::config::settings::{Daemon, Settings};
+    use async_trait::async_trait;
     use config::{Config, File, FileFormat};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct PingFailApi {
+        registers: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ComposerApi for PingFailApi {
+        fn daemon(&self) -> &Daemon {
+            unimplemented!()
+        }
+
+        fn platform(&self) -> &'static str {
+            "openaev"
+        }
+
+        fn post_logs_schedule(&self) -> Duration {
+            Duration::from_secs(3600)
+        }
+
+        async fn version(&self) -> Option<String> {
+            tokio::task::yield_now().await;
+            Some("1.0".to_string())
+        }
+
+        async fn ping_alive(&self) -> Option<String> {
+            tokio::task::yield_now().await;
+            None
+        }
+
+        async fn register(&self) {
+            self.registers.fetch_add(1, Ordering::Relaxed);
+            tokio::task::yield_now().await;
+        }
+
+        async fn workloads(&self) -> Option<Vec<ApiWorkload>> {
+            None
+        }
+
+        async fn patch_status(&self, _id: String, _status: WorkloadStatus) -> Option<ApiWorkload> {
+            None
+        }
+
+        async fn patch_logs(&self, _id: String, _logs: Vec<String>) -> Option<String> {
+            None
+        }
+
+        async fn patch_health(
+            &self,
+            _id: String,
+            _restart_count: u32,
+            _started_at: String,
+            _is_in_reboot_loop: bool,
+        ) -> Option<String> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_ping_waits_before_registering_again() {
+        let registers = Arc::new(AtomicUsize::new(0));
+        let handle = alive(Box::new(PingFailApi {
+            registers: registers.clone(),
+        }))
+        .await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let n = registers.load(Ordering::Relaxed);
+        handle.abort();
+        assert!(
+            (1..=2).contains(&n),
+            "registered {n} times in 300ms; a failed ping must wait ping_alive_schedule (60s)"
+        );
+    }
 
     fn opencti(enable: bool, selector: &str) -> OpenCTI {
         let settings: Settings = Config::builder()
