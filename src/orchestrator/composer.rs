@@ -1202,8 +1202,9 @@ mod tests {
             Instant::now().checked_sub(Duration::from_secs(7200)).unwrap(),
         )]);
         let mut health_ticks = HashMap::new();
+        let mut image_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_ticks, &mut image_ticks, &orchestrator, &api).await;
 
         let terminations = patched_terminations.lock().unwrap().clone();
         assert_eq!(terminations, vec![Some(termination.clone())]);
