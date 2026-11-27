@@ -114,8 +114,9 @@ impl ComposerApi for ApiOpenCTI {
         connector::post_logs::logs(id, logs, self).await
     }
 
-    // OpenCTI's health input has no image digest field yet: the digest is not sent.
-    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool, _image_digest: Option<String>) -> Option<String> {
+    // OpenCTI's health input has no image digest nor termination field yet: they are
+    // not sent (the termination still reaches the platform as a log line).
+    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool, _image_digest: Option<String>, _last_termination: Option<crate::orchestrator::ContainerTermination>) -> Option<String> {
         connector::post_health::health(id, restart_count, started_at, is_in_reboot_loop, self).await
     }
 }

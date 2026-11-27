@@ -118,7 +118,7 @@ impl ComposerApi for ApiOpenAEV {
         connector::post_logs::add_logs(id, logs, self).await
     }
 
-    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool, image_digest: Option<String>) -> Option<String> {
-        connector::patch_health::update_health(id, restart_count, started_at, is_in_reboot_loop, image_digest, self).await
+    async fn patch_health(&self, id: String, restart_count: u32, started_at: String, is_in_reboot_loop: bool, image_digest: Option<String>, last_termination: Option<crate::orchestrator::ContainerTermination>) -> Option<String> {
+        connector::patch_health::update_health(id, restart_count, started_at, is_in_reboot_loop, image_digest, last_termination, self).await
     }
 }

@@ -6,8 +6,8 @@ use crate::orchestrator::image::Image;
 use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::orchestrator::ensure_proxy_ca_file;
 use crate::orchestrator::{
-    dedup_containers, manager_label_filters, running_image_digest, ImagePullError, Orchestrator,
-    OrchestratorContainer,
+    dedup_containers, docker_termination, manager_label_filters, running_image_digest,
+    with_previous_logs, ImagePullError, LogHistory, Orchestrator, OrchestratorContainer,
 };
 use async_trait::async_trait;
 use bollard::auth::DockerCredentials;
@@ -86,6 +86,7 @@ impl DockerOrchestrator {
             compat,
             options,
             registry,
+            log_history: LogHistory::default(),
         }
     }
 
@@ -151,6 +152,7 @@ impl DockerOrchestrator {
                         started_at: None, // Not available in list, will be updated by get()
                         image_pull_error: None,
                         image_digest: None,
+                        last_termination: None,
                     }
                 })
                 .collect(),
@@ -209,6 +211,13 @@ fn container_from_inspect(inspect: compat::ContainerInspect) -> OrchestratorCont
         started_at: state.started_at,
         image_pull_error: None,
         image_digest: running_image_digest(&[], inspect.image.as_deref()),
+        last_termination: docker_termination(
+            state.running.unwrap_or(false),
+            state.exit_code,
+            state.oom_killed,
+            state.error.as_deref(),
+            state.finished_at.as_deref(),
+        ),
     }
 }
 
@@ -225,6 +234,7 @@ fn container_from_summary(summary: compat::ContainerSummary) -> OrchestratorCont
         started_at: None, // Not available in list, will be updated by get()
         image_pull_error: None,
         image_digest: None,
+        last_termination: None,
     }
 }
 
@@ -384,6 +394,13 @@ impl Orchestrator for DockerOrchestrator {
                     started_at: state.started_at,
                     image_pull_error: None,
                     image_digest: running_image_digest(&repo_digests, image_id.as_deref()),
+                    last_termination: docker_termination(
+                        state.running.unwrap_or(false),
+                        state.exit_code,
+                        state.oom_killed,
+                        state.error.as_deref(),
+                        state.finished_at.as_deref(),
+                    ),
                 })
             }
             Err(BollardError::DockerResponseServerError {
@@ -430,6 +447,9 @@ impl Orchestrator for DockerOrchestrator {
     }
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
+        if let Some(workload_id) = container.workload_id() {
+            self.log_history.forget(workload_id);
+        }
         let container_name = container.name.as_str();
         let remove_response = self
             .docker
@@ -545,7 +565,7 @@ impl Orchestrator for DockerOrchestrator {
 
     async fn logs(
         &self,
-        _container: &OrchestratorContainer,
+        container: &OrchestratorContainer,
         workload: &ApiWorkload,
     ) -> Option<Vec<String>> {
         let opts = Some(LogsOptions {
@@ -564,7 +584,14 @@ impl Orchestrator for DockerOrchestrator {
             })
             .await;
         match result {
-            Ok(_) => Some(logs_content),
+            Ok(_) => {
+                // A recreated container (refresh, rename) starts with empty logs: keep
+                // the last lines of the container it replaced
+                let previous =
+                    self.log_history
+                        .record(&workload.id, &container.id, &logs_content);
+                Some(with_previous_logs(previous, "container", logs_content))
+            }
             Err(err) => {
                 error!(
                     name = workload.container_name(),

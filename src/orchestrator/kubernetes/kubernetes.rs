@@ -5,8 +5,9 @@ use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
 use crate::orchestrator::registry::resolve_digest;
 use crate::orchestrator::{
-    config_hash_entries, dedup_containers, image_digest_of, manager_label_filters, ImagePullError,
-    Orchestrator, OrchestratorContainer, LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID,
+    config_hash_entries, dedup_containers, image_digest_of, manager_label_filters,
+    with_previous_logs, ContainerTermination, ImagePullError, LogHistory, Orchestrator,
+    OrchestratorContainer, LABEL_WORKLOAD_ID, LEGACY_LABEL_WORKLOAD_ID, PREVIOUS_LOG_LINES,
 };
 use async_trait::async_trait;
 use k8s_openapi::DeepMerge;
@@ -46,6 +47,7 @@ impl KubeOrchestrator {
             config,
             registry,
             platform,
+            log_history: LogHistory::default(),
         }
     }
 
@@ -253,6 +255,7 @@ impl KubeOrchestrator {
             started_at: None, // Will be updated from pod status
             image_pull_error: None,
             image_digest: None,
+            last_termination: None,
         }
     }
 
@@ -506,11 +509,25 @@ impl KubeOrchestrator {
         if let Some(status) = Self::connector_status(pod, container_name) {
             container.restart_count = status.restart_count as u32;
             container.image_digest = image_digest_of(&status.image_id);
+            container.last_termination = Self::last_termination(&status);
 
             if let Some(started_at) = self.extract_started_at(&status) {
                 container.started_at = Some(started_at);
             }
         }
+    }
+
+    /// How the previous run of the container ended (`lastState.terminated`), if it did.
+    pub fn last_termination(container_status: &ContainerStatus) -> Option<ContainerTermination> {
+        let terminated = container_status.last_state.as_ref()?.terminated.as_ref()?;
+        Some(ContainerTermination {
+            reason: terminated.reason.clone(),
+            exit_code: Some(i64::from(terminated.exit_code)),
+            finished_at: terminated
+                .finished_at
+                .as_ref()
+                .map(|timestamp| timestamp.0.to_string()),
+        })
     }
 
     // Extract started_at timestamp from container status
@@ -655,6 +672,9 @@ impl Orchestrator for KubeOrchestrator {
     }
 
     async fn remove(&self, container: &OrchestratorContainer) -> () {
+        if let Some(workload_id) = container.workload_id() {
+            self.log_history.forget(workload_id);
+        }
         let dp = &DeleteParams::default();
         let delete_response = self.deployments.delete(&container.name, dp).await;
         match delete_response {
@@ -746,7 +766,37 @@ impl Orchestrator for KubeOrchestrator {
             };
             match self.pods.logs(pod_name, &lp).await {
                 Ok(text_logs) => {
-                    return Some(text_logs.lines().map(|line| line.to_string()).collect());
+                    let lines: Vec<String> =
+                        text_logs.lines().map(|line| line.to_string()).collect();
+                    // The last lines of the pod read before this one, when it was replaced
+                    let previous_pod = self.log_history.record(&workload.id, pod_name, &lines);
+                    // A restarted container: its previous run's lines are still on the node
+                    let restarted = Self::connector_status(pod, &container_name)
+                        .is_some_and(|status| status.restart_count > 0);
+                    if restarted {
+                        let previous_lp = LogParams {
+                            container: Some(container_name.clone()),
+                            previous: true,
+                            tail_lines: Some(PREVIOUS_LOG_LINES as i64),
+                            ..Default::default()
+                        };
+                        match self.pods.logs(pod_name, &previous_lp).await {
+                            Ok(previous) if !previous.trim().is_empty() => {
+                                let previous =
+                                    previous.lines().map(|line| line.to_string()).collect();
+                                return Some(with_previous_logs(previous, "container", lines));
+                            }
+                            Ok(_) => {}
+                            Err(err) => {
+                                debug!(
+                                    pod = pod_name,
+                                    error = err.to_string(),
+                                    "Cannot read the previous container logs"
+                                );
+                            }
+                        }
+                    }
+                    return Some(with_previous_logs(previous_pod, "pod", lines));
                 }
                 Err(err) => {
                     debug!(
@@ -858,6 +908,7 @@ mod tests {
             },
             registry,
             platform,
+            log_history: LogHistory::default(),
         }
     }
 
@@ -886,6 +937,7 @@ mod tests {
             started_at: None,
             image_pull_error: None,
             image_digest: None,
+            last_termination: None,
         }
     }
 
@@ -943,6 +995,55 @@ mod tests {
         );
 
         assert_eq!(enriched.image_digest.as_deref(), Some(digest));
+    }
+
+    #[tokio::test]
+    async fn the_last_termination_is_read_from_the_connector_container_last_state() {
+        let mut connector = container_status(
+            "importfilestix",
+            serde_json::json!({ "running": { "startedAt": "2026-11-20T16:01:00Z" } }),
+        );
+        connector["restartCount"] = serde_json::json!(3);
+        connector["lastState"] = serde_json::json!({
+            "terminated": {
+                "reason": "OOMKilled",
+                "exitCode": 137,
+                "finishedAt": "2026-11-20T16:00:58Z"
+            }
+        });
+        let pod = pod(serde_json::json!([connector]));
+        let workload = workload();
+        let mut enriched = container(&workload);
+
+        orchestrator("http://127.0.0.1:1").enrich_container_from_pod(
+            &mut enriched,
+            &pod,
+            "importfilestix",
+        );
+
+        assert_eq!(enriched.restart_count, 3);
+        let termination = enriched.last_termination.expect("a last termination");
+        assert_eq!(termination.reason.as_deref(), Some("OOMKilled"));
+        assert_eq!(termination.exit_code, Some(137));
+        assert!(termination.finished_at.unwrap().starts_with("2026-11-20T16:00:58"));
+    }
+
+    #[tokio::test]
+    async fn a_container_that_never_ended_has_no_last_termination() {
+        let pod = pod(serde_json::json!([container_status(
+            "importfilestix",
+            serde_json::json!({ "running": { "startedAt": "2026-11-20T16:01:00Z" } }),
+        )]));
+        let workload = workload();
+        let mut enriched = container(&workload);
+
+        orchestrator("http://127.0.0.1:1").enrich_container_from_pod(
+            &mut enriched,
+            &pod,
+            "importfilestix",
+        );
+
+        assert_eq!(enriched.last_termination, None);
     }
 
     #[tokio::test]

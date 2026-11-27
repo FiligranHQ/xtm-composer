@@ -287,6 +287,7 @@ async fn orchestrate_existing(
                     started_at.clone(),
                     is_in_reboot_loop,
                     container.image_digest.clone(),
+                    container.last_termination.clone(),
                 )
                 .await;
             }
@@ -337,6 +338,13 @@ async fn orchestrate_existing(
         // Same configuration: follow a new image pushed under a moving tag
         if let Some(message) = update_moving_image(orchestrator, workload, &container).await {
             composer_logs.push(message);
+        }
+    }
+    // How the previous run ended, so an OOM kill or a crash is visible on the
+    // platform even after the container restarted (a clean stop is not reported)
+    if let Some(termination) = &container.last_termination {
+        if container.restart_count > 0 || termination.exit_code.unwrap_or(0) != 0 {
+            composer_logs.push(termination.log_line());
         }
     }
     if let Some(err) = &container.image_pull_error {
@@ -547,6 +555,7 @@ mod tests {
             started_at: None,
             image_pull_error: None,
             image_digest: None,
+            last_termination: None,
         }
     }
 
@@ -569,6 +578,7 @@ mod tests {
             started_at: None,
             image_pull_error: None,
             image_digest: None,
+            last_termination: None,
         }
     }
 
@@ -593,6 +603,7 @@ mod tests {
             started_at: None,
             image_pull_error: None,
             image_digest: None,
+            last_termination: None,
         }
     }
 
@@ -611,6 +622,8 @@ mod tests {
         patched_statuses: Arc<Mutex<Vec<(String, WorkloadStatus)>>>,
         /// (workload id, started_at) of every health report
         patched_health: Arc<Mutex<Vec<(String, String)>>>,
+        /// last termination of every health report
+        patched_terminations: Arc<Mutex<Vec<Option<crate::orchestrator::ContainerTermination>>>>,
     }
 
     impl FakeApi {
@@ -620,6 +633,7 @@ mod tests {
                 pushed_logs: Arc::new(Mutex::new(Vec::new())),
                 patched_statuses: Arc::new(Mutex::new(Vec::new())),
                 patched_health: Arc::new(Mutex::new(Vec::new())),
+                patched_terminations: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -677,7 +691,12 @@ mod tests {
             started_at: String,
             _is_in_reboot_loop: bool,
             _image_digest: Option<String>,
+            last_termination: Option<crate::orchestrator::ContainerTermination>,
         ) -> Option<String> {
+            self.patched_terminations
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(last_termination);
             self.patched_health
                 .lock()
                 .expect("mutex should not be poisoned")
@@ -1158,6 +1177,39 @@ mod tests {
         for tick in health_ticks.values_mut() {
             tick.at = tick.at.checked_sub(HEALTH_SCHEDULE).unwrap();
         }
+    }
+
+    /// #238: a container that restarted after an OOM kill reports how it ended in
+    /// its health and in a log line, so the failure survives the restart.
+    #[tokio::test]
+    async fn the_last_termination_is_reported_in_health_and_logs() {
+        let termination = crate::orchestrator::ContainerTermination {
+            reason: Some("OOMKilled".to_string()),
+            exit_code: Some(137),
+            finished_at: Some("2026-11-23T04:59:58Z".to_string()),
+        };
+        let mut container = running_container("A", "2026-11-23T05:00:00Z");
+        container.restart_count = 1;
+        container.last_termination = Some(termination.clone());
+        let api = FakeApi::new(vec![running_workload("A")]);
+        let patched_terminations = Arc::clone(&api.patched_terminations);
+        let pushed_logs = Arc::clone(&api.pushed_logs);
+        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(api);
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> =
+            Box::new(FakeOrchestrator::new(vec![container], Arc::new(Mutex::new(Vec::new()))));
+        let mut log_ticks: HashMap<String, Instant> = HashMap::from([(
+            "A".to_string(),
+            Instant::now().checked_sub(Duration::from_secs(7200)).unwrap(),
+        )]);
+        let mut health_ticks = HashMap::new();
+
+        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+
+        let terminations = patched_terminations.lock().unwrap().clone();
+        assert_eq!(terminations, vec![Some(termination.clone())]);
+        let logs = pushed_logs.lock().unwrap().clone();
+        assert_eq!(logs.len(), 1);
+        assert!(logs[0].1.contains(&termination.log_line()), "{logs:?}");
     }
 
     /// Regression test: health used to share a single timer, so only the first

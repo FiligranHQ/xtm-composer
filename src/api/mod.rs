@@ -512,6 +512,7 @@ pub trait ComposerApi {
         started_at: String,
         is_in_reboot_loop: bool,
         image_digest: Option<String>,
+        last_termination: Option<crate::orchestrator::ContainerTermination>,
     ) -> Option<String>;
 }
 

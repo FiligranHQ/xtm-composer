@@ -124,6 +124,7 @@ impl SwarmOrchestrator {
                         started_at: None,
                         image_pull_error: None,
                         image_digest: None,
+                        last_termination: None,
                     })
                 })
                 .collect(),
@@ -184,6 +185,7 @@ impl Orchestrator for SwarmOrchestrator {
                     started_at,
                     image_pull_error: None,
                     image_digest,
+                    last_termination: None,
                 })
             }
             Err(_) => {
