@@ -17,14 +17,16 @@ pub fn parse_aes_encrypted_value(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let encrypted_bytes = general_purpose::STANDARD.decode(encrypted_value)?;
 
-    if encrypted_bytes.len() < 513 {
+    // The RSA block is the key size: 512 bytes for 4096-bit, 256 for 2048-bit.
+    let rsa_len = private_key.key_size_bytes();
+    if encrypted_bytes.len() < 1 + rsa_len {
         return Err("Encrypted value too short".into());
     }
 
     let version = *encrypted_bytes.get(0)
         .ok_or("Encrypted value is empty")?;
 
-    let aes_key_iv_encrypted_bytes = &encrypted_bytes[1..=512];
+    let aes_key_iv_encrypted_bytes = &encrypted_bytes[1..=rsa_len];
     let mut aes_key_iv_buffer = vec![0u8; private_key.key_size_bytes()];
     let aes_key_iv_decrypted_bytes: &[u8] = match version {
         #[cfg(not(feature = "fips"))]
@@ -43,7 +45,7 @@ pub fn parse_aes_encrypted_value(
     let aes_iv_bytes = aes_key_iv_decrypted_bytes
         .get(32..44)
         .ok_or("Decrypted AES IV is too short")?;
-    let mut encrypted_value_bytes = encrypted_bytes[513..].to_vec();
+    let mut encrypted_value_bytes = encrypted_bytes[(1 + rsa_len)..].to_vec();
 
     let cipher = LessSafeKey::new(UnboundKey::new(&AES_256_GCM, aes_key_bytes)?);
     let nonce = Nonce::try_assume_unique_for_key(aes_iv_bytes)?;
@@ -117,6 +119,11 @@ pub(crate) mod tests {
     pub(crate) fn test_private_key() -> &'static PrivateDecryptingKey {
         static KEY: OnceLock<PrivateDecryptingKey> = OnceLock::new();
         KEY.get_or_init(|| PrivateDecryptingKey::generate(KeySize::Rsa4096).unwrap())
+    }
+
+    fn test_private_key_2048() -> &'static PrivateDecryptingKey {
+        static KEY: OnceLock<PrivateDecryptingKey> = OnceLock::new();
+        KEY.get_or_init(|| PrivateDecryptingKey::generate(KeySize::Rsa2048).unwrap())
     }
 
     /// Encrypts like the platform: version byte, RSA-wrapped AES key + IV,
@@ -245,5 +252,49 @@ pub(crate) mod tests {
             ],
             "the undecryptable value must not be blanked into the configuration"
         );
+    }
+
+    /// Encrypts with this key's RSA block size, not a fixed 512-byte block.
+    fn encrypt_for(private_key: &PrivateDecryptingKey, version: u8, plaintext: &str) -> String {
+        let key_size = private_key.key_size_bytes();
+        let mut key_iv = vec![7u8; 32];
+        key_iv.extend([9u8; 12]);
+        let mut wrapped = vec![0u8; key_size];
+        match version {
+            1 => {
+                Pkcs1PublicEncryptingKey::new(private_key.public_key()).unwrap()
+                    .encrypt(&key_iv, &mut wrapped).unwrap();
+            }
+            _ => {
+                OaepPublicEncryptingKey::new(private_key.public_key()).unwrap()
+                    .encrypt(&OAEP_SHA256_MGF1SHA256, &key_iv, &mut wrapped, None).unwrap();
+            }
+        }
+        let aes_key = [7u8; 32];
+        let iv = [9u8; 12];
+        let cipher = LessSafeKey::new(UnboundKey::new(&AES_256_GCM, &aes_key).unwrap());
+        let mut ciphertext = plaintext.as_bytes().to_vec();
+        cipher
+            .seal_in_place_append_tag(Nonce::assume_unique_for_key(iv), Aad::empty(), &mut ciphertext)
+            .unwrap();
+        let mut bytes = vec![version];
+        bytes.extend(wrapped);
+        bytes.extend(ciphertext);
+        general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[test]
+    fn decrypts_version_2_values_wrapped_by_a_2048_bit_key() {
+        let key = test_private_key_2048();
+        let decrypted = parse_aes_encrypted_value(key, encrypt_for(key, 2, "s3cr3t"));
+        assert_eq!(decrypted.unwrap(), "s3cr3t");
+    }
+
+    #[cfg(not(feature = "fips"))]
+    #[test]
+    fn decrypts_version_1_values_wrapped_by_a_2048_bit_key() {
+        let key = test_private_key_2048();
+        let decrypted = parse_aes_encrypted_value(key, encrypt_for(key, 1, "s3cr3t"));
+        assert_eq!(decrypted.unwrap(), "s3cr3t");
     }
 }
