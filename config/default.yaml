@@ -18,6 +18,11 @@ manager:
 
   # Suffix appended to the tag of the connector images, -fips or -ubi9 (e.g. 6.9.0 -> 6.9.0-fips)
   # image_tag_suffix: -fips
+
+  # Seconds between two registry lookups of the image of a workload on a moving tag
+  # (rolling, latest): the workload is redeployed when a new image is pushed under its tag.
+  # 0 disables the lookups.
+  image_update_interval: 600
   
   logger:
     level: info

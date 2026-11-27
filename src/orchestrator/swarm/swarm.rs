@@ -287,6 +287,14 @@ impl Orchestrator for SwarmOrchestrator {
         }
     }
 
+    async fn resolve_image_digest(&self, workload: &ApiWorkload) -> Result<Option<String>, String> {
+        let resolver = Image::new(
+            self.registry.clone(),
+            crate::settings().manager.image_tag_suffix.clone(),
+        );
+        crate::orchestrator::registry::resolve_digest(&resolver, &workload.image).await
+    }
+
     async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
         let container = self.get(workload).await;
         if container.is_some() {

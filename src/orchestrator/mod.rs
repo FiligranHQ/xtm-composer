@@ -13,6 +13,7 @@ pub mod image;
 pub mod kubernetes;
 pub mod podman;
 pub mod portainer;
+pub mod registry;
 pub mod swarm;
 
 /// Product-agnostic label and environment keys tagging the workloads deployed
@@ -244,6 +245,24 @@ pub trait Orchestrator {
     }
 
     async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer>;
+
+    /// Digest the image of the workload points to now in its registry, for a
+    /// workload on a moving tag (`:rolling`, `:latest`); None when the image does
+    /// not move or the engine cannot tell. Never pulls.
+    async fn resolve_image_digest(&self, _workload: &ApiWorkload) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    /// Redeploy the workload on the image its moving tag points to now (#237),
+    /// after the pull. Engines that recreate the container from the freshly pulled
+    /// tag keep the default; Kubernetes pins the digest so that the pod rolls.
+    async fn refresh_image(
+        &self,
+        workload: &ApiWorkload,
+        _digest: &str,
+    ) -> Option<OrchestratorContainer> {
+        self.refresh(workload).await
+    }
 
     async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer>;
 
