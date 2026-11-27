@@ -90,9 +90,10 @@ async fn orchestration(api: Box<dyn ComposerApi + Send + Sync>) {
             let mut interval = interval(Duration::from_secs(settings.manager.execute_schedule));
             let mut log_ticks = HashMap::new();
             let mut health_ticks = HashMap::new();
+            let mut image_ticks = HashMap::new();
             loop {
                 interval.tick().await; // Wait for period
-                composer::orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+                composer::orchestrate(&mut log_ticks, &mut health_ticks, &mut image_ticks, &orchestrator, &api).await;
             }
         } => {
             // This branch will never be reached due to the infinite loop.

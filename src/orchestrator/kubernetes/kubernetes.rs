@@ -3,6 +3,7 @@ use crate::api::PROXY_CA_CERT_MOUNT_PATH;
 use crate::config::settings::{Kubernetes, Registry};
 use crate::orchestrator::image::Image;
 use crate::orchestrator::kubernetes::KubeOrchestrator;
+use crate::orchestrator::registry::resolve_digest;
 use crate::orchestrator::{
     config_hash_entries, dedup_containers, image_digest_of, manager_label_filters,
     with_previous_logs, ContainerTermination, ImagePullError, LogHistory, Orchestrator,
@@ -23,6 +24,9 @@ use kube::{
 };
 use std::collections::{BTreeMap, HashMap};
 use tracing::{debug, error, info, warn};
+
+/// Pod template annotation carrying the digest a moving tag was pinned to (#237).
+pub const ANNOTATION_IMAGE_DIGEST: &str = "xtm-image-digest";
 
 impl KubeOrchestrator {
     pub async fn new(
@@ -451,6 +455,30 @@ impl KubeOrchestrator {
         base_deployment
     }
 
+    /// The deployment of a workload on a moving tag pinned to the digest the tag
+    /// points to now (#237): the pod template changes, so the deployment rolls and
+    /// the new pod runs that image whatever the pull policy and the node cache.
+    pub fn pin_image_digest(deployment: &mut Deployment, digest: &str) {
+        let Some(template) = deployment.spec.as_mut().map(|spec| &mut spec.template) else {
+            return;
+        };
+        template
+            .metadata
+            .get_or_insert_with(ObjectMeta::default)
+            .annotations
+            .get_or_insert_with(BTreeMap::new)
+            .insert(ANNOTATION_IMAGE_DIGEST.to_string(), digest.to_string());
+        if let Some(pod_spec) = template.spec.as_mut() {
+            for container in pod_spec.containers.iter_mut() {
+                if let Some(image) = container.image.as_mut() {
+                    if !image.contains('@') {
+                        *image = format!("{image}@{digest}");
+                    }
+                }
+            }
+        }
+    }
+
     pub fn build_refresh_patch(deployment: &Deployment) -> serde_json::Value {
         // spec.selector is immutable after creation — strip it from the merge
         // patch so Kubernetes leaves the existing selector untouched.
@@ -510,6 +538,72 @@ impl KubeOrchestrator {
             .and_then(|state| state.running.as_ref())
             .and_then(|running| running.started_at.as_ref())
             .map(|timestamp| timestamp.0.to_string())
+    }
+
+    /// Patch the deployment with the current configuration, pinned to the given
+    /// image digest when one is given (moving tag updated, #237).
+    async fn patch_deployment(
+        &self,
+        workload: &ApiWorkload,
+        image_digest: Option<&str>,
+    ) -> Option<OrchestratorContainer> {
+        let labels = self.labels(workload);
+        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(workload).await;
+        let mut deployment_patch =
+            self.build_configuration(workload, labels, proxy_ca_secret_name);
+        if let Some(digest) = image_digest {
+            Self::pin_image_digest(&mut deployment_patch, digest);
+        }
+        let patch_value = Self::build_refresh_patch(&deployment_patch);
+        let patch = Patch::Merge(&patch_value);
+        let name = workload.dns_label_name();
+        let deployment_result = self
+            .deployments
+            .patch(name.as_str(), &PatchParams::default(), &patch)
+            .await;
+        match deployment_result {
+            Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
+            Err(kube::Error::Api(ae))
+                if ae.code == 422 && Self::is_selector_immutability_conflict(&ae.message) =>
+            {
+                // The deployment was created with a label set that no longer matches
+                // the current configuration (spec.selector is immutable), so every
+                // update attempt is rejected and the composer would retry forever.
+                // Self-heal by deleting the stale deployment: the next orchestration
+                // cycle redeploys it with a coherent selector/labels pair.
+                // Other 422 validation errors fall through to the generic error
+                // logging below instead of deleting a possibly-healthy deployment.
+                warn!(
+                    name = name,
+                    error = ae.to_string(),
+                    "Deployment update rejected on immutable selector mismatch, deleting stale deployment for redeploy"
+                );
+                match self
+                    .deployments
+                    .delete(name.as_str(), &DeleteParams::default())
+                    .await
+                {
+                    Ok(_) => info!(
+                        name = name,
+                        "Stale deployment deleted, it will be redeployed on the next cycle"
+                    ),
+                    Err(err) => error!(
+                        name = name,
+                        error = err.to_string(),
+                        "Failed to delete stale deployment"
+                    ),
+                }
+                None
+            }
+            Err(kube::Error::Api(ae)) => {
+                error!(error = ae.to_string(), "Kubernetes update api error");
+                None
+            }
+            Err(e) => {
+                error!(error = e.to_string(), "Kubernetes update unknown error");
+                None
+            }
+        }
     }
 }
 
@@ -603,60 +697,24 @@ impl Orchestrator for KubeOrchestrator {
             .await;
     }
 
+    async fn resolve_image_digest(&self, workload: &ApiWorkload) -> Result<Option<String>, String> {
+        let resolver = Image::new(
+            self.registry.clone(),
+            crate::settings().manager.image_tag_suffix.clone(),
+        );
+        resolve_digest(&resolver, &workload.image).await
+    }
+
+    async fn refresh_image(
+        &self,
+        workload: &ApiWorkload,
+        digest: &str,
+    ) -> Option<OrchestratorContainer> {
+        self.patch_deployment(workload, Some(digest)).await
+    }
+
     async fn refresh(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
-        let labels = self.labels(workload);
-        let proxy_ca_secret_name = self.upsert_proxy_ca_secret(workload).await;
-        let deployment_patch = self.build_configuration(workload, labels, proxy_ca_secret_name);
-        let patch_value = Self::build_refresh_patch(&deployment_patch);
-        let patch = Patch::Merge(&patch_value);
-        let name = workload.dns_label_name();
-        let deployment_result = self
-            .deployments
-            .patch(name.as_str(), &PatchParams::default(), &patch)
-            .await;
-        match deployment_result {
-            Ok(deployment) => Some(KubeOrchestrator::from_deployment(deployment)),
-            Err(kube::Error::Api(ae))
-                if ae.code == 422 && Self::is_selector_immutability_conflict(&ae.message) =>
-            {
-                // The deployment was created with a label set that no longer matches
-                // the current configuration (spec.selector is immutable), so every
-                // update attempt is rejected and the composer would retry forever.
-                // Self-heal by deleting the stale deployment: the next orchestration
-                // cycle redeploys it with a coherent selector/labels pair.
-                // Other 422 validation errors fall through to the generic error
-                // logging below instead of deleting a possibly-healthy deployment.
-                warn!(
-                    name = name,
-                    error = ae.to_string(),
-                    "Deployment update rejected on immutable selector mismatch, deleting stale deployment for redeploy"
-                );
-                match self
-                    .deployments
-                    .delete(name.as_str(), &DeleteParams::default())
-                    .await
-                {
-                    Ok(_) => info!(
-                        name = name,
-                        "Stale deployment deleted, it will be redeployed on the next cycle"
-                    ),
-                    Err(err) => error!(
-                        name = name,
-                        error = err.to_string(),
-                        "Failed to delete stale deployment"
-                    ),
-                }
-                None
-            }
-            Err(kube::Error::Api(ae)) => {
-                error!(error = ae.to_string(), "Kubernetes update api error");
-                None
-            }
-            Err(e) => {
-                error!(error = e.to_string(), "Kubernetes update unknown error");
-                None
-            }
-        }
+        self.patch_deployment(workload, None).await
     }
 
     async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
@@ -1235,6 +1293,34 @@ mod tests {
         for hash_key in [ENV_CONFIG_HASH, LEGACY_ENV_CONFIG_HASH] {
             assert_eq!(annotations.get(hash_key), Some(&workload.contract_hash));
         }
+    }
+
+    /// #237: pinning the digest a moving tag points to changes the pod template,
+    /// so the deployment rolls even though the configuration hash is unchanged.
+    #[tokio::test]
+    async fn pinning_the_image_digest_changes_the_pod_template() {
+        let workload = workload();
+        let labels = build_labels("test-manager", &workload);
+        let unpinned = orchestrator("http://127.0.0.1:1").build_configuration(&workload, labels, None);
+        let mut pinned = unpinned.clone();
+        let digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+
+        KubeOrchestrator::pin_image_digest(&mut pinned, digest);
+
+        let template = pinned.spec.as_ref().unwrap().template.clone();
+        assert_ne!(Some(&template), unpinned.spec.as_ref().map(|spec| &spec.template));
+        assert_eq!(
+            template.metadata.unwrap().annotations.unwrap().get(ANNOTATION_IMAGE_DIGEST),
+            Some(&digest.to_string())
+        );
+        assert_eq!(
+            template.spec.unwrap().containers[0].image.as_deref(),
+            Some(format!("ghcr.io/acme/test:latest@{digest}").as_str())
+        );
+        // The merge patch carries the pinned template
+        let patch = KubeOrchestrator::build_refresh_patch(&pinned).to_string();
+        assert!(patch.contains(ANNOTATION_IMAGE_DIGEST), "{patch}");
+        assert!(patch.contains(&format!("ghcr.io/acme/test:latest@{digest}")), "{patch}");
     }
 
     /// Regression test for #64: the image is resolved with the registry of the

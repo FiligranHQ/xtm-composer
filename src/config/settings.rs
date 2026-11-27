@@ -129,6 +129,15 @@ pub struct Manager {
     // The container image reference the composer runs from, reported to the platform
     #[serde(default)]
     pub image: Option<String>,
+    /// Seconds between two registry lookups of the image of a workload on a moving
+    /// tag (`:rolling`, `:latest`), to redeploy it when a new image is pushed under
+    /// that tag (#237). 0 disables the lookups.
+    #[serde(default = "default_image_update_interval")]
+    pub image_update_interval: u64,
+}
+
+fn default_image_update_interval() -> u64 {
+    600
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -368,6 +377,13 @@ mod tests {
             settings.manager.image.as_deref(),
             Some("filigran/xtm-composer:3.261121.0")
         );
+    }
+
+    #[test]
+    fn image_update_interval_defaults_to_ten_minutes() {
+        assert_eq!(settings_with_env(&[]).manager.image_update_interval, 600);
+        let settings = settings_with_env(&[("MANAGER__IMAGE_UPDATE_INTERVAL", "0")]);
+        assert_eq!(settings.manager.image_update_interval, 0);
     }
 
     #[test]

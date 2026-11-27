@@ -93,6 +93,75 @@ fn health_due(
     due
 }
 
+/// Returns true when the image of this workload is due for a registry lookup,
+/// and marks it as looked up: at most one lookup per workload per interval, the
+/// first one at once. An interval of zero disables the lookups.
+fn image_lookup_due(
+    image_ticks: &mut HashMap<String, Instant>,
+    workload_id: &str,
+    interval: Duration,
+) -> bool {
+    if interval.is_zero() {
+        return false;
+    }
+    let now = Instant::now();
+    match image_ticks.get(workload_id) {
+        Some(last) if now.duration_since(*last) < interval => false,
+        _ => {
+            image_ticks.insert(workload_id.to_string(), now);
+            true
+        }
+    }
+}
+
+/// Redeploys a workload on a moving tag (`:rolling`, `:latest`) whose tag points
+/// to another image than the one it runs (#237). The configuration hash only
+/// changes with the configuration, so nothing else would roll it. Returns the
+/// message for the platform when the workload was redeployed or could not be.
+async fn update_moving_image(
+    orchestrator: &Box<dyn Orchestrator + Send + Sync>,
+    workload: &ApiWorkload,
+    container: &OrchestratorContainer,
+) -> Option<String> {
+    // The digest the workload runs, read for the health report (#233)
+    let running = container.image_digest.as_deref()?;
+    let resolved = match orchestrator.resolve_image_digest(workload).await {
+        Ok(Some(digest)) => digest,
+        Ok(None) => return None,
+        Err(error) => {
+            warn!(
+                id = workload.id,
+                image = workload.image,
+                error = error,
+                "Cannot read the digest of the workload image in its registry, the running workload is kept"
+            );
+            return None;
+        }
+    };
+    if resolved == running {
+        return None;
+    }
+    info!(
+        id = workload.id,
+        image = workload.image,
+        running = running,
+        resolved = resolved,
+        "New image pushed under the workload tag, redeploying"
+    );
+    // Pull first: a missing image must not replace the running deployment
+    if let Err(err) = orchestrator.pull(workload).await {
+        return Some(image_pull_message(
+            "Connector not updated, the previous deployment is kept",
+            &err,
+        ));
+    }
+    orchestrator.refresh_image(workload, &resolved).await;
+    Some(format!(
+        "[XTM Composer] Image updated: {} -> {}",
+        running, resolved
+    ))
+}
+
 /// Returns true when the workload configuration could not be fully decrypted.
 /// Such a configuration must never be deployed: the undecryptable secrets
 /// would be written as blanks, breaking workloads that were working fine.
@@ -163,6 +232,8 @@ async fn orchestrate_missing(
 async fn orchestrate_existing(
     log_ticks: &mut HashMap<String, Instant>,
     health_ticks: &mut HashMap<String, HealthTick>,
+    image_ticks: &mut HashMap<String, Instant>,
+    image_update_interval: Duration,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
     workload: &ApiWorkload,
@@ -232,9 +303,8 @@ async fn orchestrate_existing(
     // In case of platform upgrade, we need to align all deployed workloads
     let requested_workload_hash = workload.contract_hash.clone();
     let current_container_hash = container.extract_config_hash();
-    if !requested_workload_hash.eq(current_container_hash)
-        && !refuse_incomplete_configuration(workload, "refresh")
-    {
+    let configuration_changed = !requested_workload_hash.eq(current_container_hash);
+    if configuration_changed && !refuse_incomplete_configuration(workload, "refresh") {
         // Versions are not aligned
         info!(
             id = workload_id,
@@ -258,6 +328,16 @@ async fn orchestrate_existing(
                     &err,
                 ));
             }
+        }
+    } else if !configuration_changed
+        && container_status == WorkloadStatus::Started
+        && container.image_pull_error.is_none()
+        && workload.undecryptable_keys.is_empty()
+        && image_lookup_due(image_ticks, &workload_id, image_update_interval)
+    {
+        // Same configuration: follow a new image pushed under a moving tag
+        if let Some(message) = update_moving_image(orchestrator, workload, &container).await {
+            composer_logs.push(message);
         }
     }
     // How the previous run ended, so an OOM kill or a crash is visible on the
@@ -313,6 +393,28 @@ async fn orchestrate_existing(
 pub async fn orchestrate(
     log_ticks: &mut HashMap<String, Instant>,
     health_ticks: &mut HashMap<String, HealthTick>,
+    image_ticks: &mut HashMap<String, Instant>,
+    orchestrator: &Box<dyn Orchestrator + Send + Sync>,
+    api: &Box<dyn ComposerApi + Send + Sync>,
+) {
+    let image_update_interval =
+        Duration::from_secs(crate::settings().manager.image_update_interval);
+    orchestrate_with_image_interval(
+        log_ticks,
+        health_ticks,
+        image_ticks,
+        image_update_interval,
+        orchestrator,
+        api,
+    )
+    .await
+}
+
+async fn orchestrate_with_image_interval(
+    log_ticks: &mut HashMap<String, Instant>,
+    health_ticks: &mut HashMap<String, HealthTick>,
+    image_ticks: &mut HashMap<String, Instant>,
+    image_update_interval: Duration,
     orchestrator: &Box<dyn Orchestrator + Send + Sync>,
     api: &Box<dyn ComposerApi + Send + Sync>,
 ) {
@@ -358,7 +460,17 @@ pub async fn orchestrate(
                         }
                         continue;
                     }
-                    orchestrate_existing(log_ticks, health_ticks, orchestrator, api, workload, container).await
+                    orchestrate_existing(
+                        log_ticks,
+                        health_ticks,
+                        image_ticks,
+                        image_update_interval,
+                        orchestrator,
+                        api,
+                        workload,
+                        container,
+                    )
+                    .await
                 }
                 None => orchestrate_missing(log_ticks, orchestrator, api, workload).await,
             }
@@ -370,6 +482,7 @@ pub async fn orchestrate(
             .collect();
         log_ticks.retain(|id, _| workloads_by_id.contains_key(id));
         health_ticks.retain(|id, _| workloads_by_id.contains_key(id));
+        image_ticks.retain(|id, _| workloads_by_id.contains_key(id));
         let platform = api.platform();
         let existing_containers = orchestrator.list().await;
         for container in existing_containers {
@@ -598,6 +711,10 @@ mod tests {
         actions: Arc<Mutex<Vec<String>>>,
         /// Workloads whose image cannot be pulled
         unpullable: Vec<String>,
+        /// Digest each workload's tag points to in its registry (none: not moving)
+        resolved_digests: HashMap<String, Result<Option<String>, String>>,
+        /// Registry lookups made, by workload id
+        lookups: Arc<Mutex<Vec<String>>>,
     }
 
     impl FakeOrchestrator {
@@ -607,6 +724,8 @@ mod tests {
                 removed_ids,
                 actions: Arc::new(Mutex::new(Vec::new())),
                 unpullable: Vec::new(),
+                resolved_digests: HashMap::new(),
+                lookups: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -671,6 +790,29 @@ mod tests {
             None
         }
 
+        async fn resolve_image_digest(
+            &self,
+            workload: &ApiWorkload,
+        ) -> Result<Option<String>, String> {
+            self.lookups
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(workload.id.clone());
+            self.resolved_digests
+                .get(&workload.id)
+                .cloned()
+                .unwrap_or(Ok(None))
+        }
+
+        async fn refresh_image(
+            &self,
+            workload: &ApiWorkload,
+            digest: &str,
+        ) -> Option<OrchestratorContainer> {
+            self.record(&format!("refresh_image@{digest}"), workload);
+            None
+        }
+
         async fn deploy(&self, workload: &ApiWorkload) -> Option<OrchestratorContainer> {
             self.record("deploy", workload);
             None
@@ -712,7 +854,7 @@ mod tests {
         let mut log_ticks = HashMap::new();
         let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+        orchestrate_with_image_interval(&mut log_ticks, &mut health_ticks, &mut HashMap::new(), Duration::ZERO, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -743,7 +885,7 @@ mod tests {
         let mut log_ticks = HashMap::new();
         let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+        orchestrate_with_image_interval(&mut log_ticks, &mut health_ticks, &mut HashMap::new(), Duration::ZERO, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -768,7 +910,7 @@ mod tests {
         let mut log_ticks = HashMap::new();
         let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+        orchestrate_with_image_interval(&mut log_ticks, &mut health_ticks, &mut HashMap::new(), Duration::ZERO, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -793,7 +935,7 @@ mod tests {
         let mut log_ticks = HashMap::new();
         let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+        orchestrate_with_image_interval(&mut log_ticks, &mut health_ticks, &mut HashMap::new(), Duration::ZERO, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -824,7 +966,7 @@ mod tests {
         let mut log_ticks = HashMap::new();
         let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+        orchestrate_with_image_interval(&mut log_ticks, &mut health_ticks, &mut HashMap::new(), Duration::ZERO, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -854,7 +996,7 @@ mod tests {
         let mut log_ticks = HashMap::new();
         let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+        orchestrate_with_image_interval(&mut log_ticks, &mut health_ticks, &mut HashMap::new(), Duration::ZERO, &orchestrator, &api).await;
 
         let removed = removed_ids
             .lock()
@@ -878,7 +1020,7 @@ mod tests {
         let mut log_ticks = HashMap::new();
         let mut health_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+        orchestrate_with_image_interval(&mut log_ticks, &mut health_ticks, &mut HashMap::new(), Duration::ZERO, &orchestrator, &api).await;
 
         let actions = actions.lock().expect("mutex should not be poisoned").clone();
         let removed = removed_ids.lock().expect("mutex should not be poisoned").clone();
@@ -974,7 +1116,7 @@ mod tests {
             workloads.iter().map(|c| (c.id.clone(), overdue)).collect();
         let mut health_ticks = HashMap::new();
         for _ in 0..cycles {
-            orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+            orchestrate_with_image_interval(&mut log_ticks, &mut health_ticks, &mut HashMap::new(), Duration::ZERO, &orchestrator, &api).await;
         }
 
         let pushed = pushed_logs.lock().expect("mutex should not be poisoned").clone();
@@ -1026,7 +1168,7 @@ mod tests {
         let orchestrator: Box<dyn Orchestrator + Send + Sync> =
             Box::new(FakeOrchestrator::new(containers, Arc::new(Mutex::new(Vec::new()))));
         let mut log_ticks = HashMap::new();
-        orchestrate(&mut log_ticks, health_ticks, &orchestrator, &api).await;
+        orchestrate_with_image_interval(&mut log_ticks, health_ticks, &mut HashMap::new(), Duration::ZERO, &orchestrator, &api).await;
         patched_health.lock().expect("mutex should not be poisoned").clone()
     }
 
@@ -1060,8 +1202,9 @@ mod tests {
             Instant::now().checked_sub(Duration::from_secs(7200)).unwrap(),
         )]);
         let mut health_ticks = HashMap::new();
+        let mut image_ticks = HashMap::new();
 
-        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+        orchestrate(&mut log_ticks, &mut health_ticks, &mut image_ticks, &orchestrator, &api).await;
 
         let terminations = patched_terminations.lock().unwrap().clone();
         assert_eq!(terminations, vec![Some(termination.clone())]);
@@ -1323,6 +1466,176 @@ mod tests {
         assert_eq!(removed, vec!["OTHER".to_string()]);
     }
 
+    const RUNNING_DIGEST: &str = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    const NEW_DIGEST: &str = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+
+    /// What one cycle did about the image of a running workload on its tag.
+    struct ImageCycle {
+        actions: Vec<String>,
+        lookups: Vec<String>,
+        logs: Vec<(String, Vec<String>)>,
+    }
+
+    /// Runs one cycle over a running workload A (configuration unchanged) whose
+    /// container runs RUNNING_DIGEST and whose tag resolves as given, the logs due.
+    async fn run_image_cycle(
+        image_ticks: &mut HashMap<String, Instant>,
+        interval: Duration,
+        image: &str,
+        resolved: Result<Option<String>, String>,
+        unpullable: bool,
+    ) -> ImageCycle {
+        let mut container = running_container("A", "2026-11-27T02:00:00Z");
+        container.image_digest = Some(RUNNING_DIGEST.to_string());
+        let mut workload = running_workload("A");
+        workload.image = image.to_string();
+        let mut orchestrator =
+            FakeOrchestrator::new(vec![container], Arc::new(Mutex::new(Vec::new())));
+        orchestrator.resolved_digests.insert("A".to_string(), resolved);
+        if unpullable {
+            orchestrator.unpullable = vec!["A".to_string()];
+        }
+        let actions = Arc::clone(&orchestrator.actions);
+        let lookups = Arc::clone(&orchestrator.lookups);
+        let orchestrator: Box<dyn Orchestrator + Send + Sync> = Box::new(orchestrator);
+        let api = FakeApi::new(vec![workload]);
+        let pushed_logs = Arc::clone(&api.pushed_logs);
+        let api: Box<dyn ComposerApi + Send + Sync> = Box::new(api);
+        let overdue = Instant::now().checked_sub(Duration::from_secs(7200)).unwrap();
+        let mut log_ticks = HashMap::from([("A".to_string(), overdue)]);
+        let mut health_ticks = HashMap::new();
+        orchestrate_with_image_interval(
+            &mut log_ticks,
+            &mut health_ticks,
+            image_ticks,
+            interval,
+            &orchestrator,
+            &api,
+        )
+        .await;
+        let lock = |mutex: &Arc<Mutex<Vec<String>>>| {
+            mutex.lock().expect("mutex should not be poisoned").clone()
+        };
+        ImageCycle {
+            actions: lock(&actions),
+            lookups: lock(&lookups),
+            logs: pushed_logs.lock().expect("mutex should not be poisoned").clone(),
+        }
+    }
+
+    const TEN_MINUTES: Duration = Duration::from_secs(600);
+
+    /// #237: a new image pushed under a moving tag redeploys the workload on it.
+    #[tokio::test]
+    async fn a_workload_is_redeployed_when_its_moving_tag_points_to_a_new_image() {
+        let outcome = run_image_cycle(
+            &mut HashMap::new(),
+            TEN_MINUTES,
+            "ghcr.io/acme/test:rolling",
+            Ok(Some(NEW_DIGEST.to_string())),
+            false,
+        )
+        .await;
+
+        assert_eq!(outcome.actions, vec![format!("refresh_image@{NEW_DIGEST}:A")]);
+        let (_, logs) = &outcome.logs[0];
+        assert_eq!(
+            logs.last(),
+            Some(&format!("[XTM Composer] Image updated: {RUNNING_DIGEST} -> {NEW_DIGEST}"))
+        );
+    }
+
+    /// #237: the tag still points to the running image, nothing is touched.
+    #[tokio::test]
+    async fn a_workload_whose_tag_points_to_the_running_image_is_untouched() {
+        let outcome = run_image_cycle(
+            &mut HashMap::new(),
+            TEN_MINUTES,
+            "ghcr.io/acme/test:rolling",
+            Ok(Some(RUNNING_DIGEST.to_string())),
+            false,
+        )
+        .await;
+
+        assert!(outcome.actions.is_empty(), "{:?}", outcome.actions);
+        assert_eq!(outcome.lookups, vec!["A"]);
+    }
+
+    /// #237: a pinned version or digest does not move (the engine answers None).
+    #[tokio::test]
+    async fn a_workload_on_a_pinned_image_is_untouched() {
+        let outcome = run_image_cycle(
+            &mut HashMap::new(),
+            TEN_MINUTES,
+            "ghcr.io/acme/test:6.9.0",
+            Ok(None),
+            false,
+        )
+        .await;
+
+        assert!(outcome.actions.is_empty(), "{:?}", outcome.actions);
+    }
+
+    /// #237: a registry error keeps the running workload, logged by the composer only.
+    #[tokio::test]
+    async fn a_registry_error_keeps_the_running_workload() {
+        let outcome = run_image_cycle(
+            &mut HashMap::new(),
+            TEN_MINUTES,
+            "ghcr.io/acme/test:rolling",
+            Err("the registry answered 503".to_string()),
+            false,
+        )
+        .await;
+
+        assert!(outcome.actions.is_empty(), "{:?}", outcome.actions);
+        let (_, logs) = &outcome.logs[0];
+        assert_eq!(logs, &vec!["connector log line".to_string()]);
+    }
+
+    /// #237: a new image that cannot be pulled keeps the running deployment.
+    #[tokio::test]
+    async fn a_new_image_that_cannot_be_pulled_keeps_the_running_workload() {
+        let outcome = run_image_cycle(
+            &mut HashMap::new(),
+            TEN_MINUTES,
+            "ghcr.io/acme/test:rolling",
+            Ok(Some(NEW_DIGEST.to_string())),
+            true,
+        )
+        .await;
+
+        assert!(outcome.actions.is_empty(), "{:?}", outcome.actions);
+        let (_, logs) = &outcome.logs[0];
+        assert!(
+            logs.last().unwrap().starts_with("[XTM Composer] Connector not updated, the previous deployment is kept"),
+            "{logs:?}"
+        );
+    }
+
+    /// #237: at most one registry lookup per workload per interval; 0 disables them.
+    #[tokio::test]
+    async fn the_registry_is_looked_up_once_per_interval() {
+        let mut image_ticks = HashMap::new();
+        let resolved = || Ok(Some(RUNNING_DIGEST.to_string()));
+        let first =
+            run_image_cycle(&mut image_ticks, TEN_MINUTES, "acme/test:rolling", resolved(), false).await;
+        let second =
+            run_image_cycle(&mut image_ticks, TEN_MINUTES, "acme/test:rolling", resolved(), false).await;
+        for tick in image_ticks.values_mut() {
+            *tick = tick.checked_sub(TEN_MINUTES).unwrap();
+        }
+        let third =
+            run_image_cycle(&mut image_ticks, TEN_MINUTES, "acme/test:rolling", resolved(), false).await;
+        let disabled =
+            run_image_cycle(&mut HashMap::new(), Duration::ZERO, "acme/test:rolling", resolved(), false).await;
+
+        assert_eq!(first.lookups, vec!["A"]);
+        assert!(second.lookups.is_empty(), "{:?}", second.lookups);
+        assert_eq!(third.lookups, vec!["A"]);
+        assert!(disabled.lookups.is_empty(), "{:?}", disabled.lookups);
+    }
+
     /// What one orchestration cycle did, the workloads' logs being due.
     struct CycleOutcome {
         actions: Vec<String>,
@@ -1353,7 +1666,7 @@ mod tests {
         let mut log_ticks: HashMap<String, Instant> =
             workloads.iter().map(|c| (c.id.clone(), overdue)).collect();
         let mut health_ticks = HashMap::new();
-        orchestrate(&mut log_ticks, &mut health_ticks, &orchestrator, &api).await;
+        orchestrate_with_image_interval(&mut log_ticks, &mut health_ticks, &mut HashMap::new(), Duration::ZERO, &orchestrator, &api).await;
 
         let lock = |mutex: &Arc<Mutex<Vec<String>>>| {
             mutex.lock().expect("mutex should not be poisoned").clone()

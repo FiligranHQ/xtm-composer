@@ -82,6 +82,11 @@ impl Image {
         }
         Some(self.build_credentials(&self.config))
     }
+
+    /// Username and password of the registry, for a direct registry lookup.
+    pub fn basic_credentials(&self) -> Option<(String, String)> {
+        Some((self.config.username.clone()?, self.config.password.clone()?))
+    }
     // endregion
 
     // region Kubernetes
